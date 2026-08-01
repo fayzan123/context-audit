@@ -11,17 +11,17 @@ import { ADAPTERS, SOURCE_IDS, auditSource } from "./sources/index.js";
 import type { SourceContext } from "./sources/index.js";
 import type { AuditResult, MultiAuditResult, Skill, SourceAudit, SourceId } from "./types.js";
 
-const HELP = `skill-audit — npm audit for agent instructions. Facts, not judgment.
+const HELP = `context-audit — npm audit for agent instructions. Facts, not judgment.
 
 Audits the instruction files your AI coding tools execute — Claude Code
 skills/agents/commands/CLAUDE.md, Codex prompts and AGENTS.md, Cursor rules,
 and the cross-tool AGENTS.md standard. One run, every tool on the machine.
 
 Usage:
-  skill-audit                    detect every supported tool (via $HOME and the
+  context-audit                  detect every supported tool (via $HOME and the
                                  current directory) and audit all of them
-  skill-audit [dir]              audit one claude-format skills directory
-  skill-audit scan <path>        pre-install scan of a single skill (dir or .md
+  context-audit [dir]            audit one claude-format skills directory
+  context-audit scan <path>      pre-install scan of a single skill (dir or .md
                                  file); content + security only, no history
 
 Options:
@@ -95,7 +95,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 function fail(msg: string): never {
-  console.error(`skill-audit: ${msg}`);
+  console.error(`context-audit: ${msg}`);
   console.error(`run with --help for usage`);
   process.exit(2);
 }
@@ -179,6 +179,6 @@ function print(output: Args["output"], result: MultiAuditResult): void {
 }
 
 main().catch((err) => {
-  console.error(`skill-audit: ${err?.message ?? err}`);
+  console.error(`context-audit: ${err?.message ?? err}`);
   process.exit(2);
 });

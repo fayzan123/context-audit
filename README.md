@@ -1,11 +1,11 @@
-# skill-audit
+# context-audit
 
 **Every AI coding tool on your machine executes instruction files you've never audited. This audits all of them in one run.**
 
-Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md. Cursor rules and `.cursorrules`. The cross-tool AGENTS.md standard. Each is text your agent will follow — which makes each a context cost you pay, a dispatch surface that can collide, and an attack surface a marketplace download can poison. skill-audit detects every supported tool on the machine and audits the lot, in one deterministic, offline, zero-dependency command:
+Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md. Cursor rules and `.cursorrules`. The cross-tool AGENTS.md standard. Each is text your agent will follow — which makes each a context cost you pay, a dispatch surface that can collide, and an attack surface a marketplace download can poison. context-audit detects every supported tool on the machine and audits the lot, in one deterministic, offline, zero-dependency command:
 
 ```
-skill-audit — 3 sources: claude, codex, cursor
+context-audit — 3 sources: claude, codex, cursor
 
 ━━ claude — 75 skills · 12 agents · 3 commands · 2 instruction files
 COST
@@ -36,13 +36,13 @@ Three kinds of facts, per source:
 - **Security** — as a supporting lens, not the headline. See [what it catches](#what-it-catches-and-what-it-cant) for an honest accounting.
 
 ```
-npx skill-audit                  # detect every tool on the machine, audit them all
-npx skill-audit --source codex,cursor     # narrow to specific tools
-npx skill-audit path/to/skills   # audit one claude-format skills directory
-npx skill-audit scan ./downloaded-skill   # BEFORE you install something from a marketplace
-npx skill-audit --strict         # also gate on capability grants (allowed-tools: Bash)
-npx skill-audit --agent          # compact JSON for AI agents (flags in full, noise aggregated)
-npx skill-audit --json           # everything, machine-readable
+npx context-audit                  # detect every tool on the machine, audit them all
+npx context-audit --source codex,cursor     # narrow to specific tools
+npx context-audit path/to/skills   # audit one claude-format skills directory
+npx context-audit scan ./downloaded-skill   # BEFORE you install something from a marketplace
+npx context-audit --strict         # also gate on capability grants (allowed-tools: Bash)
+npx context-audit --agent          # compact JSON for AI agents (flags in full, noise aggregated)
+npx context-audit --json           # everything, machine-readable
 ```
 
 ## What gets audited, per tool
@@ -60,7 +60,7 @@ The unit of audit is "an instruction file an agent will execute," not "a Claude 
 
 Claude Code ships [`/doctor`](https://code.claude.com/docs/en/commands), which "finds unused skills, MCP servers, and plugins versus their context cost," and Anthropic publishes a **Session Report** skill that crunches transcripts for per-skill token usage. If interactive answers about Claude Code are all you need, use those first — they are first-party and they are good.
 
-skill-audit is for the cases they don't cover: it is **tool-agnostic** (`/doctor` is structurally Claude-only; most people running Claude Code also run Codex or Cursor, and that surface is otherwise uninspected), it is **deterministic and scriptable** (exit codes, `--json`, CI-gateable — no model in the loop, same answer every time), it runs **on a directory you have not installed yet**, and it puts cost, dispatch collisions, usage, and security in one report you can diff over time. If you want a number your CI can fail on, that's this. If you want a conversation about your Claude setup, that's `/doctor`.
+context-audit is for the cases they don't cover: it is **tool-agnostic** (`/doctor` is structurally Claude-only; most people running Claude Code also run Codex or Cursor, and that surface is otherwise uninspected), it is **deterministic and scriptable** (exit codes, `--json`, CI-gateable — no model in the loop, same answer every time), it runs **on a directory you have not installed yet**, and it puts cost, dispatch collisions, usage, and security in one report you can diff over time. If you want a number your CI can fail on, that's this. If you want a conversation about your Claude setup, that's `/doctor`.
 
 ## Agent-first
 
@@ -72,11 +72,11 @@ Most people won't run this raw — their agent will. That's the intended flow:
 
 ## Facts, not judgment
 
-skill-audit never scores, grades, or rates a skill. Every output line is a verifiable fact — a phrase at a line number, a decoded payload, an invocation count. What to do about a fact (merge, rewrite, delete, uninstall) is a judgment call, and judgment belongs to you or your model — pair it with [skillet](https://github.com/fayzan123/skillet) to act on what this tool finds.
+context-audit never scores, grades, or rates a skill. Every output line is a verifiable fact — a phrase at a line number, a decoded payload, an invocation count. What to do about a fact (merge, rewrite, delete, uninstall) is a judgment call, and judgment belongs to you or your model — pair it with [skillet](https://github.com/fayzan123/skillet) to act on what this tool finds.
 
 ## Why a CLI and not a skill
 
-A skill-based scanner asks the model to read the malicious content inside your live session — prompt injection attacks exactly that reader. The detection step becomes the infection step. skill-audit is deterministic, runs before anything reaches your agent's context, has zero runtime dependencies (audit it yourself in one sitting), and gives the same answer every time — so it can gate CI.
+A skill-based scanner asks the model to read the malicious content inside your live session — prompt injection attacks exactly that reader. The detection step becomes the infection step. context-audit is deterministic, runs before anything reaches your agent's context, has zero runtime dependencies (audit it yourself in one sitting), and gives the same answer every time — so it can gate CI.
 
 ## Two scopes, two gates
 

@@ -1,4 +1,4 @@
-# Brutal product analysis — skill-audit
+# Brutal product analysis — context-audit
 
 *Framing: this is judged as an open-source tool meant to be genuinely useful and pull real users/stars — NOT as a venture-scale product. The metric is "would power users install it, keep it, and star it," not TAM or ARR. Written 2026-08-01, brutal but grounded.*
 
@@ -30,7 +30,7 @@
 
 **Security tools carry reputational tail risk.** Ship "catches malware," someone gets popped by something you missed, and the failure is memorable in a way a hygiene tool's miss never is. The honest framing mitigates this only for people who read it. De-emphasizing the security headline is risk management, not just positioning.
 
-**Name is generic in a crowded namespace.** `skill-audit` will be lost among skillscan, clawscan, skillcop, skillspector. It's fine for the hygiene framing (it reads like "lint for skills") but it does no work to make someone remember you. The skillet pairing is your best memorability lever — lean on "skillet + skill-audit, the fixer and the auditor" harder than on the name alone.
+**Name is generic in a crowded namespace.** `context-audit` will be lost among skillscan, clawscan, skillcop, skillspector. It's fine for the hygiene framing (it reads like "lint for skills") but it does no work to make someone remember you. The skillet pairing is your best memorability lever — lean on "skillet + context-audit, the fixer and the auditor" harder than on the name alone.
 
 ## The reposition that unlocks the 7
 

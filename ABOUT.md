@@ -1,4 +1,4 @@
-# skill-audit
+# context-audit
 
 `npm audit`, but for agent skills.
 
@@ -24,11 +24,11 @@ It reports across three lenses:
 ```bash
 # Ask your agent: "audit my skills" — the companion skill in skill/ runs this for you.
 # Or directly:
-npx skill-audit                    # audit ~/.claude/skills, human-readable
-npx skill-audit path/to/skills     # any skills directory
-npx skill-audit scan ./downloaded  # BEFORE installing an untrusted skill
-npx skill-audit --agent            # compact JSON for an AI agent (~1.8k tokens vs ~22k)
-npx skill-audit --json             # everything, machine-readable
+npx context-audit                    # audit ~/.claude/skills, human-readable
+npx context-audit path/to/skills     # any skills directory
+npx context-audit scan ./downloaded  # BEFORE installing an untrusted skill
+npx context-audit --agent            # compact JSON for an AI agent (~1.8k tokens vs ~22k)
+npx context-audit --json             # everything, machine-readable
 ```
 
 The intended flow is **agent-first**: most people won't run a scanner by hand, so a companion skill teaches the agent to run the audit, verify each flag against the cited line before alarming you, propose cleanups (paired with [skillet](https://github.com/fayzan123/skillet), which does the rewriting), and — for untrusted skills — `scan` and check the exit code **before reading the skill's content**, so a malicious skill's instructions never enter the agent's context.
@@ -37,13 +37,13 @@ The intended flow is **agent-first**: most people won't run a scanner by hand, s
 
 Two reasons, both concrete.
 
-**A real, personal friction.** Across a 75-skill directory, dispatch kept misfiring — two skills with word-for-word identical descriptions competing for the same trigger, a frontend skill firing on general-purpose requests, skills paying token rent every session and never firing. skillet (the sibling project) fixes *over-specified skill bodies*; it deliberately doesn't touch collisions, dead skills, or security. skill-audit is the report that skillet acts on.
+**A real, personal friction.** Across a 75-skill directory, dispatch kept misfiring — two skills with word-for-word identical descriptions competing for the same trigger, a frontend skill firing on general-purpose requests, skills paying token rent every session and never firing. skillet (the sibling project) fixes *over-specified skill bodies*; it deliberately doesn't touch collisions, dead skills, or security. context-audit is the report that skillet acts on.
 
 **A real, timely threat.** Through 2026, skill marketplaces were hit by malware campaigns — prompt injection in a large share of published skills, credential stealers hidden in `## Prerequisites` sections, payloads smuggled in invisible unicode. A skill-based scanner can't safely do this job: asking a model to read a malicious skill in-session hands the attacker the microphone. A deterministic CLI that runs *before* anything reaches the agent's context can. That's why it's a CLI, not a skill.
 
 ## The honest boundary
 
-skill-audit catches the **commodity** threat — the unobfuscated `curl | bash`-and-base64 attacks that were actually in the wild, which it would have caught nearly all of — and, after an adversarial pass, the cheap re-spellings of those same attacks: a different interpreter at the end of the pipe, a decode hop, a two-step download, a YAML restatement of a hook declaration, a payload staged in a directory the walker used to skip.
+context-audit catches the **commodity** threat — the unobfuscated `curl | bash`-and-base64 attacks that were actually in the wild, which it would have caught nearly all of — and, after an adversarial pass, the cheap re-spellings of those same attacks: a different interpreter at the end of the pipe, a decode hop, a two-step download, a YAML restatement of a hook declaration, a payload staged in a directory the walker used to skip.
 
 It is **structurally defeated by the adaptive threat**. Encrypted self-extracting payloads staged for runtime evade ~96% of *every* static scanner. There is no regex for "this plain English is malicious," and exfiltration routed through the agent's own sanctioned tools (Read, then WebFetch) presents no shell and no URL literal to match. Those two cases are pinned in the test suite as fixtures that must stay *unflagged*, so the boundary is enforced rather than merely described. Code inside genuine third-party dependencies is counted, not read — that is `npm audit`'s job.
 

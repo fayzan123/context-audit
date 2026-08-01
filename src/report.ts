@@ -184,7 +184,7 @@ export function printReport(result: MultiAuditResult): void {
   const { sources } = result;
   console.log();
   console.log(
-    bold(`skill-audit — ${sources.length} source${sources.length === 1 ? "" : "s"}: `) +
+    bold(`context-audit — ${sources.length} source${sources.length === 1 ? "" : "s"}: `) +
       sources.map((s) => s.source).join(", ")
   );
 

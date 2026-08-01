@@ -1,9 +1,10 @@
 {
-  "name": "skill-audit",
+  "name": "context-audit",
   "version": "0.2.0",
   "description": "Audit every AI coding tool's instruction files in one run — Claude Code skills/agents/commands, Codex prompts and AGENTS.md, Cursor rules. What they cost every session, which never fire, and whether any are doing something they shouldn't. Deterministic, offline, zero dependencies.",
   "type": "module",
   "bin": {
+    "context-audit": "dist/index.js",
     "skill-audit": "dist/index.js"
   },
   "files": [
@@ -35,7 +36,7 @@
   ],
   "author": "Fayzan Malik",
   "license": "MIT",
-  "repository": "github:fayzan123/skill-audit",
+  "repository": "github:fayzan123/context-audit",
   "devDependencies": {
     "@types/node": "^26.1.2",
     "typescript": "^5.5.0"

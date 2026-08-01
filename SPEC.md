@@ -1,4 +1,4 @@
-# skill-audit — spec
+# context-audit — spec
 
 npm audit for agent skills. Scans a skills directory (Claude Code, Codex, OpenClaw layout: `<dir>/<name>/SKILL.md`) and reports **facts, never judgment**. The subjective step — merge, rewrite, delete — belongs to the model (skillet) or the human, with this tool's evidence in hand.
 
@@ -17,8 +17,8 @@ Every line of output must be a fact the user can verify in ten seconds. Any chec
 ## CLI
 
 ```
-skill-audit [dir]              # audit a skills directory (default ~/.claude/skills)
-skill-audit scan <path>        # pre-install: content+security only, on any skill dir/file
+context-audit [dir]              # audit a skills directory (default ~/.claude/skills)
+context-audit scan <path>        # pre-install: content+security only, on any skill dir/file
   --json                       # machine output
   --no-history                 # skip transcript scan
   --transcripts <dir>          # override ~/.claude/projects
