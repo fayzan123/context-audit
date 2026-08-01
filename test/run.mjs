@@ -91,7 +91,7 @@ check(
 // attacker gets for free. Every one of these was a silent pass (exit 0) before.
 console.log("MUTATION fixtures (evaded payloads — must still flag):");
 
-const tmp = mkdtempSync(join(tmpdir(), "skill-audit-mut-"));
+const tmp = mkdtempSync(join(tmpdir(), "context-audit-mut-"));
 const build = (name, files) => {
   for (const [p, c] of Object.entries(files)) {
     const f = join(tmp, name, p);
