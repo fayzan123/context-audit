@@ -14,7 +14,8 @@ const day = (iso?: string): string => (iso ? iso.slice(0, 10) : "unknown");
 function printFinding(f: SecurityFinding): void {
   const tag = f.level === "flag" ? red("FLAG") : dim("info");
   const loc = f.line ? `${f.file}:${f.line}` : f.file;
-  console.log(`  ${tag}  ${bold(f.skill)} ${dim(loc)} [${f.check}]`);
+  const also = f.alsoInFiles ? dim(` (same finding in ${f.alsoInFiles} more file${f.alsoInFiles > 1 ? "s" : ""})`) : "";
+  console.log(`  ${tag}  ${bold(f.skill)} ${dim(loc)} [${f.check}]${also}`);
   console.log(`        ${f.message}`);
   console.log(`        ${dim("evidence:")} ${f.evidence}`);
 }

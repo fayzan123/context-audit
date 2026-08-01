@@ -7,6 +7,14 @@ function lineOf(content: string, index: number): number {
   return content.slice(0, index).split("\n").length;
 }
 
+/** True when the match sits on a line that is (lexically) a comment — reported as part of the fact. */
+function onCommentLine(content: string, index: number): boolean {
+  const start = content.lastIndexOf("\n", index - 1) + 1;
+  let end = content.indexOf("\n", start);
+  if (end === -1) end = content.length;
+  return /^\s*(?:#|\/\/|\*|<!--|;)/.test(content.slice(start, end));
+}
+
 interface Check {
   id: string;
   run(skill: Skill, file: string, content: string, findings: SecurityFinding[]): void;
@@ -24,8 +32,10 @@ const INJECTION_PHRASES: { re: RegExp; label: string }[] = [
   { re: /before\s+doing\s+anything\s+else,?\s+(?:send|post|curl|fetch|upload)/i, label: "exfiltration preamble" },
 ];
 
+// `.env` must not be preceded by an identifier or `)` — otherwise `import.meta.env`
+// and `process.env` (API identifiers, not credential files) match.
 const CREDENTIAL_PATHS =
-  /(?:~\/\.ssh\b|id_rsa\b|id_ed25519\b|\.aws\/credentials|\.netrc\b|\.npmrc\b|(?:ANTHROPIC|OPENAI|AWS_SECRET|GITHUB)_(?:API_)?(?:KEY|TOKEN|ACCESS_KEY)|\.env\b)/;
+  /(?:~\/\.ssh\b|id_rsa\b|id_ed25519\b|\.aws\/credentials|\.netrc\b|\.npmrc\b|(?:ANTHROPIC|OPENAI|AWS_SECRET|GITHUB)_(?:API_)?(?:KEY|TOKEN|ACCESS_KEY)|(?<![\w).])\.env\b)/;
 
 const URL_RE = /https?:\/\/[^\s)"'`<>\]]+/g;
 
@@ -99,13 +109,14 @@ const checks: Check[] = [
     run(skill, file, content, findings) {
       const re = /\b(?:curl|wget)\b[^|\n]{0,200}\|\s*(?:ba|z|da)?sh\b/g;
       for (const m of content.matchAll(re)) {
+        const comment = onCommentLine(content, m.index!);
         findings.push({
           skill: skill.dirName,
           file,
           line: lineOf(content, m.index!),
           check: "pipe-to-shell",
           level: "flag",
-          message: "download piped directly to a shell",
+          message: `pipe-to-shell pattern${comment ? " (on a comment line)" : ""}`,
           evidence: snip(m[0]),
         });
       }
@@ -116,13 +127,14 @@ const checks: Check[] = [
     run(skill, file, content, findings) {
       const re = /rm\s+-[a-z]*rf?[a-z]*\s+(?:\/(?:\s|$)|~\/?(?:\s|$)|"?\$HOME"?(?:\s|$))/g;
       for (const m of content.matchAll(re)) {
+        const comment = onCommentLine(content, m.index!);
         findings.push({
           skill: skill.dirName,
           file,
           line: lineOf(content, m.index!),
           check: "destructive-path",
           level: "flag",
-          message: "recursive delete targeting / or home directory",
+          message: `recursive-delete-of-root pattern${comment ? " (on a comment line)" : ""}`,
           evidence: snip(m[0]),
         });
       }
@@ -267,7 +279,7 @@ export function securityScan(skills: Skill[]): SecurityFinding[] {
   }
   const deduped = [...grouped.values()].map((f) => {
     const { count, ...rest } = f;
-    return count > 1 ? { ...rest, file: `${rest.file} (+${count - 1} identical)` } : rest;
+    return count > 1 ? { ...rest, alsoInFiles: count - 1 } : rest;
   });
 
   const order = { flag: 0, info: 1 };

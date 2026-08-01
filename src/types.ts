@@ -30,6 +30,8 @@ export interface SecurityFinding {
   message: string;
   /** Verbatim evidence the user can check in ten seconds. */
   evidence: string;
+  /** Number of additional files carrying this identical finding (mirrored copies). */
+  alsoInFiles?: number;
 }
 
 export interface ContentFacts {
