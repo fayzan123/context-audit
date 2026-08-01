@@ -50,8 +50,16 @@ USAGE
         drafting-outreach × 10 in 7 sessions, last 2026-07-31 — interrupted after 1/10
 ```
 
+## What it catches, and what it can't
+
+The detectors are built from documented campaign teardowns (ClawHavoc, Snyk's ToxicSkills, the SkillCloak evasion paper) and the Claude Code skill/plugin attack surface. Findings carry **severity** (how bad if real) and **confidence** (how likely it's real) as separate axes, so you can gate CI on `critical`+`likely` without drowning in maybes.
+
+It reliably catches the *commodity* threat — the stuff that was actually in the wild: `curl | bash` and base64 download-execute in setup steps, password-protected archives, reverse shells, credential-path-plus-egress, known exfil sinks, raw-IP URLs, invisible-unicode smuggling (decoded for you), `` !`cmd` `` dynamic-context execution, malicious frontmatter hooks, plugin-manifest promotion, and instructions to weaken permissions. It normalizes text (NFKC + strips zero-width characters) before matching, so keyword-splitting evasions don't slip through.
+
+It **cannot** catch, and the output says so: encrypted/self-extracting payloads staged for runtime (SkillCloak's SFS packing evades ~96% of *every* static scanner), purely natural-language exfiltration with no code, logic split across separately-installed skills, and payloads fetched from a server after install. A clean scan is a passed triage, not a guarantee — the same claim `npm audit` makes. Runtime sandboxing is the complement; this is the fast, free, offline first pass.
+
 ## Not in scope
 
-Fix application (that's skillet's job), quality scores, remote URL scanning, a GUI. A "which skill would actually fire for this prompt" routing simulator is the most likely next addition — if observed friction earns it.
+Fix application (that's skillet's job), sandboxed runtime detonation, a GUI. A routing-collision simulator and SARIF output are the most likely next additions.
 
 MIT
