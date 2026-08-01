@@ -28,6 +28,15 @@ function printFinding(f: SecurityFinding): void {
   console.log(`        ${dim("evidence:")} ${f.evidence}`);
 }
 
+/**
+ * Claude Code loads skill names + descriptions into every session under a
+ * character budget of `skillListingBudgetFraction` (default 1% of the context
+ * window — 8,000 chars on a 200K model). Past it, descriptions are dropped
+ * starting with the least-invoked skills; the skill still exists but can no
+ * longer auto-trigger. Documented at code.claude.com/docs/en/skills.
+ */
+const LISTING_BUDGET_CHARS = 8000;
+
 export function printReport(result: AuditResult): void {
   const { content, security, history } = result;
 
@@ -35,34 +44,49 @@ export function printReport(result: AuditResult): void {
   console.log(bold(`skill-audit — ${result.dir}`));
   console.log(dim(`${content.skillCount} skills scanned`));
 
-  // ---- Security ----
-  const flags = security.filter((f) => f.level === "flag");
-  const infos = security.filter((f) => f.level === "info");
+  // ---- Cost ----
+  // Deliberately first. The listing budget decides whether a skill can fire at
+  // all, which makes it the fact most likely to explain what the user came here
+  // about; the security gauntlet is below it, not above it.
   console.log();
-  console.log(bold(cyan("SECURITY")));
-  if (flags.length === 0) {
-    console.log(`  ${green("no flagged findings")} ${dim(`(${infos.length} informational)`)}`);
+  console.log(bold(cyan("COST")));
+  const chars = content.alwaysInjectedChars;
+  const pct = Math.round((chars / LISTING_BUDGET_CHARS) * 100);
+  const over = chars > LISTING_BUDGET_CHARS;
+  console.log(
+    `  always injected (names + descriptions): ${bold(`${chars.toLocaleString()} chars`)} ${dim(`(~${content.alwaysInjectedEst.toLocaleString()} tokens)`)}`
+  );
+  if (over) {
+    console.log(
+      `  ${red(`${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char skill-listing budget`)} — over it, Claude Code drops`
+    );
+    console.log(
+      `  descriptions starting with the skills you invoke least. Those skills stay`
+    );
+    console.log(`  installed but stop auto-triggering. ${dim("Raise it with skillListingBudgetFraction.")}`);
   } else {
-    for (const f of flags) printFinding(f);
-    console.log(dim(`  + ${infos.length} informational finding(s) — run with --json for all`));
+    console.log(
+      `  ${green(`${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char skill-listing budget`)} ${dim("— under it, all descriptions load")}`
+    );
   }
-  console.log(
-    dim("  static analysis catches commodity attacks; encrypted/staged payloads and")
-  );
-  console.log(dim("  plain-English instructions can evade it. A clean scan is not a guarantee."));
-
-  // ---- Content ----
-  console.log();
-  console.log(bold(cyan("CONTENT")));
-  console.log(
-    `  always injected (names + descriptions): ${bold(`~${content.alwaysInjectedEst.toLocaleString()} tokens`)} ${dim("(chars/4 estimate)")}`
-  );
   console.log(
     `  total body size if all invoked: ~${content.totalBodyEst.toLocaleString()} tokens`
   );
+  const biggest = content.tokens.slice(0, 5);
+  if (biggest.length > 0) {
+    console.log(`  largest bodies: ${biggest.map((t) => `${t.skill} (~${t.bodyEst.toLocaleString()})`).join(", ")}`);
+  }
+
+  // ---- Dispatch ----
+  console.log();
+  console.log(bold(cyan("DISPATCH")));
+  let dispatchIssues = 0;
   if (content.emptyDescriptions.length > 0) {
+    dispatchIssues++;
     console.log(`  ${yellow(`${content.emptyDescriptions.length} empty description(s)`)}: ${content.emptyDescriptions.join(", ")}`);
   }
+  dispatchIssues += content.duplicateDescriptions.length + content.nameMismatches.length;
+  if (content.missingSkillMd.length > 0) dispatchIssues++;
   for (const d of content.duplicateDescriptions) {
     console.log(`  ${yellow("identical descriptions")}: ${d.skills.join(", ")}`);
     const flat = d.description.replace(/\s+/g, " ");
@@ -74,9 +98,8 @@ export function printReport(result: AuditResult): void {
   if (content.missingSkillMd.length > 0) {
     console.log(`  ${yellow("no SKILL.md")}: ${content.missingSkillMd.join(", ")}`);
   }
-  const biggest = content.tokens.slice(0, 5);
-  if (biggest.length > 0) {
-    console.log(`  largest bodies: ${biggest.map((t) => `${t.skill} (~${t.bodyEst.toLocaleString()})`).join(", ")}`);
+  if (dispatchIssues === 0) {
+    console.log(`  ${green("no collisions, empty descriptions, or name mismatches")}`);
   }
 
   // ---- Usage ----
@@ -94,6 +117,13 @@ export function printReport(result: AuditResult): void {
     );
     if (history.neverFired.length > 0) {
       console.log(`        ${dim(history.neverFired.join(", "))}`);
+      // The drop order is by least-invoked, so a never-fired skill is both the
+      // first to lose its description and the least able to earn it back.
+      if (over) {
+        console.log(
+          `  ${yellow("these are first in line")} to lose their descriptions while you are over budget`
+        );
+      }
     }
     const top = history.usage.slice(0, 10);
     if (top.length > 0) {
@@ -116,12 +146,29 @@ export function printReport(result: AuditResult): void {
     }
   }
 
+  // ---- Security ----
+  const flags = security.filter((f) => f.level === "flag");
+  const infos = security.filter((f) => f.level === "info");
+  console.log();
+  console.log(bold(cyan("SECURITY")));
+  if (flags.length === 0) {
+    console.log(`  ${green("no flagged findings")} ${dim(`(${infos.length} informational)`)}`);
+  } else {
+    for (const f of flags) printFinding(f);
+    console.log(dim(`  + ${infos.length} informational finding(s) — run with --json for all`));
+  }
+  console.log(dim("  static analysis catches commodity attacks; encrypted/staged payloads and"));
+  console.log(dim("  plain-English instructions can evade it. A clean scan is not a guarantee."));
+
   console.log();
   const summary =
     flags.length > 0
       ? red(`${flags.length} security flag(s)`)
       : green("0 security flags");
-  console.log(`${bold("result:")} ${summary}${dim(" · facts only — deciding what to do with them is your (or your model's) job")}`);
+  const cost = over ? red(`listing ${pct}% over budget`) : green("listing within budget");
+  const dead = history ? ` · ${history.neverFired.length} skill(s) never fired` : "";
+  console.log(`${bold("result:")} ${cost} · ${summary}${dead}`);
+  console.log(dim("facts only — deciding what to do with them is your (or your model's) job"));
   console.log();
 }
 

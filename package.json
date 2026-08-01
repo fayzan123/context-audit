@@ -1,7 +1,7 @@
 {
   "name": "skill-audit",
   "version": "0.1.0",
-  "description": "npm audit for agent skills \u2014 scans a skills directory and reports facts: security findings, content problems, and real usage from your own transcripts. Never judgment.",
+  "description": "Find out which of your agent skills never fire, what they cost you every session, whether you are over Claude Code's skill-listing budget, and whether any of them are doing something they shouldn't. Deterministic, offline, zero dependencies.",
   "type": "module",
   "bin": {
     "skill-audit": "dist/index.js"
@@ -19,10 +19,15 @@
   },
   "keywords": [
     "claude-code",
+    "claude",
     "codex",
     "agent-skills",
-    "security",
+    "skills",
+    "context-window",
+    "token-usage",
     "audit",
+    "lint",
+    "security",
     "prompt-injection"
   ],
   "author": "Fayzan Malik",

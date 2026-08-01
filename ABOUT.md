@@ -43,6 +43,10 @@ Two reasons, both concrete.
 
 ## The honest boundary
 
-skill-audit catches the **commodity** threat — the unobfuscated `curl | bash`-and-base64 attacks that were actually in the wild, which it would have caught nearly all of. It is **structurally defeated by the adaptive threat**: encrypted self-extracting payloads staged for runtime evade ~96% of *every* static scanner, and there is no regex for "this plain English is malicious." A clean scan is a passed triage, not a guarantee — the same claim `npm audit` makes. Runtime sandboxing is the complement; this is the fast, free, offline first pass.
+skill-audit catches the **commodity** threat — the unobfuscated `curl | bash`-and-base64 attacks that were actually in the wild, which it would have caught nearly all of — and, after an adversarial pass, the cheap re-spellings of those same attacks: a different interpreter at the end of the pipe, a decode hop, a two-step download, a YAML restatement of a hook declaration, a payload staged in a directory the walker used to skip.
+
+It is **structurally defeated by the adaptive threat**. Encrypted self-extracting payloads staged for runtime evade ~96% of *every* static scanner. There is no regex for "this plain English is malicious," and exfiltration routed through the agent's own sanctioned tools (Read, then WebFetch) presents no shell and no URL literal to match. Those two cases are pinned in the test suite as fixtures that must stay *unflagged*, so the boundary is enforced rather than merely described. Code inside genuine third-party dependencies is counted, not read — that is `npm audit`'s job.
+
+The lesson from the adversarial pass, which is what the detectors are now organized around: **enumerating spellings loses, modelling mechanisms holds.** Every check that listed the ways to write an attack was defeated by writing it a different way; every check that described what the attack has to accomplish survived. A clean scan is a passed triage, not a guarantee — the same claim `npm audit` makes. Runtime sandboxing is the complement; this is the fast, free, offline first pass.
 
 **Design principle, held throughout:** the tool measures, the model judges. Determinism below the model, autonomy above it.

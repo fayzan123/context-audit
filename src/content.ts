@@ -47,5 +47,11 @@ export function contentFacts(skills: Skill[]): ContentFacts {
       (sum, t) => sum + t.descriptionEst + est(t.skill),
       0
     ),
+    // Characters, not the token estimate: the budget Claude Code enforces is
+    // measured in characters, so comparing against it needs the real count.
+    alwaysInjectedChars: skills.reduce(
+      (sum, s) => sum + s.dirName.length + (s.description?.trim().length ?? 0),
+      0
+    ),
   };
 }

@@ -17,6 +17,9 @@ Usage:
                                  content + security only, no history
 
 Options:
+  --strict              also gate on capability grants (allowed-tools: Bash and
+                        friends). Always on for \`scan\` — before you install
+                        something, what it is allowed to do is the whole question.
   --agent               compact JSON for AI agents (flags in full, noise aggregated)
   --json                full machine-readable output
   --no-history          skip the local transcript scan
@@ -33,6 +36,7 @@ interface Args {
   output: "report" | "json" | "agent";
   history: boolean;
   transcripts: string;
+  strict: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -41,6 +45,7 @@ function parseArgs(argv: string[]): Args {
     output: "report",
     history: true,
     transcripts: join(homedir(), ".claude", "projects"),
+    strict: false,
   };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +56,7 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "--json") args.output = "json";
     else if (a === "--agent") args.output = "agent";
     else if (a === "--no-history") args.history = false;
+    else if (a === "--strict") args.strict = true;
     else if (a === "--transcripts") {
       const v = argv[++i];
       if (!v) fail("--transcripts requires a directory");
@@ -84,7 +90,8 @@ async function main(): Promise<void> {
     const result: AuditResult = {
       dir: target,
       content: contentFacts(skills),
-      security: securityScan(skills),
+      // Pre-install: capability grants are the decision, so never relax them.
+      security: securityScan(skills, true),
     };
     print(args.output, result);
     // exitCode, not exit(): exit() truncates piped stdout before it flushes.
@@ -99,7 +106,7 @@ async function main(): Promise<void> {
   const result: AuditResult = {
     dir,
     content: contentFacts(skills),
-    security: securityScan(skills),
+    security: securityScan(skills, args.strict),
   };
   if (args.history) {
     result.history = await historyFacts(args.transcripts, skills);

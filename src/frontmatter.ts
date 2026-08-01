@@ -1,4 +1,6 @@
 import type { SecurityFinding, Skill } from "./types.js";
+import { isSkillMd } from "./skills.js";
+import { flatten, parseYaml } from "./yaml.js";
 
 const snip = (s: string, n = 100): string =>
   (s.length > n ? s.slice(0, n) + "…" : s).replace(/\s+/g, " ").trim();
@@ -14,47 +16,30 @@ const snip = (s: string, n = 100): string =>
 
 /** Raw frontmatter block, or "" when absent. */
 export function rawFrontmatter(md: string): string {
-  if (!md.startsWith("---")) return "";
-  const end = md.indexOf("\n---", 3);
+  // A leading BOM is invisible, survives every YAML parser, and used to make
+  // this function return "" — which short-circuited every check in this file.
+  const text = md.charCodeAt(0) === 0xfeff ? md.slice(1) : md;
+  if (!text.startsWith("---")) return "";
+  const end = text.indexOf("\n---", 3);
   if (end === -1) return "";
-  return md.slice(md.indexOf("\n") + 1, end);
+  return text.slice(text.indexOf("\n") + 1, end);
 }
 
 /** Top-level keys, in order, from a frontmatter block. */
 export function topLevelKeys(block: string): string[] {
-  const keys: string[] = [];
-  for (const line of block.split("\n")) {
-    const m = line.match(/^([A-Za-z0-9_-]+):/);
-    if (m) keys.push(m[1]);
-  }
-  return keys;
+  return parseYaml(block).rootKeys;
 }
 
-/** Value of a top-level scalar key. */
+/** Value of a top-level key, flattened to a comparable string. */
 function scalar(block: string, key: string): string | undefined {
-  const line = block.split("\n").find((l) => new RegExp(`^${key}:`).test(l));
-  if (!line) return undefined;
-  let v = line.slice(key.length + 1).trim();
-  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-    v = v.slice(1, -1);
-  }
-  return v;
+  return flatten(parseYaml(block).root[key]);
 }
 
-/** Every `command:`/`url:` value at any nesting depth, with line number. */
+/** Every value bound to `key` at any nesting depth, with line number. */
 function nestedValues(block: string, key: string): { value: string; line: number }[] {
-  const out: { value: string; line: number }[] = [];
-  const lines = block.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*(.+)$`));
-    if (!m) continue;
-    let v = m[1].trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1);
-    }
-    out.push({ value: v, line: i + 2 }); // +2: block excludes the opening `---`
-  }
-  return out;
+  return parseYaml(block)
+    .entries.filter((e) => e.key === key && e.value !== "")
+    .map((e) => ({ value: e.value, line: e.line }));
 }
 
 export function hookCommands(block: string): { command: string; line: number }[] {
@@ -62,6 +47,14 @@ export function hookCommands(block: string): { command: string; line: number }[]
 }
 
 const NETWORK_IN_HOOK = /\b(?:curl|wget|nc|ncat|telnet|ssh|scp|python3?\s+-c|node\s+-e|npx\s)/;
+
+/**
+ * Credential locations appearing inside a tool grant. Kept separate from
+ * security.ts's SENSITIVE_PATHS because a grant is a glob, not a command line:
+ * `Read(~/.ssh/**)` names a directory rather than a file.
+ */
+const CREDENTIAL_GRANT =
+  /~?\/?\.(?:ssh|aws|gnupg|kube|docker|npmrc|netrc|git-credentials|claude\/\.credentials|codex\/auth|config\/gcloud|config\/gh)|id_rsa|id_ed25519|\.env\b|Keychains|\.claude\.json/i;
 
 /** Runners that permission rules do NOT strip — an allow rule on these launders arbitrary execution. */
 const RUNNER_PREFIX = /\b(?:npx|docker\s+(?:exec|run)|devbox\s+run|mise\s+exec|direnv\s+exec|uv\s+run|pnpm\s+dlx|bunx)\b/;
@@ -146,7 +139,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       }
     }
 
-    const skillMd = skill.files.find((f) => f.relPath === "SKILL.md");
+    const skillMd = skill.files.find((f) => isSkillMd(f.relPath));
     if (!skillMd?.content) continue;
     const block = rawFrontmatter(skillMd.content);
     if (!block) continue;
@@ -261,7 +254,37 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
           evidence: snip(allowed, 90),
         });
       }
-      if (!wildcard && !runner && !bundled && /\b(?:Bash|Write|Edit|WebFetch|NotebookEdit)\b/.test(allowed)) {
+      // A grant is not only about which tool — it is about what the tool is
+      // pre-aimed at. `allowed-tools: Read(~/.ssh/**)` prompts for nothing and
+      // hands over the key; no Bash appears anywhere, so every check above was
+      // looking in the wrong place.
+      const credTarget = CREDENTIAL_GRANT.exec(allowed);
+      if (credTarget) {
+        add(skill, {
+          file: "SKILL.md",
+          check: "credential-tool-grant",
+          level: "flag",
+          severity: "critical",
+          confidence: "likely",
+          message: "allowed-tools pre-approves tool access to a credential path — no prompt is shown",
+          evidence: snip(allowed, 90),
+        });
+      }
+      // Unrestricted grants of the other consequential tools. WebFetch(*) with
+      // no prompt is an egress channel; Write(*)/Edit(*) is arbitrary file write.
+      const otherWildcard = /\b(WebFetch|Write|Edit|NotebookEdit|Agent|Task)\s*\(\s*\*\s*\)/.exec(allowed);
+      if (otherWildcard) {
+        add(skill, {
+          file: "SKILL.md",
+          check: "broad-tool-grant",
+          level: "flag",
+          severity: "high",
+          confidence: "likely",
+          message: `allowed-tools grants unrestricted ${otherWildcard[1]} — pre-approved with no prompt`,
+          evidence: snip(allowed, 90),
+        });
+      }
+      if (!wildcard && !runner && !bundled && !credTarget && !otherWildcard && /\b(?:Bash|Write|Edit|WebFetch|NotebookEdit)\b/.test(allowed)) {
         add(skill, {
           file: "SKILL.md",
           check: "frontmatter-capabilities",
