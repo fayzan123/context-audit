@@ -116,3 +116,45 @@ export function printReport(result: AuditResult): void {
 export function printJson(result: AuditResult): void {
   console.log(JSON.stringify(result, null, 2));
 }
+
+/**
+ * Token-efficient output for AI agents: flags in full (they need verification),
+ * info findings aggregated to counts, tables trimmed. An agent should be able to
+ * act on this without paying for 200+ informational entries.
+ */
+export function printAgent(result: AuditResult): void {
+  const { content, security, history } = result;
+  const flags = security.filter((f) => f.level === "flag");
+  const infoByCheck: Record<string, number> = {};
+  for (const f of security) {
+    if (f.level === "info") infoByCheck[f.check] = (infoByCheck[f.check] ?? 0) + 1;
+  }
+  const out = {
+    dir: result.dir,
+    skillCount: content.skillCount,
+    security: {
+      flags,
+      infoCounts: infoByCheck,
+      note: "Verify each flag by reading the cited file:line before alarming the user. Full detail: --json",
+    },
+    content: {
+      alwaysInjectedEstTokens: content.alwaysInjectedEst,
+      totalBodyEstTokens: content.totalBodyEst,
+      emptyDescriptions: content.emptyDescriptions,
+      duplicateDescriptions: content.duplicateDescriptions,
+      nameMismatches: content.nameMismatches,
+      missingSkillMd: content.missingSkillMd,
+      largestBodies: content.tokens.slice(0, 10),
+    },
+    usage: history
+      ? {
+          window: `${history.windowStart ?? "?"} → ${history.windowEnd ?? "?"}`,
+          transcriptFiles: history.transcriptFiles,
+          neverFired: history.neverFired,
+          fired: history.usage,
+        }
+      : undefined,
+    exitCode: flags.length > 0 ? 1 : 0,
+  };
+  console.log(JSON.stringify(out, null, 1));
+}

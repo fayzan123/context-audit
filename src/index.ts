@@ -6,7 +6,7 @@ import { discoverSkills, loadSkill } from "./skills.js";
 import { contentFacts } from "./content.js";
 import { securityScan } from "./security.js";
 import { historyFacts } from "./history.js";
-import { printJson, printReport } from "./report.js";
+import { printAgent, printJson, printReport } from "./report.js";
 import type { AuditResult } from "./types.js";
 
 const HELP = `skill-audit — npm audit for agent skills. Facts, not judgment.
@@ -17,7 +17,8 @@ Usage:
                                  content + security only, no history
 
 Options:
-  --json                machine-readable output
+  --agent               compact JSON for AI agents (flags in full, noise aggregated)
+  --json                full machine-readable output
   --no-history          skip the local transcript scan
   --transcripts <dir>   transcript location (default: ~/.claude/projects)
   -h, --help            this help
@@ -29,7 +30,7 @@ Everything runs locally. Nothing leaves the machine.`;
 interface Args {
   command: "audit" | "scan";
   target?: string;
-  json: boolean;
+  output: "report" | "json" | "agent";
   history: boolean;
   transcripts: string;
 }
@@ -37,7 +38,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: "audit",
-    json: false,
+    output: "report",
     history: true,
     transcripts: join(homedir(), ".claude", "projects"),
   };
@@ -47,7 +48,8 @@ function parseArgs(argv: string[]): Args {
     if (a === "-h" || a === "--help") {
       console.log(HELP);
       process.exit(0);
-    } else if (a === "--json") args.json = true;
+    } else if (a === "--json") args.output = "json";
+    else if (a === "--agent") args.output = "agent";
     else if (a === "--no-history") args.history = false;
     else if (a === "--transcripts") {
       const v = argv[++i];
@@ -84,7 +86,7 @@ async function main(): Promise<void> {
       content: contentFacts(skills),
       security: securityScan(skills),
     };
-    (args.json ? printJson : printReport)(result);
+    print(args.output, result);
     // exitCode, not exit(): exit() truncates piped stdout before it flushes.
     process.exitCode = result.security.some((f) => f.level === "flag") ? 1 : 0;
     return;
@@ -102,8 +104,14 @@ async function main(): Promise<void> {
   if (args.history) {
     result.history = await historyFacts(args.transcripts, skills);
   }
-  (args.json ? printJson : printReport)(result);
+  print(args.output, result);
   process.exitCode = result.security.some((f) => f.level === "flag") ? 1 : 0;
+}
+
+function print(output: Args["output"], result: AuditResult): void {
+  if (output === "json") printJson(result);
+  else if (output === "agent") printAgent(result);
+  else printReport(result);
 }
 
 main().catch((err) => {

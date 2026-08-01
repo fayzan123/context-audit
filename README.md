@@ -2,7 +2,7 @@
 
 npm audit for agent skills.
 
-Scans your skills directory (Claude Code, Codex, OpenClaw — anything using the `<name>/SKILL.md` layout) and reports three kinds of facts:
+Tell your agent: **"audit my skills"** — or run it yourself. Either way it scans your skills directory (Claude Code, Codex, OpenClaw — anything using the `<name>/SKILL.md` layout) and reports three kinds of facts:
 
 - **Security** — prompt-injection phrases, hidden zero-width/bidi unicode, base64 blobs that decode to commands, `curl | sh`, credential references sitting next to external URLs, instructions hidden in HTML comments. Evidence for every finding, exit code 1 if anything is flagged.
 - **Content** — empty descriptions, identical descriptions (dispatch collisions), frontmatter names that don't match the directory, what your skills cost: the tokens injected into *every* session vs the tokens loaded on invoke.
@@ -12,8 +12,17 @@ Scans your skills directory (Claude Code, Codex, OpenClaw — anything using the
 npx skill-audit                  # audit ~/.claude/skills
 npx skill-audit path/to/skills   # audit any skills directory
 npx skill-audit scan ./downloaded-skill   # BEFORE you install something from a marketplace
-npx skill-audit --json           # machine-readable
+npx skill-audit --agent          # compact JSON for AI agents (~1.8k tokens vs ~22k for --json)
+npx skill-audit --json           # everything, machine-readable
 ```
+
+## Agent-first
+
+Most people won't run this raw — their agent will. That's the intended flow:
+
+- `--agent` emits a token-efficient report: every flag in full (agents must verify them), informational noise aggregated to counts, tables trimmed. On a 75-skill directory that's ~1.8k tokens instead of ~22k.
+- [`skill/SKILL.md`](skill/SKILL.md) is a companion skill you can drop into your skills directory. It teaches your agent to run the audit, verify flags against the cited lines before alarming you, propose cleanups (paired with [skillet](https://github.com/fayzan123/skillet)), and — critically — to `scan` untrusted skills and check the exit code **before reading their content**, so injection payloads never enter its context.
+- The deterministic layer measures; the agent judges. That split is the design: a model reviewing malicious content in-session is attackable, and a CLI making judgment calls is insufferable. Each side does what it's good at.
 
 ## Facts, not judgment
 
