@@ -21,12 +21,26 @@ export interface Skill {
 
 export type Level = "flag" | "info";
 
+/** How bad it is if real. */
+export type Severity = "critical" | "high" | "medium" | "low";
+
+/**
+ * How likely this is a true positive, held separately from severity — the
+ * distinction npm audit lacks and that trained an ecosystem to ignore it.
+ * `certain`: structural, no legitimate use (invisible unicode, decoded payload).
+ * `likely`: strong pattern with a plausible benign explanation.
+ * `possible`: worth a look; benign in most codebases.
+ */
+export type Confidence = "certain" | "likely" | "possible";
+
 export interface SecurityFinding {
   skill: string;
   file: string;
   line?: number;
   check: string;
   level: Level;
+  severity: Severity;
+  confidence: Confidence;
   message: string;
   /** Verbatim evidence the user can check in ten seconds. */
   evidence: string;

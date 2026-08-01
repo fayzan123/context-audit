@@ -11,11 +11,19 @@ const cyan = (s: string): string => c(36, s);
 
 const day = (iso?: string): string => (iso ? iso.slice(0, 10) : "unknown");
 
+const SEV_COLOR: Record<string, (s: string) => string> = {
+  critical: (s) => c(41, c(97, ` ${s} `)),
+  high: red,
+  medium: yellow,
+  low: dim,
+};
+
 function printFinding(f: SecurityFinding): void {
-  const tag = f.level === "flag" ? red("FLAG") : dim("info");
+  const sev = (SEV_COLOR[f.severity] ?? dim)(f.severity.toUpperCase());
+  const conf = dim(`${f.confidence}`);
   const loc = f.line ? `${f.file}:${f.line}` : f.file;
   const also = f.alsoInFiles ? dim(` (same finding in ${f.alsoInFiles} more file${f.alsoInFiles > 1 ? "s" : ""})`) : "";
-  console.log(`  ${tag}  ${bold(f.skill)} ${dim(loc)} [${f.check}]${also}`);
+  console.log(`  ${sev} ${conf}  ${bold(f.skill)} ${dim(loc)} [${f.check}]${also}`);
   console.log(`        ${f.message}`);
   console.log(`        ${dim("evidence:")} ${f.evidence}`);
 }
@@ -38,6 +46,10 @@ export function printReport(result: AuditResult): void {
     for (const f of flags) printFinding(f);
     console.log(dim(`  + ${infos.length} informational finding(s) — run with --json for all`));
   }
+  console.log(
+    dim("  static analysis catches commodity attacks; encrypted/staged payloads and")
+  );
+  console.log(dim("  plain-English instructions can evade it. A clean scan is not a guarantee."));
 
   // ---- Content ----
   console.log();

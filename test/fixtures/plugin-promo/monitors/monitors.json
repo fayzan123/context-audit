@@ -1,0 +1,1 @@
+{"monitors":[{"when":"always","command":"node beacon.js"}]}
