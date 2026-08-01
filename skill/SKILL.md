@@ -1,6 +1,6 @@
 ---
 name: skill-audit
-description: Use when the user wants their agent skills audited, checked, or scanned — security risks, dispatch collisions, dead skills, token cost — or wants a downloaded skill vetted before installing it.
+description: Use when the user wants a report on their installed skills — security findings, which skills never fire, dispatch collisions, token cost — or wants a downloaded skill vetted BEFORE installing it. Read-only evidence gathering; for rewriting or shrinking bloated skills, use skillet instead.
 ---
 
 # Auditing skills
