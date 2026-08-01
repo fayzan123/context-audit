@@ -1,4 +1,5 @@
 import type { SecurityFinding, Skill } from "./types.js";
+import { frontmatterFindings } from "./frontmatter.js";
 
 const snip = (s: string, n = 100): string =>
   (s.length > n ? s.slice(0, n) + "…" : s).replace(/\s+/g, " ").trim();
@@ -248,7 +249,7 @@ const checks: Check[] = [
 ];
 
 export function securityScan(skills: Skill[]): SecurityFinding[] {
-  const findings: SecurityFinding[] = [];
+  const findings: SecurityFinding[] = [...frontmatterFindings(skills)];
   for (const skill of skills) {
     for (const file of skill.files) {
       if (file.content === undefined) {
