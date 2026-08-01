@@ -63,19 +63,43 @@ const checks: Check[] = [
   {
     id: "hidden-unicode",
     run(skill, file, content, findings) {
-      const re = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
-      const matches = [...content.matchAll(re)];
-      if (matches.length === 0) return;
-      const codepoints = [...new Set(matches.map((m) => "U+" + m[0].codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")))];
-      findings.push({
-        skill: skill.dirName,
-        file,
-        line: lineOf(content, matches[0].index!),
-        check: "hidden-unicode",
-        level: "flag",
-        message: `${matches.length} zero-width/bidi character(s) — invisible in rendered text`,
-        evidence: codepoints.join(" "),
-      });
+      // Invisible-character classes usable to smuggle instructions past a human
+      // reader while the model still reads them. Tag characters (U+E0000 block)
+      // can encode an entire ASCII message that renders as nothing at all.
+      const classes: { re: RegExp; label: string }[] = [
+        { re: /[​-‏‪-‮⁠-⁤﻿]/gu, label: "zero-width/bidi" },
+        { re: /[\u{E0000}-\u{E007F}]/gu, label: "unicode tag" },
+        { re: /[︀-️\u{E0100}-\u{E01EF}]/gu, label: "variation selector" },
+      ];
+      for (const { re, label } of classes) {
+        const matches = [...content.matchAll(re)];
+        if (matches.length === 0) continue;
+        const codepoints = [
+          ...new Set(
+            matches.map((m) => "U+" + m[0].codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0"))
+          ),
+        ].slice(0, 8);
+        // Tag characters carry a decodable ASCII payload — decode and show it.
+        let decoded = "";
+        if (label === "unicode tag") {
+          const text = matches
+            .map((m) => {
+              const cp = m[0].codePointAt(0)!;
+              return cp >= 0xe0020 && cp <= 0xe007e ? String.fromCharCode(cp - 0xe0000) : "";
+            })
+            .join("");
+          if (text.trim()) decoded = ` -> decodes to: ${snip(text, 80)}`;
+        }
+        findings.push({
+          skill: skill.dirName,
+          file,
+          line: lineOf(content, matches[0].index!),
+          check: "hidden-unicode",
+          level: "flag",
+          message: `${matches.length} ${label} character(s) - invisible in rendered text`,
+          evidence: codepoints.join(" ") + decoded,
+        });
+      }
     },
   },
   {
