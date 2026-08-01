@@ -1,47 +1,66 @@
 # skill-audit
 
-**Your skills directory has a budget, and going over it silently turns skills off.**
+**Every AI coding tool on your machine executes instruction files you've never audited. This audits all of them in one run.**
 
-Claude Code loads every skill's name and description into every session, under a character budget that defaults to ~1% of the context window (~8,000 chars). Go over and it **drops descriptions, starting with the skills you invoke least** — those skills stay installed but stop auto-triggering. There is no interactive warning. ([docs](https://code.claude.com/docs/en/skills))
-
-skill-audit tells you where you stand, in one deterministic, offline, zero-dependency command:
+Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md. Cursor rules and `.cursorrules`. The cross-tool AGENTS.md standard. Each is text your agent will follow — which makes each a context cost you pay, a dispatch surface that can collide, and an attack surface a marketplace download can poison. skill-audit detects every supported tool on the machine and audits the lot, in one deterministic, offline, zero-dependency command:
 
 ```
-COST
-  always injected (names + descriptions): 28,256 chars (~7,117 tokens)
-  353% of the ~8,000-char skill-listing budget — over it, Claude Code drops
-  descriptions starting with the skills you invoke least.
+skill-audit — 3 sources: claude, codex, cursor
 
+━━ claude — 75 skills · 12 agents · 3 commands · 2 instruction files
+COST
+  always in context: 74,249 chars (~18,563 tokens)
+  skill listing at 353% of the ~8,000-char budget — over it, Claude Code drops
+  descriptions starting with the skills you invoke least.
 DISPATCH
   identical descriptions: connect-chrome, open-gstack-browser
-
 USAGE
-  70 of 75 skills never fired in this window (5 fired)
-  these are first in line to lose their descriptions while you are over budget
+  70 of 75 never fired in this window (5 fired)
 
-result: listing 353% over budget · 13 security flag(s) · 70 skill(s) never fired
+━━ codex — 6 prompts · 1 instruction file
+USAGE
+  from 41 local transcript file(s), 2026-05-02 → 2026-07-30
+  4 of 6 never fired in this window (2 fired)
+
+━━ cursor — 9 rules
+USAGE
+  no usage data — cursor keeps no transcripts this tool can read
+
+result: listing over budget · 2 security flag(s) · 74 asset(s) never fired
 ```
 
-It works on any `<name>/SKILL.md` layout — Claude Code, Codex, OpenClaw — and reports three kinds of facts:
+Three kinds of facts, per source:
 
-- **Cost & dispatch** — what you pay every session vs. on invoke, where you sit against the listing budget, identical descriptions competing for the same trigger, frontmatter names that don't match their directory.
-- **Usage** — from your own local transcripts: which skills fire, which never have, which get interrupted right after firing. Your history, your machine; nothing leaves it.
+- **Cost & dispatch** — what rides along in *every* session (skill descriptions, `alwaysApply` rules, instruction-file bodies) vs. what loads on invoke; where you sit against Claude Code's listing budget; identical descriptions competing for the same trigger.
+- **Usage** — from your own local transcripts, where the tool keeps them (Claude Code and Codex do; Cursor doesn't, and the report says so instead of guessing). Which assets fire, which never have, which get interrupted right after firing. Your history, your machine; nothing leaves it.
 - **Security** — as a supporting lens, not the headline. See [what it catches](#what-it-catches-and-what-it-cant) for an honest accounting.
 
 ```
-npx skill-audit                  # audit ~/.claude/skills
-npx skill-audit path/to/skills   # audit any skills directory
+npx skill-audit                  # detect every tool on the machine, audit them all
+npx skill-audit --source codex,cursor     # narrow to specific tools
+npx skill-audit path/to/skills   # audit one claude-format skills directory
 npx skill-audit scan ./downloaded-skill   # BEFORE you install something from a marketplace
 npx skill-audit --strict         # also gate on capability grants (allowed-tools: Bash)
-npx skill-audit --agent          # compact JSON for AI agents (~1.8k tokens vs ~22k for --json)
+npx skill-audit --agent          # compact JSON for AI agents (flags in full, noise aggregated)
 npx skill-audit --json           # everything, machine-readable
 ```
 
+## What gets audited, per tool
+
+| Source | Instruction assets | Always-in-context cost | Usage history |
+|---|---|---|---|
+| `claude` | `~/.claude`+`./.claude` skills, agents, commands; `CLAUDE.md` (global + project) | skill/agent names + descriptions; CLAUDE.md bodies | ✅ `~/.claude/projects` transcripts |
+| `codex` | `~/.codex/AGENTS.md`, `~/.codex/prompts/*.md` | AGENTS.md body; prompt names | ✅ `~/.codex/sessions` rollouts |
+| `cursor` | `./.cursor/rules/*.mdc` (nested dirs included), legacy `./.cursorrules` | `alwaysApply` + legacy rule bodies; rule descriptions | — none kept in a readable form |
+| `agents-md` | `./AGENTS.md`, `~/AGENTS.md` — audited once, not once per tool that reads it | whole body | — |
+
+The unit of audit is "an instruction file an agent will execute," not "a Claude skill." The detection engine is shared; each source contributes discovery, a cost model, and (where transcripts exist) usage. Where a tool keeps no parseable history, the usage section says exactly that — absent data stays absent rather than becoming a guess.
+
 ## How this differs from `/doctor`
 
-Claude Code ships [`/doctor`](https://code.claude.com/docs/en/commands), which "finds unused skills, MCP servers, and plugins versus their context cost," and Anthropic publishes a **Session Report** skill that crunches transcripts for per-skill token usage. If interactive answers are all you need, use those first — they are first-party and they are good.
+Claude Code ships [`/doctor`](https://code.claude.com/docs/en/commands), which "finds unused skills, MCP servers, and plugins versus their context cost," and Anthropic publishes a **Session Report** skill that crunches transcripts for per-skill token usage. If interactive answers about Claude Code are all you need, use those first — they are first-party and they are good.
 
-skill-audit is for the cases they don't cover: it is **deterministic and scriptable** (exit codes, `--json`, CI-gateable — no model in the loop, same answer every time), it runs **on a directory you have not installed yet**, and it puts cost, dispatch collisions, usage, and security in one report you can diff over time. If you want a number your CI can fail on, that's this. If you want a conversation about your setup, that's `/doctor`.
+skill-audit is for the cases they don't cover: it is **tool-agnostic** (`/doctor` is structurally Claude-only; most people running Claude Code also run Codex or Cursor, and that surface is otherwise uninspected), it is **deterministic and scriptable** (exit codes, `--json`, CI-gateable — no model in the loop, same answer every time), it runs **on a directory you have not installed yet**, and it puts cost, dispatch collisions, usage, and security in one report you can diff over time. If you want a number your CI can fail on, that's this. If you want a conversation about your Claude setup, that's `/doctor`.
 
 ## Agent-first
 

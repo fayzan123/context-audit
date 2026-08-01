@@ -13,7 +13,7 @@ interface Invocation {
 /** An interrupt this many lines or fewer after an invocation is attributed to it. */
 const INTERRUPT_WINDOW = 15;
 
-function findJsonlFiles(dir: string): string[] {
+export function findJsonlFiles(dir: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
     let entries;
@@ -32,7 +32,7 @@ function findJsonlFiles(dir: string): string[] {
   return out;
 }
 
-const TS_RE = /"timestamp"\s*:\s*"([^"]+)"/;
+export const TS_RE = /"timestamp"\s*:\s*"([^"]+)"/;
 const COMMAND_RE = /<command-name>\/?([A-Za-z0-9:_-]+)<\/command-name>/;
 
 function extractSkillInvocations(line: string): string[] {

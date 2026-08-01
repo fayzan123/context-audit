@@ -18,8 +18,23 @@ export interface SkillFile {
   vendorPackage?: boolean;
 }
 
+/** Which tool's configuration an asset belongs to. */
+export type SourceId = "claude" | "codex" | "cursor" | "agents-md" | "custom";
+
+/** What the asset is to its harness — decides which checks and costs apply. */
+export type AssetKind = "skill" | "agent" | "command" | "prompt" | "rule" | "instructions";
+
+/**
+ * What part of an asset its harness keeps in context at all times. This is the
+ * cost model: a Claude skill pays its name + description every session; an
+ * `alwaysApply` Cursor rule or an AGENTS.md pays its whole BODY every session;
+ * a Codex prompt pays only its name; a glob-scoped rule pays nothing until it
+ * triggers.
+ */
+export type Injection = "body" | "description" | "name-only" | "on-demand";
+
 export interface Skill {
-  /** Directory name — what the harness dispatches on. */
+  /** Dispatch name — what the harness matches on (directory, filename, or `name:`). */
   dirName: string;
   dir: string;
   /** `name:` from frontmatter, if present. */
@@ -28,6 +43,10 @@ export interface Skill {
   body: string;
   files: SkillFile[];
   hasSkillMd: boolean;
+  /** Undefined means "claude-format skill" — the original single-source shape. */
+  source?: SourceId;
+  kind?: AssetKind;
+  injection?: Injection;
 }
 
 export type Level = "flag" | "info";
@@ -75,14 +94,17 @@ export interface ContentFacts {
   /** chars/4 estimates, labeled as such in output. */
   tokens: { skill: string; bodyEst: number; descriptionEst: number }[];
   totalBodyEst: number;
-  /** name + description for every skill — injected into every session. */
+  /** Everything the harness keeps in context at all times, per the Injection model. */
   alwaysInjectedEst: number;
-  /**
-   * The same figure in characters. Claude Code budgets the skill listing in
-   * characters (`skillListingBudgetFraction`, ~1% of the context window), so
-   * this is the number that decides whether descriptions get dropped.
-   */
+  /** The same figure in characters. */
   alwaysInjectedChars: number;
+  /**
+   * Characters of skill names + descriptions only — the slice Claude Code
+   * budgets in characters (`skillListingBudgetFraction`, ~1% of the context
+   * window). Instruction-file bodies are always injected but do NOT count
+   * against that listing budget, so the two figures are held apart.
+   */
+  listingChars: number;
 }
 
 export interface SkillUsage {
@@ -108,4 +130,24 @@ export interface AuditResult {
   content: ContentFacts;
   security: SecurityFinding[];
   history?: HistoryFacts;
+}
+
+export interface AssetSummary {
+  name: string;
+  kind: AssetKind;
+  path: string;
+}
+
+/** One tool's complete audit: what was found, what it costs, what fired. */
+export interface SourceAudit {
+  source: SourceId;
+  assets: AssetSummary[];
+  content: ContentFacts;
+  security: SecurityFinding[];
+  /** Absent when the tool keeps no parseable local transcripts — never fabricated. */
+  history?: HistoryFacts;
+}
+
+export interface MultiAuditResult {
+  sources: SourceAudit[];
 }

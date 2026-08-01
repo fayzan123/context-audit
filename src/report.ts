@@ -1,4 +1,4 @@
-import type { AuditResult, SecurityFinding } from "./types.js";
+import type { AssetKind, MultiAuditResult, SecurityFinding, SourceAudit } from "./types.js";
 
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (code: number, s: string): string => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -34,95 +34,119 @@ function printFinding(f: SecurityFinding): void {
  * window — 8,000 chars on a 200K model). Past it, descriptions are dropped
  * starting with the least-invoked skills; the skill still exists but can no
  * longer auto-trigger. Documented at code.claude.com/docs/en/skills.
+ * This budget is Claude-specific, so it is only compared for claude sources.
  */
 const LISTING_BUDGET_CHARS = 8000;
 
-export function printReport(result: AuditResult): void {
-  const { content, security, history } = result;
+const KIND_LABEL: Record<AssetKind, [string, string]> = {
+  skill: ["skill", "skills"],
+  agent: ["agent", "agents"],
+  command: ["command", "commands"],
+  prompt: ["prompt", "prompts"],
+  rule: ["rule", "rules"],
+  instructions: ["instruction file", "instruction files"],
+};
+
+function countsLabel(s: SourceAudit): string {
+  const counts = new Map<AssetKind, number>();
+  for (const a of s.assets) counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([kind, n]) => `${n} ${KIND_LABEL[kind][n === 1 ? 0 : 1]}`)
+    .join(" · ");
+}
+
+/** Which sources Claude's skill-listing budget applies to. */
+const hasListingBudget = (s: SourceAudit): boolean =>
+  (s.source === "claude" || s.source === "custom") && s.content.listingChars > 0;
+
+function printSource(s: SourceAudit): void {
+  const { content, security, history } = s;
 
   console.log();
-  console.log(bold(`skill-audit — ${result.dir}`));
-  console.log(dim(`${content.skillCount} skills scanned`));
+  console.log(bold(`━━ ${s.source} `) + dim(`— ${countsLabel(s)}`));
 
   // ---- Cost ----
-  // Deliberately first. The listing budget decides whether a skill can fire at
-  // all, which makes it the fact most likely to explain what the user came here
-  // about; the security gauntlet is below it, not above it.
+  // Deliberately first. What rides along in every session is the fact most
+  // likely to explain what the user came here about; the security gauntlet is
+  // below it, not above it.
   console.log();
   console.log(bold(cyan("COST")));
-  const chars = content.alwaysInjectedChars;
-  const pct = Math.round((chars / LISTING_BUDGET_CHARS) * 100);
-  const over = chars > LISTING_BUDGET_CHARS;
   console.log(
-    `  always injected (names + descriptions): ${bold(`${chars.toLocaleString()} chars`)} ${dim(`(~${content.alwaysInjectedEst.toLocaleString()} tokens)`)}`
+    `  always in context: ${bold(`${content.alwaysInjectedChars.toLocaleString()} chars`)} ${dim(`(~${content.alwaysInjectedEst.toLocaleString()} tokens)`)}`
   );
-  if (over) {
-    console.log(
-      `  ${red(`${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char skill-listing budget`)} — over it, Claude Code drops`
-    );
-    console.log(
-      `  descriptions starting with the skills you invoke least. Those skills stay`
-    );
-    console.log(`  installed but stop auto-triggering. ${dim("Raise it with skillListingBudgetFraction.")}`);
-  } else {
-    console.log(
-      `  ${green(`${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char skill-listing budget`)} ${dim("— under it, all descriptions load")}`
-    );
+  let overBudget = false;
+  if (hasListingBudget(s)) {
+    const chars = content.listingChars;
+    const pct = Math.round((chars / LISTING_BUDGET_CHARS) * 100);
+    overBudget = chars > LISTING_BUDGET_CHARS;
+    if (overBudget) {
+      console.log(
+        `  ${red(`skill listing at ${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char budget`)} — over it, Claude Code drops`
+      );
+      console.log(`  descriptions starting with the skills you invoke least. Those skills stay`);
+      console.log(`  installed but stop auto-triggering. ${dim("Raise it with skillListingBudgetFraction.")}`);
+    } else {
+      console.log(
+        `  ${green(`skill listing at ${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char budget`)} ${dim("— under it, all descriptions load")}`
+      );
+    }
   }
-  console.log(
-    `  total body size if all invoked: ~${content.totalBodyEst.toLocaleString()} tokens`
-  );
+  console.log(`  total body size if all invoked: ~${content.totalBodyEst.toLocaleString()} tokens`);
   const biggest = content.tokens.slice(0, 5);
   if (biggest.length > 0) {
     console.log(`  largest bodies: ${biggest.map((t) => `${t.skill} (~${t.bodyEst.toLocaleString()})`).join(", ")}`);
   }
 
   // ---- Dispatch ----
-  console.log();
-  console.log(bold(cyan("DISPATCH")));
-  let dispatchIssues = 0;
-  if (content.emptyDescriptions.length > 0) {
-    dispatchIssues++;
-    console.log(`  ${yellow(`${content.emptyDescriptions.length} empty description(s)`)}: ${content.emptyDescriptions.join(", ")}`);
-  }
-  dispatchIssues += content.duplicateDescriptions.length + content.nameMismatches.length;
-  if (content.missingSkillMd.length > 0) dispatchIssues++;
-  for (const d of content.duplicateDescriptions) {
-    console.log(`  ${yellow("identical descriptions")}: ${d.skills.join(", ")}`);
-    const flat = d.description.replace(/\s+/g, " ");
-    console.log(`        ${dim(`"${flat.slice(0, 90)}${flat.length > 90 ? "…" : ""}"`)}`);
-  }
-  for (const m of content.nameMismatches) {
-    console.log(`  ${yellow("name mismatch")}: directory ${bold(m.skill)} vs frontmatter ${bold(m.fmName)}`);
-  }
-  if (content.missingSkillMd.length > 0) {
-    console.log(`  ${yellow("no SKILL.md")}: ${content.missingSkillMd.join(", ")}`);
-  }
-  if (dispatchIssues === 0) {
-    console.log(`  ${green("no collisions, empty descriptions, or name mismatches")}`);
+  // Only meaningful where something auto-dispatches on a description.
+  const dispatchKinds = s.assets.some((a) => a.kind === "skill" || a.kind === "agent" || a.kind === "command");
+  if (dispatchKinds) {
+    console.log();
+    console.log(bold(cyan("DISPATCH")));
+    let dispatchIssues = 0;
+    if (content.emptyDescriptions.length > 0) {
+      dispatchIssues++;
+      console.log(`  ${yellow(`${content.emptyDescriptions.length} empty description(s)`)}: ${content.emptyDescriptions.join(", ")}`);
+    }
+    dispatchIssues += content.duplicateDescriptions.length + content.nameMismatches.length;
+    if (content.missingSkillMd.length > 0) dispatchIssues++;
+    for (const d of content.duplicateDescriptions) {
+      console.log(`  ${yellow("identical descriptions")}: ${d.skills.join(", ")}`);
+      const flat = d.description.replace(/\s+/g, " ");
+      console.log(`        ${dim(`"${flat.slice(0, 90)}${flat.length > 90 ? "…" : ""}"`)}`);
+    }
+    for (const m of content.nameMismatches) {
+      console.log(`  ${yellow("name mismatch")}: directory ${bold(m.skill)} vs frontmatter ${bold(m.fmName)}`);
+    }
+    if (content.missingSkillMd.length > 0) {
+      console.log(`  ${yellow("no SKILL.md")}: ${content.missingSkillMd.join(", ")}`);
+    }
+    if (dispatchIssues === 0) {
+      console.log(`  ${green("no collisions, empty descriptions, or name mismatches")}`);
+    }
   }
 
   // ---- Usage ----
-  if (history) {
-    console.log();
-    console.log(bold(cyan("USAGE")));
+  console.log();
+  console.log(bold(cyan("USAGE")));
+  if (!history) {
+    console.log(dim(`  no usage data — ${s.source} keeps no transcripts this tool can read (or the scan was skipped)`));
+  } else {
     console.log(
       dim(
         `  from ${history.transcriptFiles} local transcript file(s), ${day(history.windowStart)} → ${day(history.windowEnd)}`
       )
     );
-    const fired = history.usage.length;
+    const tracked = history.usage.length + history.neverFired.length;
     console.log(
-      `  ${bold(`${history.neverFired.length} of ${content.skillCount}`)} skills never fired in this window ${fired > 0 ? dim(`(${fired} fired)`) : ""}`
+      `  ${bold(`${history.neverFired.length} of ${tracked}`)} never fired in this window ${history.usage.length > 0 ? dim(`(${history.usage.length} fired)`) : ""}`
     );
     if (history.neverFired.length > 0) {
       console.log(`        ${dim(history.neverFired.join(", "))}`);
       // The drop order is by least-invoked, so a never-fired skill is both the
       // first to lose its description and the least able to earn it back.
-      if (over) {
-        console.log(
-          `  ${yellow("these are first in line")} to lose their descriptions while you are over budget`
-        );
+      if (overBudget) {
+        console.log(`  ${yellow("these are first in line")} to lose their descriptions while you are over budget`);
       }
     }
     const top = history.usage.slice(0, 10);
@@ -136,10 +160,7 @@ export function printReport(result: AuditResult): void {
         );
       }
     }
-    const interruptedNotTop = history.usage.filter(
-      (u) => u.interruptedAfter > 0 && !top.includes(u)
-    );
-    for (const u of interruptedNotTop) {
+    for (const u of history.usage.filter((u) => u.interruptedAfter > 0 && !top.includes(u))) {
       console.log(
         `        ${bold(u.skill)} ${yellow(`interrupted after ${u.interruptedAfter}/${u.invocations} invocation(s)`)}`
       );
@@ -157,22 +178,39 @@ export function printReport(result: AuditResult): void {
     for (const f of flags) printFinding(f);
     console.log(dim(`  + ${infos.length} informational finding(s) — run with --json for all`));
   }
+}
+
+export function printReport(result: MultiAuditResult): void {
+  const { sources } = result;
+  console.log();
+  console.log(
+    bold(`skill-audit — ${sources.length} source${sources.length === 1 ? "" : "s"}: `) +
+      sources.map((s) => s.source).join(", ")
+  );
+
+  for (const s of sources) printSource(s);
+
+  console.log();
   console.log(dim("  static analysis catches commodity attacks; encrypted/staged payloads and"));
   console.log(dim("  plain-English instructions can evade it. A clean scan is not a guarantee."));
 
+  // ---- Cross-source summary ----
+  const flags = sources.flatMap((s) => s.security.filter((f) => f.level === "flag"));
+  const neverFired = sources.reduce((n, s) => n + (s.history?.neverFired.length ?? 0), 0);
+  const anyHistory = sources.some((s) => s.history);
+  const overBudget = sources.some(
+    (s) => hasListingBudget(s) && s.content.listingChars > LISTING_BUDGET_CHARS
+  );
   console.log();
-  const summary =
-    flags.length > 0
-      ? red(`${flags.length} security flag(s)`)
-      : green("0 security flags");
-  const cost = over ? red(`listing ${pct}% over budget`) : green("listing within budget");
-  const dead = history ? ` · ${history.neverFired.length} skill(s) never fired` : "";
+  const summary = flags.length > 0 ? red(`${flags.length} security flag(s)`) : green("0 security flags");
+  const cost = overBudget ? red("listing over budget") : green("listing within budget");
+  const dead = anyHistory ? ` · ${neverFired} asset(s) never fired` : "";
   console.log(`${bold("result:")} ${cost} · ${summary}${dead}`);
   console.log(dim("facts only — deciding what to do with them is your (or your model's) job"));
   console.log();
 }
 
-export function printJson(result: AuditResult): void {
+export function printJson(result: object): void {
   console.log(JSON.stringify(result, null, 2));
 }
 
@@ -181,39 +219,50 @@ export function printJson(result: AuditResult): void {
  * info findings aggregated to counts, tables trimmed. An agent should be able to
  * act on this without paying for 200+ informational entries.
  */
-export function printAgent(result: AuditResult): void {
-  const { content, security, history } = result;
-  const flags = security.filter((f) => f.level === "flag");
-  const infoByCheck: Record<string, number> = {};
-  for (const f of security) {
-    if (f.level === "info") infoByCheck[f.check] = (infoByCheck[f.check] ?? 0) + 1;
-  }
-  const out = {
-    dir: result.dir,
-    skillCount: content.skillCount,
-    security: {
-      flags,
-      infoCounts: infoByCheck,
-      note: "Verify each flag by reading the cited file:line before alarming the user. Full detail: --json",
-    },
-    content: {
-      alwaysInjectedEstTokens: content.alwaysInjectedEst,
-      totalBodyEstTokens: content.totalBodyEst,
-      emptyDescriptions: content.emptyDescriptions,
-      duplicateDescriptions: content.duplicateDescriptions,
-      nameMismatches: content.nameMismatches,
-      missingSkillMd: content.missingSkillMd,
-      largestBodies: content.tokens.slice(0, 10),
-    },
-    usage: history
-      ? {
-          window: `${history.windowStart ?? "?"} → ${history.windowEnd ?? "?"}`,
-          transcriptFiles: history.transcriptFiles,
-          neverFired: history.neverFired,
-          fired: history.usage,
-        }
-      : undefined,
-    exitCode: flags.length > 0 ? 1 : 0,
-  };
-  console.log(JSON.stringify(out, null, 1));
+export function printAgent(result: MultiAuditResult): void {
+  const sources = result.sources.map((s) => {
+    const flags = s.security.filter((f) => f.level === "flag");
+    const infoByCheck: Record<string, number> = {};
+    for (const f of s.security) {
+      if (f.level === "info") infoByCheck[f.check] = (infoByCheck[f.check] ?? 0) + 1;
+    }
+    const assetCounts: Record<string, number> = {};
+    for (const a of s.assets) assetCounts[a.kind] = (assetCounts[a.kind] ?? 0) + 1;
+    return {
+      source: s.source,
+      assetCounts,
+      security: { flags, infoCounts: infoByCheck },
+      content: {
+        alwaysInjectedChars: s.content.alwaysInjectedChars,
+        alwaysInjectedEstTokens: s.content.alwaysInjectedEst,
+        listingChars: s.content.listingChars,
+        totalBodyEstTokens: s.content.totalBodyEst,
+        emptyDescriptions: s.content.emptyDescriptions,
+        duplicateDescriptions: s.content.duplicateDescriptions,
+        nameMismatches: s.content.nameMismatches,
+        missingSkillMd: s.content.missingSkillMd,
+        largestBodies: s.content.tokens.slice(0, 10),
+      },
+      usage: s.history
+        ? {
+            window: `${s.history.windowStart ?? "?"} → ${s.history.windowEnd ?? "?"}`,
+            transcriptFiles: s.history.transcriptFiles,
+            neverFired: s.history.neverFired,
+            fired: s.history.usage,
+          }
+        : undefined,
+    };
+  });
+  const anyFlags = sources.some((s) => s.security.flags.length > 0);
+  console.log(
+    JSON.stringify(
+      {
+        sources,
+        note: "Verify each flag by reading the cited file:line before alarming the user. Full detail: --json",
+        exitCode: anyFlags ? 1 : 0,
+      },
+      null,
+      1
+    )
+  );
 }
