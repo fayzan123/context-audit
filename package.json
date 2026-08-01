@@ -1,0 +1,34 @@
+{
+  "name": "skill-audit",
+  "version": "0.1.0",
+  "description": "npm audit for agent skills — scans a skills directory and reports facts: security findings, content problems, and real usage from your own transcripts. Never judgment.",
+  "type": "module",
+  "bin": {
+    "skill-audit": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "agent-skills",
+    "security",
+    "audit",
+    "prompt-injection"
+  ],
+  "author": "Fayzan Malik",
+  "license": "MIT",
+  "repository": "github:fayzan123/skill-audit",
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.5.0"
+  }
+}
