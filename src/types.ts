@@ -16,6 +16,13 @@ export interface SkillFile {
    * not this — it gets scanned normally, because that is where a payload hides.
    */
   vendorPackage?: boolean;
+  /**
+   * Git's own compressed object storage (a loose object or a packfile), which
+   * carries no readable payload. Recorded rather than skipped: "skip anything
+   * with this name shape" was itself a hiding place, so the shape now only
+   * decides how the bytes are *reported*, never whether they are read.
+   */
+  gitObject?: boolean;
 }
 
 /** Which tool's configuration an asset belongs to. */
@@ -66,6 +73,14 @@ export type Confidence = "certain" | "likely" | "possible";
 export interface SecurityFinding {
   skill: string;
   file: string;
+  /**
+   * Absolute path to the cited file. The report tells its reader to verify every
+   * flag at the cited line before acting on it, and `skill` + a skill-relative
+   * `file` made that a join the reader had to perform — which is exactly where a
+   * verifying agent went to the wrong file and reported two nonexistent bugs.
+   * The path it should open is now stated outright.
+   */
+  path?: string;
   line?: number;
   check: string;
   level: Level;

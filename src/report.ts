@@ -26,6 +26,10 @@ function printFinding(f: SecurityFinding): void {
   console.log(`  ${sev} ${conf}  ${bold(f.skill)} ${dim(loc)} [${f.check}]${also}`);
   console.log(`        ${f.message}`);
   console.log(`        ${dim("evidence:")} ${f.evidence}`);
+  // Every flag is meant to be verified at its source before anyone acts on it,
+  // so the line printed here is the one to open — not a fragment to be joined
+  // against the asset list by hand.
+  if (f.path) console.log(`        ${dim("verify:")} ${f.path}${f.line ? `:${f.line}` : ""}`);
 }
 
 /**
@@ -205,7 +209,10 @@ export function printReport(result: MultiAuditResult): void {
   const summary = flags.length > 0 ? red(`${flags.length} security flag(s)`) : green("0 security flags");
   const cost = overBudget ? red("listing over budget") : green("listing within budget");
   const dead = anyHistory ? ` · ${neverFired} asset(s) never fired` : "";
-  console.log(`${bold("result:")} ${cost} · ${summary}${dead}`);
+  // Cost and dead weight first, security last. That is the order of how often
+  // each one is actionable: nearly every run has assets that never fired, and
+  // most runs have no security flag at all.
+  console.log(`${bold("result:")} ${cost}${dead} · ${summary}`);
   console.log(dim("facts only — deciding what to do with them is your (or your model's) job"));
   console.log();
 }
@@ -258,7 +265,7 @@ export function printAgent(result: MultiAuditResult): void {
     JSON.stringify(
       {
         sources,
-        note: "Verify each flag by reading the cited file:line before alarming the user. Full detail: --json",
+        note: "Verify each flag by opening its `path` at `line` before alarming the user — `path` is absolute and is the file this finding is about; `file` alone is relative to the asset and is not what you should open. Full detail: --json",
         exitCode: anyFlags ? 1 : 0,
       },
       null,
