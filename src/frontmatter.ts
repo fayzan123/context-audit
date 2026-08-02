@@ -59,12 +59,17 @@ const CREDENTIAL_GRANT =
 /** Runners that permission rules do NOT strip — an allow rule on these launders arbitrary execution. */
 const RUNNER_PREFIX = /\b(?:npx|docker\s+(?:exec|run)|devbox\s+run|mise\s+exec|direnv\s+exec|uv\s+run|pnpm\s+dlx|bunx)\b/;
 
-/** Frontmatter keys defined by the spec or Claude Code. Anything else is silently ignored by the harness. */
+/**
+ * Frontmatter keys defined by the spec or Claude Code — including the agent-file
+ * keys (`tools`, `color`, `isolation`), since agent and command files run through
+ * the same engine. Anything else is silently ignored by the harness.
+ */
 const KNOWN_KEYS = new Set([
   "name", "description", "license", "compatibility", "metadata", "allowed-tools",
   "disallowed-tools", "hooks", "model", "effort", "context", "agent", "background",
   "disable-model-invocation", "user-invocable", "paths", "shell", "argument-hint",
   "arguments", "when_to_use", "version", "author", "keywords", "homepage",
+  "tools", "color", "isolation",
 ]);
 
 export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
@@ -139,9 +144,20 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       }
     }
 
-    const skillMd = skill.files.find((f) => isSkillMd(f.relPath));
-    if (!skillMd?.content) continue;
-    const block = rawFrontmatter(skillMd.content);
+    // Skills keep their live frontmatter in SKILL.md. Claude agent and command
+    // files are single .md assets whose OWN frontmatter carries the same keys —
+    // `allowed-tools: Bash` on a command is a real capability grant, and an
+    // agent's description is injected into every session. Codex prompts and
+    // Cursor rules have different frontmatter semantics and are left out
+    // rather than mis-linted against Claude's key set.
+    const entry =
+      skill.files.find((f) => isSkillMd(f.relPath)) ??
+      (skill.kind === "agent" || skill.kind === "command"
+        ? skill.files.find((f) => f.content !== undefined)
+        : undefined);
+    if (!entry?.content) continue;
+    const entryFile = entry.relPath;
+    const block = rawFrontmatter(entry.content);
     if (!block) continue;
 
     const keys = topLevelKeys(block);
@@ -151,7 +167,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
     // ---- hooks ----
     if (keys.includes("hooks")) {
       add(skill, {
-        file: "SKILL.md",
+        file: entryFile,
         check: "frontmatter-hooks",
         level: "info",
         severity: "medium",
@@ -162,7 +178,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       // An http hook POSTs the full event payload, including tool inputs.
       for (const { value, line } of urls) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           line,
           check: "hook-http-sink",
           level: "flag",
@@ -177,7 +193,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
     for (const { command, line } of commands) {
       if (/\.\.[/\\]/.test(command)) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           line,
           check: "hook-path-traversal",
           level: "flag",
@@ -189,7 +205,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       }
       if (/^\s*(?:\/|~)/.test(command) && !/\$\{?CLAUDE_SKILL_DIR/.test(command)) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           line,
           check: "hook-absolute-path",
           level: "flag",
@@ -202,7 +218,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       const net = NETWORK_IN_HOOK.exec(command);
       if (net) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           line,
           check: "hook-network-or-eval",
           level: "flag",
@@ -223,7 +239,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       const bundled = /\$\{?CLAUDE_SKILL_DIR\}?/.test(allowed);
       if (wildcard) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           check: "broad-tool-grant",
           level: "flag",
           severity: "high",
@@ -234,7 +250,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       }
       if (runner) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           check: "runner-laundering",
           level: "flag",
           severity: "high",
@@ -245,7 +261,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       }
       if (bundled) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           check: "bundled-script-autorun",
           level: "flag",
           severity: "high",
@@ -261,7 +277,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       const credTarget = CREDENTIAL_GRANT.exec(allowed);
       if (credTarget) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           check: "credential-tool-grant",
           level: "flag",
           severity: "critical",
@@ -275,7 +291,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       const otherWildcard = /\b(WebFetch|Write|Edit|NotebookEdit|Agent|Task)\s*\(\s*\*\s*\)/.exec(allowed);
       if (otherWildcard) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           check: "broad-tool-grant",
           level: "flag",
           severity: "high",
@@ -286,7 +302,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       }
       if (!wildcard && !runner && !bundled && !credTarget && !otherWildcard && /\b(?:Bash|Write|Edit|WebFetch|NotebookEdit)\b/.test(allowed)) {
         add(skill, {
-          file: "SKILL.md",
+          file: entryFile,
           check: "frontmatter-capabilities",
           level: "info",
           severity: "low",
@@ -300,7 +316,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
     const disallowed = scalar(block, "disallowed-tools");
     if (disallowed && /AskUserQuestion/.test(disallowed)) {
       add(skill, {
-        file: "SKILL.md",
+        file: entryFile,
         check: "suppresses-user-prompt",
         level: "flag",
         severity: "high",
@@ -313,7 +329,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
     // ---- execution-context modifiers ----
     if (scalar(block, "context") === "fork" && /^true$/i.test(scalar(block, "background") ?? "")) {
       add(skill, {
-        file: "SKILL.md",
+        file: entryFile,
         check: "background-fork",
         level: "flag",
         severity: "high",
@@ -328,7 +344,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       /^false$/i.test(scalar(block, "user-invocable") ?? "")
     ) {
       add(skill, {
-        file: "SKILL.md",
+        file: entryFile,
         check: "hidden-from-menu",
         level: "info",
         severity: "medium",
@@ -346,7 +362,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
       );
     if (descInjection) {
       add(skill, {
-        file: "SKILL.md",
+        file: entryFile,
         check: "description-injection",
         level: "flag",
         severity: "critical",
@@ -360,7 +376,7 @@ export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
     const unknown = keys.filter((k) => !KNOWN_KEYS.has(k));
     if (unknown.length > 0) {
       add(skill, {
-        file: "SKILL.md",
+        file: entryFile,
         check: "unknown-frontmatter-key",
         level: "info",
         severity: "low",

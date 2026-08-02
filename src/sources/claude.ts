@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { discoverSkills, loadSkill } from "../skills.js";
 import { historyFacts } from "../history.js";
@@ -9,7 +9,17 @@ import type { SourceAdapter, SourceContext } from "./types.js";
 export function mdFilesUnder(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
+  const seen = new Set<string>();
   const walk = (d: string): void => {
+    // statSync below follows symlinks, so a directory linking to an ancestor
+    // would recurse forever without this.
+    try {
+      const real = realpathSync(d);
+      if (seen.has(real)) return;
+      seen.add(real);
+    } catch {
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(d, { withFileTypes: true });

@@ -44,8 +44,11 @@ function lineAt(content: string, index: number): string {
  * "commented out — inert" downgraded a live `curl | sh` to an info line.
  * In Markdown only an HTML comment is actually inert.
  */
+/** Markdown in all the spellings the audited tools use — Cursor rules are `.mdc`. */
+const MARKDOWN_FILE = /\.(?:md|mdc|markdown)$/i;
+
 const COMMENT_SYNTAX: { re: RegExp; test: RegExp }[] = [
-  { re: /\.(?:md|markdown|html?)$/i, test: /^\s*<!--/ },
+  { re: /\.(?:md|mdc|markdown|html?)$/i, test: /^\s*<!--/ },
   { re: /\.(?:sh|bash|zsh|fish|py|rb|pl|ya?ml|toml|cfg|conf|env)$/i, test: /^\s*#/ },
   { re: /\.(?:js|mjs|cjs|ts|tsx|jsx|json[c5]?|css|php|lua|r)$/i, test: /^\s*(?:\/\/|\/\*|\*)/ },
   { re: /\.(?:ini|lisp|el|clj)$/i, test: /^\s*;/ },
@@ -977,7 +980,7 @@ const checks: Check[] = [
   {
     id: "html-comment",
     run(skill, file, content, findings) {
-      if (!file.endsWith(".md")) return;
+      if (!MARKDOWN_FILE.test(file)) return;
       const re = /<!--([\s\S]*?)-->/g;
       for (const m of content.matchAll(re)) {
         const inner = m[1].trim();
@@ -1005,7 +1008,7 @@ const checks: Check[] = [
   {
     id: "link-mismatch",
     run(skill, file, content, findings) {
-      if (!file.endsWith(".md")) return;
+      if (!MARKDOWN_FILE.test(file)) return;
       // Link text is usually a bare domain, not a full URL — `[docs.anthropic.com]
       // (https://evil.example)` is the actual phishing shape and requiring a
       // scheme in the text missed it.
@@ -1039,7 +1042,7 @@ const checks: Check[] = [
   {
     id: "interpolated-image",
     run(skill, file, content, findings) {
-      if (!file.endsWith(".md")) return;
+      if (!MARKDOWN_FILE.test(file)) return;
       // An image URL carrying interpolated data exfiltrates on render, no click.
       const re = /!\[[^\]]*\]\((https?:\/\/[^)]*(?:\$\{[^}]+\}|\{\{[^}]+\}\}|\$[A-Z_]{3,})[^)]*)\)/g;
       for (const m of content.matchAll(re)) {

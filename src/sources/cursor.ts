@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parseFrontmatter } from "../skills.js";
 import type { Injection, Skill } from "../types.js";
@@ -8,7 +8,17 @@ import type { SourceAdapter, SourceContext } from "./types.js";
 function ruleFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
+  const seen = new Set<string>();
   const walk = (d: string): void => {
+    // statSync below follows symlinks, so a directory linking to an ancestor
+    // would recurse forever without this.
+    try {
+      const real = realpathSync(d);
+      if (seen.has(real)) return;
+      seen.add(real);
+    } catch {
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(d, { withFileTypes: true });
@@ -38,7 +48,7 @@ function ruleAsset(path: string): Skill {
   // agent-requested rules pay their description so the model can pick them;
   // glob/manual rules cost nothing until they trigger.
   const injection: Injection =
-    fm["alwaysApply"] === "true" ? "body" : fm["description"]?.trim() ? "description" : "on-demand";
+    /^true$/i.test(fm["alwaysApply"] ?? "") ? "body" : fm["description"]?.trim() ? "description" : "on-demand";
   return {
     dirName: basename(path).replace(/\.(mdc|md)$/, ""),
     dir: path,

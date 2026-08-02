@@ -49,7 +49,7 @@ const GIT_OBJECT_DATA =
 
 /** Extensions whose contents are code or prose regardless of what the byte heuristic thinks. */
 const TEXT_EXT =
-  /\.(?:md|markdown|txt|sh|bash|zsh|fish|ps1|bat|cmd|js|mjs|cjs|ts|tsx|jsx|py|rb|pl|php|lua|r|json|jsonc|ya?ml|toml|ini|cfg|conf|env|xml|html?|css|sql|applescript|command)$/i;
+  /\.(?:md|mdc|markdown|txt|sh|bash|zsh|fish|ps1|bat|cmd|js|mjs|cjs|ts|tsx|jsx|py|rb|pl|php|lua|r|json|jsonc|ya?ml|toml|ini|cfg|conf|env|xml|html?|css|sql|applescript|command)$/i;
 
 /** A file with no extension in a bin/ or scripts/ dir is an executable script by convention. */
 const SCRIPT_PATH = /(?:^|\/)(?:bin|scripts?|hooks)\/[^/.]+$/;
