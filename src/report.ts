@@ -209,7 +209,10 @@ export function printReport(result: MultiAuditResult): void {
   const summary = flags.length > 0 ? red(`${flags.length} security flag(s)`) : green("0 security flags");
   const cost = overBudget ? red("listing over budget") : green("listing within budget");
   const dead = anyHistory ? ` · ${neverFired} asset(s) never fired` : "";
-  console.log(`${bold("result:")} ${cost} · ${summary}${dead}`);
+  // Cost and dead weight first, security last. That is the order of how often
+  // each one is actionable: nearly every run has assets that never fired, and
+  // most runs have no security flag at all.
+  console.log(`${bold("result:")} ${cost}${dead} · ${summary}`);
   console.log(dim("facts only — deciding what to do with them is your (or your model's) job"));
   console.log();
 }
