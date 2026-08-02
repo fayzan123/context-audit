@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { Confidence, SecurityFinding, Severity, Skill } from "./types.js";
 import { frontmatterFindings } from "./frontmatter.js";
 import { isSkillMd, VENDOR_FILE_BUDGET } from "./skills.js";
@@ -14,8 +15,11 @@ function inQuotedSpan(content: string, index: number): boolean {
   const start = content.lastIndexOf("\n", index - 1) + 1;
   let end = content.indexOf("\n", index);
   if (end === -1) end = content.length;
-  const line = content.slice(start, end);
-  const col = index - start;
+  return colInQuotedSpan(content.slice(start, end), index - start);
+}
+
+/** The same test against a line already in hand, for line-oriented checks. */
+function colInQuotedSpan(line: string, col: number): boolean {
   for (const q of ['"', "'"]) {
     let open = -1;
     for (let i = 0; i < line.length; i++) {
@@ -76,6 +80,20 @@ function inCommandPosition(line: string, index: number): boolean {
 }
 
 /**
+ * True when the line actually hands a quoted string to an interpreter, rather
+ * than merely containing an interpreter's name somewhere. The name alone is far
+ * too cheap a signal: `https://bun.sh/install` contains a word-bounded `sh`
+ * followed by a quote, which is enough to make an install script that only
+ * *prints* its instructions look like one that runs them.
+ */
+function executesQuotedString(line: string): boolean {
+  for (const m of line.matchAll(EXECUTES_A_QUOTED_STRING)) {
+    if (inCommandPosition(line, m.index!)) return true;
+  }
+  return false;
+}
+
+/**
  * Characters that render as nothing (or as a break that reads as nothing) and so
  * can split a keyword invisibly. U+00AD SOFT HYPHEN belongs here and was the gap:
  * it is invisible in rendered markdown, survives NFKC, and split `cu<AD>rl` past
@@ -83,6 +101,20 @@ function inCommandPosition(line: string, index: number): boolean {
  */
 const INVISIBLE =
   /[­͏؜ᅟᅠ឴឵᠋-᠎​-‏‪-‮⁠-⁤⁪-⁯ㅤ︀-️﻿ﾠ\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+
+/**
+ * What a variation selector is legitimately attached to: an emoji taking its
+ * presentation form, or a keycap base (`1️⃣` is `1` + U+FE0F + U+20E3).
+ */
+const EMOJI_BASE = /[\p{Extended_Pictographic}0-9#*]/u;
+
+/** The whole code point ending at `index`, surrogate pair included. */
+function precedingCodePoint(s: string, index: number): string {
+  if (index <= 0) return "";
+  const unit = s.charCodeAt(index - 1);
+  if (unit >= 0xdc00 && unit <= 0xdfff && index >= 2) return s.slice(index - 2, index);
+  return s[index - 1];
+}
 
 /**
  * Cyrillic and Greek letters that render identically to ASCII. NFKC does NOT
@@ -137,7 +169,21 @@ function push(findings: SecurityFinding[], skill: Skill, file: string, add: Add)
  * published true-negative cases. The negative lookahead on system impersonation is
  * ATR's documented fix for markdown links like [system](path).
  */
-const INJECTION_PHRASES: { re: RegExp; label: string; severity: Severity; confidence: Confidence }[] = [
+const INJECTION_PHRASES: {
+  re: RegExp;
+  label: string;
+  severity: Severity;
+  confidence: Confidence;
+  /**
+   * The phrase names no instruction noun, so a trailing `about <topic>` changes
+   * what it means: "forget everything you know about Google SEO" scopes a
+   * sentence to a subject, and it is how ordinary coaching copy is written.
+   * Reported as a fact but not gated — with one carve-out, below: if the topic
+   * IS the instructions, `about` is not scoping anything and the phrase is the
+   * attack after all.
+   */
+  scopable?: boolean;
+}[] = [
   {
     re: /(?:you\s+(?:must|should|will|shall)\s+)?(?:ignore|disregard|override|forget|bypass|circumvent|supersede|set\s+aside|discard)\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier|system|safety|initial)\s+\w*\s*(?:instructions?|rules?|guidelines?|prompts?|directives?)/i,
     label: "instruction override",
@@ -170,6 +216,7 @@ const INJECTION_PHRASES: { re: RegExp; label: string; severity: Severity; confid
     label: "instruction override (object form)",
     severity: "critical",
     confidence: "likely",
+    scopable: true,
   },
   {
     re: /\b(?:supersedes?|overrides?|replaces?|takes\s+precedence\s+over)\s+(?:all\s+|any\s+)?(?:your|the)\s+(?:previous\s+|prior\s+|existing\s+|default\s+)?(?:safety\s+|system\s+|security\s+)?(?:instructions?|guidelines?|rules?|directives?|policies|constraints?)/i,
@@ -251,6 +298,15 @@ const INTERPRETER_STAGE =
 const FETCH = /\b(?:curl|wget|aria2c|Invoke-WebRequest|iwr)\b/i;
 
 /**
+ * Git plumbing that prints stored bytes to stdout. Not a network fetch, but the
+ * same pipeline: `git cat-file -p <hash> | bash` runs content the scanner never
+ * attributed to a fetch verb, because the fetch side was an enumeration of
+ * downloaders. Staging a payload as a git object and retrieving it this way is
+ * the documented pairing, so the retrieval step has to be visible on its own.
+ */
+const GIT_OBJECT_READ = /\bgit\s+(?:cat-file|show|archive|unpack-file)\b/;
+
+/**
  * Turns opaque bytes back into a command. A pipeline that decodes and then pipes
  * into an interpreter is download-execute with an extra hop — `| rev | sh` and
  * `| tr 'A-Za-z' 'N-ZA-Mn-za-m' | sh` both ran clean past the literal patterns.
@@ -260,6 +316,14 @@ const DECODER =
 
 /** A markdown table row — pipes there are formatting, not shell pipelines. */
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
+
+/**
+ * A shell being handed a quoted string to run. Quoting normally means the text
+ * is data — printed, matched, documented — but `sh -c "…"` is how you execute
+ * it, so this is what keeps "quoted" from becoming a blanket exemption.
+ */
+const EXECUTES_A_QUOTED_STRING =
+  /\b(?:eval|(?:ba|z|da|k)?sh|python[\d.]*|node|perl|ruby|system|popen|exec|xargs|Invoke-Expression)\b[^\n]{0,20}["']/g;
 
 /**
  * Physical lines joined on a trailing backslash, each tagged with the 1-based
@@ -338,18 +402,34 @@ const checks: Check[] = [
   {
     id: "injection-phrase",
     run(skill, file, content, findings) {
-      for (const { re, label, severity, confidence } of INJECTION_PHRASES) {
+      for (const { re, label, severity, confidence, scopable } of INJECTION_PHRASES) {
         // Every occurrence, not just the first: a skill with ten injected
         // instructions should not read as having one.
         for (const m of content.matchAll(new RegExp(re.source, re.flags + "g"))) {
+          const after = content.slice(m.index! + m[0].length, m.index! + m[0].length + 60);
+          // `about <topic>` scopes the sentence — unless the topic is the
+          // instructions themselves, in which case nothing has been scoped and
+          // "forget everything you know about your prior instructions" would
+          // have bought a downgrade for the price of one word.
+          const scoped =
+            scopable === true &&
+            /^\s+about\s+\S/i.test(after) &&
+            !/^\s+about\s+[^.\n]{0,40}\b(?:instruction|rule|guideline|prompt|directive|polic|constraint|system|safety|security|restriction)/i.test(
+              after
+            );
           push(findings, skill, file, {
+            // Reported, never gated: a phrase this common in ordinary writing
+            // must not hard-stop an install, but deleting the fact would make
+            // the audit lie by omission.
             line: lineOf(content, m.index!),
             check: "injection-phrase",
-            level: "flag",
-            severity,
-            confidence,
-            message: `${label}: known prompt-injection pattern`,
-            evidence: snip(m[0]),
+            level: scoped ? "info" : "flag",
+            severity: scoped ? "low" : severity,
+            confidence: scoped ? "possible" : confidence,
+            message: scoped
+              ? `${label}: matches a known injection pattern but is scoped to a topic ("… about …") — ordinary prose reads this way`
+              : `${label}: known prompt-injection pattern`,
+            evidence: snip(scoped ? lineAt(content, m.index!) : m[0]),
           });
         }
       }
@@ -410,6 +490,8 @@ const checks: Check[] = [
           emit(line, text, "download piped to an interpreter", text.trim());
         } else if (DECODER.test(upstream)) {
           emit(line, text, "decoded content piped to an interpreter", text.trim());
+        } else if (GIT_OBJECT_READ.test(upstream)) {
+          emit(line, text, "git object contents piped to an interpreter", text.trim());
         }
       }
 
@@ -417,14 +499,14 @@ const checks: Check[] = [
         // Command substitution and process substitution: the download never
         // touches a pipe, so the pipeline model above cannot see it.
         {
-          re: /\b(?:eval|(?:ba|z|da)?sh\s+-c|python[\d.]*\s+-c|node\s+-e|perl\s+-e)\s+["']?[$`]\(?\s*(?:curl|wget)[^\n]{0,200}/g,
+          re: /\b(?:eval|(?:ba|z|da)?sh\s+-c|python[\d.]*\s+-c|node\s+-e|perl\s+-e)\s+["']?[$`]\(?\s*(?:curl|wget|git\s+(?:cat-file|show|archive))[^\n]{0,200}/g,
           label: "interpreter executing the output of a download",
         },
         {
           // `.` is the POSIX spelling of `source` and needs its own alternative:
           // `\b` never matches between a space and a dot, so folding it into the
           // word list below silently disabled it.
-          re: /(?:\b(?:(?:ba|z|da|k)?sh|python[\d.]*|node|perl|ruby|source)|(?:^|[\s;&|])\.)\s+<\(\s*(?:curl|wget)[^)\n]{0,200}\)/g,
+          re: /(?:\b(?:(?:ba|z|da|k)?sh|python[\d.]*|node|perl|ruby|source)|(?:^|[\s;&|])\.)\s+<\(\s*(?:curl|wget|git\s+(?:cat-file|show|archive))[^)\n]{0,200}\)/g,
           label: "interpreter executing a process substitution of a download",
         },
         { re: /eval\s+\$\(\s*echo[^)]{0,200}base64[^)]{0,40}\)/g, label: "eval of base64-decoded content" },
@@ -457,13 +539,17 @@ const checks: Check[] = [
       for (let i = 0; i < lines.length; i++) {
         let target: string | undefined;
         let rest = "";
+        let restOffset = 0;
+        let fetchCol = 0;
         for (const re of grab) {
           const m = re.exec(lines[i].text);
           if (m?.[1] && !/^-/.test(m[1])) {
             target = m[1];
+            fetchCol = m.index;
             // `git clone <url> <dir> && <dir>/install.sh` puts fetch and execute
             // on one line, so the tail of this line is a candidate too.
-            rest = lines[i].text.slice(m.index + m[0].length);
+            restOffset = m.index + m[0].length;
+            rest = lines[i].text.slice(restOffset);
             break;
           }
         }
@@ -479,15 +565,32 @@ const checks: Check[] = [
         );
         for (let j = i; j < Math.min(lines.length, i + WINDOW); j++) {
           const text = j === i ? rest : lines[j].text;
-          if (!runs.test(text)) continue;
+          const run = runs.exec(text);
+          if (!run) continue;
+          // An install script that PRINTS the commands it wants a human to run
+          // — `echo '  curl … -o "$tmpfile"' >&2` … `echo '  bash "$tmpfile"' >&2`
+          // — matches this shape exactly while downloading and executing
+          // nothing. Reporting "downloads to $tmpfile, then executes it on line
+          // 13" about two `echo` lines is not a strict finding, it is a false
+          // statement about the file, and it was the single least defensible
+          // thing this tool said on a real machine. Quoting is also how a
+          // command is passed to a shell, so only inert quoting counts: an
+          // executor immediately before the quote still runs it.
+          const runCol = (j === i ? restOffset : 0) + run.index;
+          const inert =
+            colInQuotedSpan(lines[i].text, fetchCol) &&
+            !executesQuotedString(lines[i].text) &&
+            colInQuotedSpan(lines[j].text, runCol) &&
+            !executesQuotedString(lines[j].text);
           push(findings, skill, file, {
             line: lines[i].line,
             check: "staged-download-execute",
-            level: "flag",
-            severity: "critical",
-            confidence: "likely",
-            message:
-              j === i
+            level: inert ? "info" : "flag",
+            severity: inert ? "low" : "critical",
+            confidence: inert ? "possible" : "likely",
+            message: inert
+              ? `download-then-run sequence inside a quoted string — printed, not executed (target ${snip(target, 40)})`
+              : j === i
                 ? `downloads to ${snip(target, 40)} and executes it on the same line`
                 : `downloads to ${snip(target, 40)}, then executes it on line ${lines[j].line}`,
             evidence: `${snip(lines[i].text, 50)}${j === i ? "" : ` … ${snip(lines[j].text, 50)}`}`,
@@ -767,7 +870,16 @@ const checks: Check[] = [
         { re: /[︀-️\u{E0100}-\u{E01EF}]/gu, label: "variation selector", min: 3, severity: "high" },
       ];
       for (const { re, label, min, severity } of classes) {
-        const matches = [...raw.matchAll(re)];
+        let matches = [...raw.matchAll(re)];
+        // A variation selector attached to an emoji is that emoji's presentation
+        // form — 🏗️ is U+1F3D7 U+FE0F — not steganography. Counting them
+        // file-wide meant any document with three emoji flagged HIGH/likely,
+        // which on a real machine was four of twenty-one flags and taught the
+        // reader that "high" means "emoji". A DETACHED run is still the payload
+        // shape and still flags.
+        if (label === "variation selector") {
+          matches = matches.filter((m) => !EMOJI_BASE.test(precedingCodePoint(raw, m.index!)));
+        }
         if (matches.length < min) continue;
         const codepoints = [
           ...new Set(
@@ -1137,15 +1249,25 @@ function skillLevelChecks(skill: Skill, findings: SecurityFinding[]): void {
   // Same standard as proximity-trifecta: a file that *names* a credential path or
   // happens to contain the word "curl" is not a reader or a sender. Two CSV data
   // files mentioning both is not a split attack.
-  const readers = texts.filter((t) =>
-    t.text.split("\n").some((l) => SENSITIVE_PATHS.test(l) && CRED_READ.test(l))
-  );
-  const senders = texts.filter((t) =>
-    t.text.split("\n").some((l) => {
-      const send = EGRESS.exec(l) ?? EXFIL_SINKS.exec(l);
-      return send !== null && inCommandPosition(l, send.index);
-    })
-  );
+  // The 1-based line each side is on, so the finding can cite one. Shipping
+  // `line: null` on the one check whose whole message is "look at these two
+  // files" left the reader nothing to open.
+  const readers = texts
+    .map((t) => ({
+      ...t,
+      line: t.text.split("\n").findIndex((l) => SENSITIVE_PATHS.test(l) && CRED_READ.test(l)) + 1,
+    }))
+    .filter((t) => t.line > 0);
+  const senders = texts
+    .map((t) => ({
+      ...t,
+      line:
+        t.text.split("\n").findIndex((l) => {
+          const send = EGRESS.exec(l) ?? EXFIL_SINKS.exec(l);
+          return send !== null && inCommandPosition(l, send.index);
+        }) + 1,
+    }))
+    .filter((t) => t.line > 0);
   // Report whenever some reader file differs from some sender file. The old test
   // asked whether *any* file did both and suppressed everything if so, so adding
   // one decoy file mentioning both disabled the check for the whole package.
@@ -1154,12 +1276,13 @@ function skillLevelChecks(skill: Skill, findings: SecurityFinding[]): void {
     .find(({ r, s }) => r.path !== s.path);
   if (pair) {
     push(findings, skill, pair.r.path, {
+      line: pair.r.line,
       check: "split-trifecta",
       level: "flag",
       severity: "high",
       confidence: "possible",
-      message: "credential access and network egress live in different files of this skill",
-      evidence: `reads: ${pair.r.path} · sends: ${pair.s.path}`,
+      message: `credential access and network egress live in different files of this skill — sends from ${pair.s.path}:${pair.s.line}`,
+      evidence: `reads: ${pair.r.path}:${pair.r.line} · sends: ${pair.s.path}:${pair.s.line}`,
     });
   }
 
@@ -1195,8 +1318,42 @@ function skillLevelChecks(skill: Skill, findings: SecurityFinding[]): void {
     }
   }
 
+  // Git's compressed object storage, reported as a fact rather than silently
+  // stepped over. One line per skill, not one per object: a real checkout has
+  // thousands, and the point is only that this much unreadable data is here.
+  const gitObjects = skill.files.filter((f) => f.gitObject);
+  if (gitObjects.length > 0) {
+    push(findings, skill, ".git/objects", {
+      check: "git-object-storage",
+      level: "info",
+      severity: "low",
+      confidence: "certain",
+      message: `${gitObjects.length} compressed git object file(s) — not readable as text, so not scanned`,
+      evidence: `${Math.round(gitObjects.reduce((s, f) => s + f.bytes, 0) / 1024)}KB of git storage`,
+    });
+  }
+
   // Payload staged where scanners traditionally do not look.
   for (const f of skill.files) {
+    // Git stores nothing but zlib streams under `objects/` (bar the `info/`
+    // index files). A file there that reads as TEXT is therefore not git data
+    // no matter how hash-shaped its name is — and a hash-shaped name was the
+    // one thing that used to buy a payload a free pass out of the walk.
+    if (
+      /(?:^|\/)\.git\/objects\//.test(f.relPath) &&
+      !/(?:^|\/)\.git\/objects\/info\//.test(f.relPath) &&
+      f.content !== undefined
+    ) {
+      push(findings, skill, f.relPath, {
+        check: "git-dir-payload",
+        level: "flag",
+        severity: "critical",
+        confidence: "likely",
+        message: "plaintext file staged in .git/objects/ — git stores only compressed objects there",
+        evidence: `${f.bytes} bytes`,
+      });
+      continue;
+    }
     // `hooks/` is no longer blanket-whitelisted: git ships only `*.sample` there,
     // so a live hook in a distributed skill package is a payload, not git data.
     // Git's own metadata: all-caps top-level files (HEAD, ORIG_HEAD, FETCH_HEAD,
@@ -1230,8 +1387,15 @@ function skillLevelChecks(skill: Skill, findings: SecurityFinding[]): void {
 
   // A tiny SKILL.md shipping a large opaque payload is the cover/payload shape.
   const skillMd = skill.files.find((f) => isSkillMd(f.relPath));
+  // Git's own object storage is excluded: it is unreadable by nature and a
+  // skill installed from a git clone legitimately ships megabytes of it, so
+  // counting it here would fail every such skill on the cover/payload shape.
+  // It is reported separately as `git-object-storage` instead of vanishing.
   const opaque = skill.files.filter(
-    (f) => f.content === undefined && !/\.(?:png|jpg|jpeg|gif|svg|ico|woff2?)$/i.test(f.relPath)
+    (f) =>
+      f.content === undefined &&
+      !f.gitObject &&
+      !/\.(?:png|jpg|jpeg|gif|svg|ico|woff2?)$/i.test(f.relPath)
   );
   const opaqueBytes = opaque.reduce((sum, f) => sum + f.bytes, 0);
   if (skillMd && skillMd.bytes < 2048 && opaqueBytes > 256 * 1024) {
@@ -1292,6 +1456,21 @@ const CAPABILITY_DISCLOSURE = new Set([
   "bundled-script-autorun",
 ]);
 
+/**
+ * Absolute path per (skill, relative file), so every finding can name the file
+ * to open rather than a path fragment the reader has to reassemble from the
+ * skill list. Synthetic file labels (`node_modules`, `.git/objects`) have no
+ * real file behind them and fall back to the skill directory.
+ */
+function absolutePaths(skills: Skill[]): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const skill of skills) {
+    for (const f of skill.files) paths.set(`${skill.dirName} ${f.relPath}`, f.absPath);
+    paths.set(`${skill.dirName} `, skill.dir);
+  }
+  return paths;
+}
+
 export function securityScan(skills: Skill[], strict = true): SecurityFinding[] {
   const findings: SecurityFinding[] = [...frontmatterFindings(skills)];
   const packageRoots = new Map<string, string[]>();
@@ -1326,7 +1505,14 @@ export function securityScan(skills: Skill[], strict = true): SecurityFinding[] 
         continue;
       }
       if (file.content === undefined) {
-        if (file.bytes > 0 && !/\.(?:png|jpg|jpeg|gif|svg|ico|woff2?)$/i.test(file.relPath)) {
+        // Git objects are aggregated into one fact by skillLevelChecks; a
+        // checkout would otherwise emit thousands of identical "binary file"
+        // lines and bury everything that matters.
+        if (
+          file.bytes > 0 &&
+          !file.gitObject &&
+          !/\.(?:png|jpg|jpeg|gif|svg|ico|woff2?)$/i.test(file.relPath)
+        ) {
           push(findings, skill, file.relPath, {
             check: "unscannable",
             level: "info",
@@ -1369,9 +1555,15 @@ export function securityScan(skills: Skill[], strict = true): SecurityFinding[] 
   // has a package.json (or dist-info/__init__.py) at its root; a payload dropped
   // into a directory called `node_modules` has none. Keying on the path alone
   // would have handed attackers the exemption for the price of one mkdir.
+  const paths = absolutePaths(skills);
+  const dirs = new Map(skills.map((s) => [s.dirName, s.dir]));
   const scoped = findings.map((f) => {
     const relaxed = !strict && f.level === "flag" && CAPABILITY_DISCLOSURE.has(f.check);
-    const g = relaxed ? { ...f, level: "info" as const } : f;
+    const withPath = {
+      ...f,
+      path: paths.get(`${f.skill} ${f.file}`) ?? join(dirs.get(f.skill) ?? "", f.file),
+    };
+    const g = relaxed ? { ...withPath, level: "info" as const } : withPath;
     if (!isVendoredPackage(g.skill, g.file, packageRoots)) return g;
     return g.level === "flag" ? { ...g, level: "info" as const, vendored: true } : { ...g, vendored: true };
   });

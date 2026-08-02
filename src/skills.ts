@@ -41,8 +41,16 @@ export const VENDOR_FILE_BUDGET = 3000;
  * Skipping the whole `objects/`, `refs/`, `logs/` … subtrees reopened the exact
  * blind spot the rest of this file exists to close: `.git/objects/payload.sh`
  * was never walked, so it was never scanned and never reported. Loose objects
- * and packfiles have rigid names, so excluding those shapes bounds the cost
- * while leaving anything an attacker actually plants fully visible.
+ * and packfiles have rigid names, so this shape bounds what has to be *read in
+ * full* while leaving anything an attacker actually plants fully visible.
+ *
+ * The shape is NOT a skip. Refusing to look at a file because its name matches
+ * this pattern made the name itself the hiding place: a plaintext payload
+ * called `.git/objects/ab/<38 hex>` was never read, never scanned, never
+ * counted, and produced zero findings — while the README promised the walker
+ * enters `objects/`. Now the shape only decides how cheaply the file is ruled
+ * out: real git data is zlib and fails the text heuristic on a 4KB prefix,
+ * a planted script reads as text and is scanned like any other file.
  */
 const GIT_OBJECT_DATA =
   /(?:^|\/)\.git\/objects\/(?:[0-9a-f]{2}\/[0-9a-f]{30,}|pack\/[^/]+\.(?:pack|idx|rev|mtimes)|info\/[^/]*)$/;
@@ -156,10 +164,19 @@ function collectFiles(
     if (!stat.isFile()) continue;
     const bytes = stat.size;
     const relPath = relative(root, absPath);
-    // Git's own compressed storage carries no readable payload; anything else
-    // under .git is collected precisely because scanners are known to skip it.
-    if (inGit && GIT_OBJECT_DATA.test("/" + relPath)) continue;
     const file: SkillFile = { relPath, absPath, bytes };
+    // Git's own compressed storage carries no readable payload — but proving
+    // that from the name alone is what made the name a hiding place. Pay for a
+    // 4KB prefix instead: compressed object data fails the text heuristic and
+    // is recorded as git data, while a plaintext payload wearing a hash for a
+    // name reads as text and falls through to the normal full scan below.
+    if (inGit && GIT_OBJECT_DATA.test("/" + relPath)) {
+      if (!isProbablyText(readPrefix(absPath, 4096))) {
+        file.gitObject = true;
+        out.push(file);
+        continue;
+      }
+    }
     if (inVendorPkg) {
       file.vendorPackage = true;
       out.push(file);
