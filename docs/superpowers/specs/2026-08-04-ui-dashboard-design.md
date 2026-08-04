@@ -15,7 +15,15 @@ Positioning: the dashboard is the visual face of the existing tool, not a new pr
 2. **View + safe toggles** in v1. No in-browser editing, no installs, no deletes.
 3. **Claude-first for actions and history; multi-provider for inventory.** The existing `sources/` adapters (claude, codex, cursor, agentsmd) feed the inventory view from day one. Usage history remains Claude-only (only Claude Code keeps readable local transcripts) and the UI labels this honestly.
 4. **Ships as `context-audit ui`** — same package, zero runtime dependencies preserved.
-5. **Approach A:** one-shot audit snapshot + tiny action server. No file watchers, no websockets. Rescan is a button.
+5. **Approach A:** one-shot audit snapshot + tiny action server. No file watchers, no websockets. Rescan is a button. (Measured 2026-08-04: full audit of a real setup including 57MB of transcript history = 0.77s, so rescan-per-action needs no caching layer.)
+
+## Decisions from spec grilling (2026-08-04)
+
+6. **Disabled skills are first-class:** the claude adapter additionally scans `~/.claude/skills-disabled`. Disabled items render as grayed rows with fire history intact, are re-enableable, and are **excluded from the injected-token header total** — the header reports only what the setup actually costs.
+7. **Plugin inventory in v1, read-only:** the adapter scans the plugin cache (`~/.claude/plugins/cache`), resolving **active** plugin versions from the plugin config so side-by-side cached versions (e.g. superpowers 5.1.0 + 6.2.0) are not double-counted. Rows group by plugin; no toggles. If active-version resolution proves unreliable mid-build, degrade to newest-version-per-plugin with a visible caveat — never drop plugins, since they are the majority of real injection.
+8. **Open action:** try `code --goto <path>` when the VS Code CLI exists, else the OS opener (`open` / `xdg-open`). `$EDITOR` is deliberately not honored — terminal editors cannot be usefully spawned from a detached server.
+9. **Launch sequencing:** npm publish is held until ui ships; one launch as v0.3 with the dashboard screenshot as the hook and `npx context-audit ui` as the one-line install. The skillet LinkedIn post goes out as part of the same family story.
+10. **Design bar: all-out showpiece.** The dashboard UI is a deliberate visual flagship (the screenshot is the marketing asset): distinctive identity, dark-mode-first, animation and micro-interaction budget included. Constraint that survives: everything is hand-written CSS/SVG/TS inside the single self-contained HTML file — no frontend framework, zero runtime deps.
 
 ## UI content
 
@@ -35,14 +43,16 @@ One page, one inventory, three lenses.
   - `GET /api/audit` — the current payload.
   - `POST /api/rescan` — re-run the audit, return fresh payload.
   - `POST /api/toggle` — body carries an item ID; the server resolves the ID to a path from its own inventory. Client-supplied paths are never accepted.
-  - `POST /api/open` — open the item's file via `$EDITOR` (fallback: VS Code / `open`), launched with `spawn` and an argument array. No shell string interpolation; path comes from the server-side inventory only.
+  - `POST /api/open` — open the item's file (`code --goto`, else OS opener; see decision 8), launched with `spawn` and an argument array. No shell string interpolation; path comes from the server-side inventory only.
+- **Item identity:** each inventory item gets a stable ID (hash of provider + kind + path); all actions reference IDs, never paths. Rows carry a scope badge (user vs project) since the adapters scan both `~` and cwd.
+- **Port and URL:** OS-assigned random port; the full URL (with session token) is printed to the terminal and auto-opened. Empty inventory renders an onboarding hint, not a blank page.
 - **Data flow is one-way:** disk → audit engine → JSON → browser. The browser sends only item IDs and the session token.
 
 ## Server security
 
 A localhost server with mutating endpoints is a CSRF/DNS-rebinding target: a malicious webpage can POST to `127.0.0.1` blind. For a security-branded tool this must be closed from v1:
 
-- Random session token generated at startup, embedded in the URL the browser is opened at; every mutating request must present it.
+- Random session token generated at startup, embedded in the URL the browser is opened at; **every `/api` request** (reads included) must present it.
 - `Origin`/`Host` header validation on every request.
 - Bind to `127.0.0.1` (never `0.0.0.0`).
 - Requests failing any check get a 403 and are logged to the terminal.
