@@ -24,6 +24,22 @@ Positioning: the dashboard is the visual face of the existing tool, not a new pr
 8. **Open action:** try `code --goto <path>` when the VS Code CLI exists, else the OS opener (`open` / `xdg-open`). `$EDITOR` is deliberately not honored — terminal editors cannot be usefully spawned from a detached server.
 9. **Launch sequencing:** npm publish is held until ui ships; one launch as v0.3 with the dashboard screenshot as the hook and `npx context-audit ui` as the one-line install. The skillet LinkedIn post goes out as part of the same family story.
 10. **Design bar: all-out showpiece.** The dashboard UI is a deliberate visual flagship (the screenshot is the marketing asset): distinctive identity, dark-mode-first, animation and micro-interaction budget included. Constraint that survives: everything is hand-written CSS/SVG/TS inside the single self-contained HTML file — no frontend framework, zero runtime deps.
+11. **Aesthetic identity: instrument-grade** (chosen 2026-08-04 over ledger/editorial and control-room maximalism). Full design context — audience, tone, visual commitments, hard bans — lives in `.impeccable.md` at the repo root, which is the binding design reference for all UI work. See the Visual direction section below.
+
+## Visual direction (binding)
+
+The UI must read as a **precision lab instrument** — oscilloscope / flight recorder / calibrated meter — not a SaaS analytics page. "Measures, not judges," rendered visually. Implementation sessions MUST build with the frontend-design skill and honor `.impeccable.md`.
+
+**Commitments:**
+- Dark-first with brand-tinted near-black (never pure #000/#fff); oklch/color-mix palette; one calibrated signal color used surgically for state and severity — no neon, no glow.
+- Numerics are the protagonist: tabular figures, decimal-aligned columns, units set small. Distinctive display face for engraved instrument labels; monospace only where alignment earns it.
+- Structure from hairline rules and engraved section labels — not cards, not drop shadows. Asymmetric, left-aligned, densely composed; the header is an instrument readout, not a hero-metric template.
+- Motion budget spent on one orchestrated load — an audit "sweep" revealing readouts and rows with staggered exponential ease-out — plus state-change feedback on toggle/rescan. Transform/opacity only; nothing bounces.
+- Empty states teach; every label earns its place.
+
+**Hard bans (AI-slop fingerprints — any occurrence is a defect):** purple→blue gradients, cyan-on-dark neon, gradient text, decorative glassmorphism/blur/glow, icon-above-heading cards, identical card grids, nested cards, thick one-side accent borders, decorative sparklines, rounded-rect + generic drop shadow, bounce/elastic easing, Inter/Roboto/system-default typography, everything-centered layouts, uniform padding throughout, modals where a drawer or inline disclosure works.
+
+**Acceptance test:** if a stranger would believe "an AI made this" at first glance, the UI fails review regardless of function. The screenshot must provoke "what is that tool?"
 
 ## UI content
 
