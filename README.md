@@ -1,8 +1,43 @@
 # context-audit
 
-**Your agent config costs you tokens in every session, and most of it has never fired once. This measures both, for every AI coding tool on the machine.**
+**The dashboard for your skills: what they cost in every session, what actually fires, what's dead weight, and what's dangerous — for Claude Code, Codex, Cursor and every AGENTS.md on the machine.**
 
-Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md. Cursor rules and `.cursorrules`. The cross-tool AGENTS.md standard. You accumulate these over months — mostly in bulk, from packs someone else wrote — and nobody ever reads them again. Two things are true of that pile and neither is visible from the inside: some of it is loaded into *every session whether you use it or not*, and most of it is dead.
+![context-audit dashboard — skills view with cost meters, fire counts and dead-weight highlighting](docs/dashboard.png)
+
+```
+npx context-audit ui
+```
+
+Everything runs locally. Nothing leaves the machine.
+
+Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md. Cursor rules and `.cursorrules`. You accumulate these over months — mostly in bulk, from packs someone else wrote — and nobody ever reads them again. Two things are true of that pile and neither is visible from the inside: some of it is loaded into *every session whether you use it or not*, and most of it is dead.
+
+## The dashboard
+
+The page boots to **your skills** — the layer you actually manage: togglable, usage-tracked, marketplace-installed. Everything else the inventory found (agents, commands, rules, instruction files) is one click away behind the `everything` switch, and the header totals always count all of it — a skills view that understated your real context bill would be lying with a filter.
+
+What the table shows per row: tokens per session (with a meter scaled to your most expensive item), fires in the usage window, last fired, and security findings. **Dead weight gets the amber** — an item that is enabled, carries a real share of the bill, and fired zero times in the window. A cheap silent skill and an expensive busy one are both fine; the intersection is what you're paying for nothing.
+
+Two things the dashboard is careful about, because both are easy to get wrong:
+
+- **Usage counts are window-scoped, and it says so everywhere.** Claude Code deletes old sessions, so the scan can only see as far back as your oldest surviving transcript. A skill you used heavily six months ago and not since is indistinguishable, in that data, from one you never used. So the UI never says "never" — it says "none in 42d", labels the header readout "no fires in window", and states the window and its retention limit next to the number in every drawer. This is "not used lately", not "never used", and the difference matters before you delete anything.
+- **"Always in context" is explained, not asserted.** Each item shows what it costs on every session *before you type anything* (a skill's name + description, an instruction file's whole body) separately from what it costs only when it actually runs — with a sentence saying which is which, because a raw token count with the word "injected" on it means nothing the first time you see it.
+
+And it acts, deliberately narrowly:
+
+- **Enable/disable Claude user skills** — implemented as a directory move between `~/.claude/skills` and `~/.claude/skills-disabled`, the same convention you'd use by hand. Disabled skills stay in the inventory (grayed, history intact, excluded from the injected-token total) and re-enable with one click. Project-scoped items, Codex prompts and Cursor rules are read-only — no invented disable conventions for other vendors.
+- **Update plugins** — each plugin group has an update button that runs `claude plugin update` through the official CLI (via `execFile`, never a shell) and rescans. Where the local marketplace checkout reveals a newer version, the row says so ("2.2.0 listed"); where it can't, it makes no claim — "unknown" is not "up to date".
+- **Open in editor** — `code --goto` when the VS Code CLI exists, else the OS opener.
+
+Every action is logged in an on-page **activity strip** that mirrors the server's terminal — the exact command run, the CLI's own output, and a result line decided by data (an update that changed nothing says "already at the latest version", never "updated").
+
+Details that keep the numbers honest: filter chip counts are faceted, so a chip's number always predicts exactly what clicking it shows; columns where every row would say the same word disappear instead of repeating a fact 187 times; and a security flag outside the current view announces itself in the rail rather than being hidden by a presentation default.
+
+The server binds to `127.0.0.1` on a random port, and every request — reads included — must present a per-session token carried in the URL it opens with; Host and Origin are validated on every request. Plugins are inventoried by their *active* version from Claude Code's plugin config, so three cached versions of one plugin don't triple-count the header. No file watching, no websockets: rescan is a button (a full audit of a real setup measures under a second). In-browser editing, installs and deletes are deliberately out of scope.
+
+## The CLI
+
+The same audit, deterministic and scriptable — exit codes, JSON, diffable over time:
 
 ```
 context-audit — 3 sources: claude, codex, cursor
@@ -32,14 +67,13 @@ result: listing over budget · 73 asset(s) never fired · 2 security flag(s)
 
 ```
 npx context-audit                  # detect every tool on the machine, audit them all
+npx context-audit ui               # the audit as a local dashboard
 npx context-audit --source codex,cursor     # narrow to specific tools
 npx context-audit path/to/skills   # audit one claude-format skills directory
 npx context-audit --agent          # compact JSON for AI agents
 npx context-audit --json           # everything, machine-readable
 npx context-audit scan ./downloaded-skill   # pre-install triage (see Security, below)
 ```
-
-Everything runs locally. Nothing leaves the machine.
 
 ## Cost — what you pay before you type anything
 
@@ -157,6 +191,6 @@ Exit codes: `0` = no security flags · `1` = at least one security flag · `2` =
 
 ## Not in scope
 
-Fix application (that's [skillet](https://github.com/fayzan123/skillet)'s job), sandboxed runtime detonation, a GUI. A routing-collision simulator and SARIF output are the most likely next additions.
+Fix application (that's [skillet](https://github.com/fayzan123/skillet)'s job), sandboxed runtime detonation, in-browser editing or installing. A routing-collision simulator and SARIF output are the most likely next additions.
 
 MIT
