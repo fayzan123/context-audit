@@ -126,6 +126,13 @@ export interface SkillUsage {
   skill: string;
   invocations: number;
   sessions: number;
+  /**
+   * Oldest invocation in the scanned window. Held alongside `lastFired`
+   * because the pair is what tells a reader whether a skill was used
+   * throughout the window or only at the very start of it — and because the
+   * window is a transcript-RETENTION window, not the life of the machine.
+   */
+  firstFired?: string;
   lastFired?: string;
   interruptedAfter: number;
 }
@@ -165,4 +172,104 @@ export interface SourceAudit {
 
 export interface MultiAuditResult {
   sources: SourceAudit[];
+}
+
+// --- ui dashboard payload -------------------------------------------------
+// One JSON shape, produced server-side and consumed by the browser. Data flow
+// is one-way: disk → audit engine → this payload → browser. The browser sends
+// back only item IDs and the session token, never paths.
+
+/** Fire history for one item. `null` on an item means "tracked, never fired". */
+export interface UiFires {
+  invocations: number;
+  sessions: number;
+  firstFired?: string;
+  lastFired?: string;
+  interruptedAfter: number;
+}
+
+export interface UiPluginMeta {
+  /** Plugin name, e.g. "superpowers". */
+  name: string;
+  marketplace?: string;
+  /** The version actually resolved as active — the one whose files are audited. */
+  version: string;
+  /**
+   * Newest version the local marketplace checkout lists, when that can be
+   * determined without touching the network. Absent means "unknown", which is
+   * not the same claim as "up to date".
+   */
+  latest?: string;
+}
+
+export interface UiItem {
+  /**
+   * Stable identity: hash of source + kind + path. All mutating requests
+   * reference this ID; the server resolves it to a path from its own
+   * inventory, so a client-supplied path is never accepted anywhere.
+   */
+  id: string;
+  name: string;
+  source: SourceId;
+  kind: AssetKind;
+  path: string;
+  /** User-level (~) vs project-level (cwd) — the adapters scan both. */
+  scope: "user" | "project";
+  /** False for ~/.claude/skills-disabled items and disabled plugins. */
+  enabled: boolean;
+  /** True only where a safe convention exists: Claude user skills. */
+  togglable: boolean;
+  /** Why the toggle is absent, shown as the tooltip on read-only rows. */
+  readOnlyReason?: string;
+  plugin?: UiPluginMeta;
+  description?: string;
+  frontmatter?: Record<string, string>;
+  injection: Injection;
+  /**
+   * Characters this item keeps in context at all times while enabled. Stated
+   * per-item even on disabled rows (it is what re-enabling would cost); the
+   * header total sums enabled items only.
+   */
+  injectedChars: number;
+  bodyChars: number;
+  /**
+   * Fire history: an object when the item fired, null when its kind is
+   * dispatch-tracked but never fired, absent when the tool keeps no readable
+   * local history ("n/a", rendered honestly rather than as a zero).
+   */
+  fires?: UiFires | null;
+  findings: SecurityFinding[];
+  /** The engine could not fully parse this item (no readable entry file). */
+  parseError?: boolean;
+}
+
+/** The pitch in four numbers, plus the denominators that keep them honest. */
+export interface UiHeader {
+  items: number;
+  providers: number;
+  /** Enabled items only — what the setup actually costs per session. */
+  injectedChars: number;
+  injectedTokens: number;
+  neverFired: number;
+  /** How many items have fire tracking at all — the neverFired denominator. */
+  tracked: number;
+  flagged: number;
+  flaggedHigh: number;
+}
+
+export interface UiPayload {
+  version: string;
+  generatedAt: string;
+  tookMs: number;
+  /** What was audited: "~ + <cwd>" in detect mode, the directory in dir mode. */
+  root: string;
+  header: UiHeader;
+  items: UiItem[];
+  history?: { transcriptFiles: number; windowStart?: string; windowEnd?: string };
+  /**
+   * How active plugin versions were resolved: from the plugin config, or by
+   * newest-version-per-plugin when the config was unreadable (shown as a
+   * caveat in the UI — degraded, never dropped).
+   */
+  pluginResolution?: "config" | "newest-fallback";
 }

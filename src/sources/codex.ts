@@ -53,7 +53,10 @@ export const codexAdapter: SourceAdapter = {
 
     let windowStart: string | undefined;
     let windowEnd: string | undefined;
-    const hits = new Map<string, { invocations: number; sessions: Set<string>; lastFired?: string }>();
+    const hits = new Map<
+      string,
+      { invocations: number; sessions: Set<string>; firstFired?: string; lastFired?: string }
+    >();
 
     for (const file of files) {
       const rl = createInterface({ input: createReadStream(file, "utf8"), crlfDelay: Infinity });
@@ -70,6 +73,7 @@ export const codexAdapter: SourceAdapter = {
           h.invocations++;
           h.sessions.add(file);
           if (ts && (!h.lastFired || ts > h.lastFired)) h.lastFired = ts;
+          if (ts && (!h.firstFired || ts < h.firstFired)) h.firstFired = ts;
           hits.set(p.name, h);
         }
       }
@@ -80,6 +84,7 @@ export const codexAdapter: SourceAdapter = {
         skill,
         invocations: h.invocations,
         sessions: h.sessions.size,
+        firstFired: h.firstFired,
         lastFired: h.lastFired,
         // Rollouts don't record interrupts in a parseable way; zero, not a guess.
         interruptedAfter: 0,

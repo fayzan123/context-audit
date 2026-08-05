@@ -1,0 +1,861 @@
+/* context-audit ui — instrument-grade. Dark is canonical: brand-tinted
+   near-black, one calibrated signal hue, hairline structure, tabular figures.
+   No gradients, no shadows, no glow, no rounded-card grammar — the page should
+   read as a bench instrument, not a SaaS analytics template. */
+
+:root {
+  --bg: oklch(17.5% 0.012 250);
+  --bg-lift: oklch(20% 0.014 250);
+  --bg-drawer: oklch(19% 0.014 250);
+  --ink: oklch(88% 0.008 90);
+  --ink-dim: oklch(63% 0.014 250);
+  --ink-faint: oklch(59% 0.014 250);   /* 4.6:1 on --bg — AA for small text */
+  --rule: color-mix(in oklab, oklch(88% 0.008 90) 13%, transparent);
+  --rule-strong: color-mix(in oklab, oklch(88% 0.008 90) 26%, transparent);
+  --signal: oklch(76% 0.125 72);          /* calibrated amber — state, sort, sweep */
+  --signal-dim: color-mix(in oklab, oklch(76% 0.125 72) 55%, transparent);  /* rules and fills only */
+  --signal-text: color-mix(in oklab, oklch(76% 0.125 72) 78%, transparent); /* dimmed signal that still reads as text */
+  --danger: oklch(62% 0.17 27);           /* restrained red — critical/high only */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);  /* exponential-out; nothing bounces */
+  /* The engraved voice: humanist faces with real character, one per platform,
+     so the stack lands on a chosen face rather than falling through to the
+     system UI default. macOS → Optima/Gill Sans, Windows → Candara/Gill Sans
+     MT, GNOME → Cantarell, Ubuntu → Ubuntu. Nothing is embedded: the page
+     stays one hand-readable file with no binary blobs in it. */
+  --font-engr: Optima, "Gill Sans", "Gill Sans MT", Candara, Cantarell, Ubuntu, "Source Sans 3", sans-serif;
+  --font-num: "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { color-scheme: dark; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-engr);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The table is the scroller, not the document: sticky column headers need a
+   real scrollport, and the footer readout should stay on screen. */
+#app { height: 100vh; display: flex; flex-direction: column; }
+#page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* The results wrapper has to pass the flex sizing through to .tablebox, or the
+   table grows to its full content height and the whole document scrolls —
+   which also breaks the sticky column headers. */
+#results { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* Announced, never shown. `fixed`, not `absolute`: as a static-flow absolute
+   box it was laid out after #app and added a pixel past 100vh, which clipped
+   the footer and put a hairline scrollbar on a page that should never scroll. */
+.sr {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Engraved instrument label: the recurring typographic voice of the page. */
+.engr {
+  display: block;
+  font-family: var(--font-engr);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.dim { color: var(--ink-dim); }
+b { font-weight: 600; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+button:focus-visible, tr:focus-visible, th:focus-visible {
+  outline: 1px solid var(--signal);
+  outline-offset: -1px;
+}
+
+/* --- masthead ----------------------------------------------------------- */
+
+.mast {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 28px 10px;
+}
+.brand {
+  font-family: var(--font-engr);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.mode {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.plate {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  text-align: right;
+}
+
+.btn {
+  font-family: var(--font-engr);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  padding: 5px 14px 4px;
+  white-space: nowrap;
+  /* Color state snaps; only geometry animates. An instrument's indicator
+     changes state, it does not crossfade. */
+}
+.btn:hover { border-color: var(--signal); color: var(--signal); }
+.btn:disabled { color: var(--ink-faint); border-color: var(--rule); cursor: default; }
+.btn.rescan { margin-left: 6px; }
+
+/* --- graticule + sweep --------------------------------------------------- */
+
+.gratbox { position: relative; overflow: hidden; border-bottom: 1px solid var(--rule-strong); }
+.grat {
+  display: block;
+  width: 100%;
+  height: 24px;
+  color: var(--ink-dim);
+  font-family: var(--font-num);
+}
+.sweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--signal);
+  animation: sweep 1100ms var(--ease) 80ms both;
+}
+@keyframes sweep {
+  from { transform: translateX(-2px); opacity: 0.9; }
+  85%  { opacity: 0.9; }
+  to   { transform: translateX(100vw); opacity: 0; }
+}
+
+/* --- readout strip -------------------------------------------------------- */
+
+.readouts {
+  display: flex;
+  align-items: stretch;
+  padding: 18px 28px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 34px;
+  margin-right: 34px;
+  border-right: 1px solid var(--rule);
+}
+/* Asymmetry is deliberate: the last block floats free of the ruled grid. */
+.readout:last-child { border-right: none; }
+.readout .num {
+  font-family: var(--font-num);
+  font-size: 40px;
+  font-weight: 300;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.readout .num i {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 7px;
+  color: var(--ink-dim);
+  letter-spacing: 0.08em;
+}
+.readout .sub {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.readout.signal .num { color: var(--signal); }
+.readout.danger .num { color: var(--danger); }
+
+@keyframes settle {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* `backwards`, never `both`: the RESTING state must be the visible one. With
+   `both` the element keeps the animation's opacity-0 start frame whenever the
+   engine does not advance the animation — and a page whose entire content is
+   hidden behind one animation completing is a page that renders blank in any
+   environment that stalls it (headless capture did exactly this). The reveal
+   is an enhancement; the numbers do not depend on it. main.ts also strips the
+   class on a timer as a second guarantee. */
+.settle { animation: settle 480ms var(--ease) backwards; }
+
+/* --- filter rail ---------------------------------------------------------- */
+
+.rail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 28px;
+  border-bottom: 1px solid var(--rule);
+}
+/* Each filter group is a labeled bank, so `agent` reads as a KIND and
+   `flagged` reads as a VIEW instead of both being loose chips in one run. */
+.bank {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+  margin-left: 6px;
+  border-left: 1px solid var(--rule-strong);
+}
+.bank > .engr { flex: none; }
+.bank > .engr[title] { cursor: help; }
+.chipset { display: flex; flex-wrap: wrap; gap: 6px; }
+.vr { width: 1px; height: 16px; background: var(--rule-strong); }
+
+/* The master scope switch: which layer of the inventory the page is looking
+   at. Engraved segments, shared borders — an instrument's range selector, not
+   a filter chip. The lit segment gets a signal tint so the current scope is
+   readable from across the room. */
+.modes { display: flex; }
+.mode-btn {
+  display: inline-flex;
+  align-items: stretch;
+  font-family: var(--font-engr);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule-strong);
+}
+.mode-btn + .mode-btn { border-left: none; }
+.mode-btn > span { padding: 4px 9px 3px 11px; }
+.mode-btn b {
+  font-family: var(--font-num);
+  font-weight: 400;
+  letter-spacing: 0;
+  padding: 4px 8px 3px;
+  border-left: 1px solid var(--rule);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.mode-btn:hover { color: var(--ink); }
+.mode-btn.on {
+  color: var(--signal);
+  background: color-mix(in oklab, var(--signal) 8%, transparent);
+}
+.mode-btn.on b { color: var(--signal-text); }
+
+.find { display: flex; align-items: center; gap: 8px; }
+.find input {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 3px 2px 2px;
+  width: 30ch;
+  outline: none;
+}
+.find input::placeholder { color: var(--ink-faint); }
+.find input:focus { border-bottom-color: var(--signal); }
+.find input::-webkit-search-cancel-button { filter: grayscale(1) opacity(0.5); }
+
+.clear {
+  font-family: var(--font-engr);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--signal);
+  border: 1px solid var(--signal-dim);
+  padding: 3px 10px 2px;
+  margin-left: 12px;
+}
+.clear:hover { border-color: var(--signal); }
+/* Present in the DOM at all times so typing never has to rebuild the rail. */
+.clear.gone { visibility: hidden; }
+.inlineclear {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--signal);
+  border-bottom: 1px solid var(--signal-dim);
+  padding: 0;
+}
+.chip.empty { color: var(--ink-faint); }
+/* The engraved "?" marking a readout that carries an explanation on hover. */
+.why {
+  font-weight: 400;
+  margin-left: 5px;
+  padding: 0 3px;
+  border: 1px solid var(--rule-strong);
+  color: var(--ink-faint);
+  cursor: help;
+}
+
+/* --- instant tooltips ------------------------------------------------------
+   Native title tooltips take a second to appear, vanish on any movement and
+   ignore the page's typography — which is how every carefully written
+   explanation on this page went unread. Chrome elements (readouts, column
+   headers, bank labels, chips) carry data-tip instead: instant-ish (260ms),
+   styled, wrapping. Row cells keep native titles on purpose — a tooltip that
+   pops on every row while scanning the table would be in the way. */
+[data-tip] { position: relative; cursor: help; }
+button[data-tip], th[data-tip] { cursor: pointer; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: 44ch;
+  padding: 8px 11px 7px;
+  background: var(--bg-lift);
+  border: 1px solid var(--rule-strong);
+  color: var(--ink);
+  /* Explicit resets: .engr hosts (bank labels) would otherwise pass their
+     uppercase and letterspacing straight into the explanation text. */
+  font-family: var(--font-engr);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
+  text-transform: none;
+  white-space: pre-line;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 90ms linear 260ms, visibility 0s linear 260ms;
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+/* Anything near a right edge anchors its tooltip right — right-hand column
+   headers (scrollport) and the right-pinned rail caveats (viewport) — so the
+   tooltip box can never widen the page into a horizontal scrollbar. */
+.tip-r[data-tip]::after { left: auto; right: 0; }
+/* Two compartments split by a hairline: label | count. The border also gives
+   the chip a pressable footprint — the old borderless text never read as a
+   control, and its count ran into the label as one string. */
+.chip {
+  display: inline-flex;
+  align-items: stretch;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+}
+.chip > span { padding: 3px 8px 2px 9px; }
+.chip b {
+  font-weight: 400;
+  padding: 3px 7px 2px;
+  border-left: 1px solid var(--rule);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.chip:hover { color: var(--ink); border-color: var(--rule-strong); }
+.chip.on { color: var(--signal); border-color: var(--signal-dim); }
+.chip.on b { color: var(--signal-text); border-left-color: var(--signal-dim); }
+.caveat {
+  margin-left: auto;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--signal);
+}
+/* The flagged-outside-this-view escape hatch: a caveat that is also a way in. */
+.caveat-act {
+  margin-left: auto;
+  border: 1px solid var(--signal-dim);
+  padding: 3px 10px 2px;
+}
+.caveat-act:hover { border-color: var(--signal); }
+.caveat + .caveat-act, .caveat-act + .caveat { margin-left: 0; }
+
+/* --- inventory table ------------------------------------------------------ */
+
+.tablebox { flex: 1; overflow: auto; min-height: 0; }
+table.inv {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.inv th {
+  position: sticky;
+  top: 0;
+  /* Above the rows it slides over: the toggle switches are position:relative
+     (their knob is absolute inside them), and positioned row content painted
+     in DOM order OVER the sticky header — switches ghosting through "state". */
+  z-index: 2;
+  background: var(--bg);
+  font-family: var(--font-engr);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: left;
+  padding: 9px 10px 7px;
+  border-bottom: 1px solid var(--rule-strong);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.inv th:hover { color: var(--ink-dim); }
+.inv th.sorted { color: var(--signal); }
+.inv th s { text-decoration: none; margin-left: 4px; color: var(--signal); }
+.inv th.c-num, .inv td.c-num { text-align: right; }
+
+.inv td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.inv tbody tr { cursor: pointer; }
+.inv tbody tr:hover td { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.inv tbody tr.sel td { background: color-mix(in oklab, var(--signal) 9%, transparent); }
+
+.inv th:first-child, .inv td:first-child { padding-left: 28px; }
+.inv th:last-child, .inv td:last-child { padding-right: 28px; }
+
+.c-name { font-size: 12.5px; color: var(--ink); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.pfx { color: var(--ink-faint); }
+.offtag {
+  margin-left: 8px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border: 1px solid var(--rule-strong);
+  padding: 1px 5px 0;
+}
+tr.off .c-name, tr.off .c-num, tr.off td { color: var(--ink-faint); }
+tr.off .sw { opacity: 0.75; }
+
+/* Kind identity by SHAPE, since color belongs to state and severity: filled
+   marker = skill (the togglable, primary object), hollow = agent, text glyphs
+   for the rest. Skills read a step brighter — they are what you act on. */
+.c-kind { color: var(--ink-dim); }
+.kg {
+  display: inline-block;
+  width: 15px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.kg-skill { color: var(--ink); }
+td.c-kind { cursor: help; }
+
+/* The cost meter: fixed track, fill scaled to the most expensive item in the
+   inventory. Right-anchored against the aligned figures so the bars compare
+   down the column. Data-bearing, tonal — not decoration. */
+.c-cost { white-space: nowrap; }
+.c-cost .meter {
+  display: inline-block;
+  width: 56px;
+  height: 3px;
+  margin-right: 12px;
+  vertical-align: 2px;
+  background: color-mix(in oklab, var(--ink) 7%, transparent);
+}
+.c-cost .meter i {
+  display: block;
+  height: 100%;
+  margin-left: auto;
+  background: color-mix(in oklab, var(--ink) 36%, transparent);
+}
+tr.off .c-cost .meter i { opacity: 0.4; }
+/* Dead weight: expensive AND silent — the one thing in the cost column that
+   earns the signal color. */
+td.c-cost.dw { color: var(--signal-text); }
+td.c-cost.dw .meter i { background: var(--signal-dim); }
+
+/* Quiet zeros are DIM, not amber: 38 glowing "none in 42d" cells made the
+   signal color ambient and nothing stood out. Amber in the usage columns is
+   reserved for the dead-weight intersection on the cost cell. */
+.na, .zero, td.zero { color: var(--ink-faint); }
+.none { color: var(--ink-faint); }
+
+/* Two-position instrument switch — rectangular on purpose. */
+.sw {
+  display: inline-block;
+  width: 30px;
+  height: 14px;
+  border: 1px solid var(--rule-strong);
+  position: relative;
+  vertical-align: middle;
+}
+.sw i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 8px;
+  background: var(--ink-faint);
+  transition: transform 160ms var(--ease);
+}
+.sw.on { border-color: var(--signal-dim); }
+.sw.on i { transform: translateX(14px); background: var(--signal); }
+.sw:hover { border-color: var(--signal); }
+.ro { color: var(--ink-faint); cursor: help; }
+
+.badge {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 1px 6px 0;
+  border: 1px solid currentColor;
+}
+.badge.danger { color: var(--danger); }
+.badge.signal { color: var(--signal); }
+.badge.warn { color: var(--signal-text); }
+
+.act {
+  font-family: var(--font-engr);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: transparent;
+  border: 1px solid transparent;
+  padding: 2px 8px 1px;
+}
+tr:hover .act, .act:focus-visible { color: var(--ink-dim); border-color: var(--rule-strong); }
+.act:hover { color: var(--signal) !important; border-color: var(--signal) !important; }
+
+tr.grp td {
+  padding-top: 18px;
+  padding-bottom: 6px;
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--rule-strong);
+  background: none;
+  cursor: default;
+}
+tr.grp .engr { display: inline; margin-right: 10px; }
+.ver { color: var(--signal); margin-left: 6px; }
+/* A newer version listed by the local marketplace checkout. */
+.upd {
+  margin-left: 10px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--signal);
+  border: 1px solid var(--signal-dim);
+  padding: 1px 6px 0;
+}
+/* The plugin update action is always visible — group rows have no hover
+   affordance to reveal it with. */
+.act.pupd { color: var(--ink-dim); border-color: var(--rule); margin-left: 14px; }
+.act.pupd:disabled { color: var(--ink-faint); border-color: var(--rule); cursor: default; }
+tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
+
+/* --- empty state ---------------------------------------------------------- */
+
+/* Named .empty-state, never bare .empty: chips carry an `empty` modifier for
+   zero counts, and the bare class handed every 0-count chip this block's
+   48px padding — the same bare-class collision as .sevplate/.plate. */
+.empty-state { padding: 48px 28px; max-width: 620px; }
+.empty-state .engr { margin-bottom: 12px; }
+.empty-state p { color: var(--ink-dim); margin-bottom: 10px; }
+.empty-state b { color: var(--ink); font-weight: 400; font-family: var(--font-num); font-size: 13px; }
+.empty-state code {
+  font-family: var(--font-num);
+  font-size: 12.5px;
+  color: var(--signal);
+}
+
+/* --- activity log ----------------------------------------------------------
+   The server's terminal, mirrored on the page: toggles, rescans, and plugin
+   updates with the CLI's own stdout/stderr. Collapsed it is a one-line strip
+   above the footer; open it is a scrollback that follows its tail. */
+
+.logbox { border-top: 1px solid var(--rule-strong); }
+.loghead {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 28px 4px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.loghead .engr { display: inline; }
+.loghead:hover { color: var(--ink); }
+.loghead s { text-decoration: none; margin-left: auto; color: var(--ink-faint); }
+.loglast {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.loglines {
+  max-height: 170px;
+  overflow-y: auto;
+  padding: 5px 28px 9px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-num);
+  font-size: 11px;
+  line-height: 1.65;
+}
+.ll { display: block; color: var(--ink-dim); overflow-wrap: anywhere; }
+.ll i { font-style: normal; color: var(--ink-faint); margin-right: 12px; }
+.ll-cmd { color: var(--signal-text); }
+.ll-ok { color: var(--ink); }
+.ll-err { color: var(--danger); }
+
+/* --- footer --------------------------------------------------------------- */
+
+.foot {
+  display: flex;
+  gap: 26px;
+  align-items: baseline;
+  padding: 8px 28px 10px;
+  border-top: 1px solid var(--rule-strong);
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.foot .live i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: var(--signal);
+  margin-right: 8px;
+}
+.footerr {
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 44ch;
+}
+.foot span:last-child { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- drawer --------------------------------------------------------------- */
+
+.catch { position: fixed; inset: 0; z-index: 40; }
+.catch[hidden] { display: none; }
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  width: min(480px, 92vw);
+  background: var(--bg-drawer);
+  border-left: 1px solid var(--rule-strong);
+  transform: translateX(102%);
+  display: flex;
+  flex-direction: column;
+  /* visibility is what keeps a closed drawer off the tab order; delaying its
+     flip by the length of the slide is what lets the CLOSE animate at all —
+     flipping it in the same frame hid the panel before it moved. */
+  visibility: hidden;
+  transition: transform 260ms var(--ease), visibility 0s linear 260ms;
+}
+.drawer.open {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform 260ms var(--ease), visibility 0s;
+}
+
+.dhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 20px 24px 2px;
+}
+.dname {
+  font-family: var(--font-num);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.x { font-size: 18px; color: var(--ink-dim); padding: 0 4px; }
+.x:hover { color: var(--ink); }
+.dmeta {
+  padding: 0 24px 14px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--rule);
+}
+.warn-t { color: var(--signal); }
+
+.dbody { flex: 1; overflow-y: auto; padding: 4px 24px 18px; }
+.dbody section { padding: 14px 0 4px; border-bottom: 1px solid var(--rule); }
+.dbody section:last-child { border-bottom: none; }
+.dbody .engr { margin-bottom: 7px; }
+.dbody p { font-size: 13px; margin-bottom: 8px; }
+
+.path {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+  padding: 0 0 8px;
+}
+.path:hover { color: var(--signal); }
+
+.kv { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.kv .engr { min-width: 118px; margin: 0; }
+.kv span:last-child { font-family: var(--font-num); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* Plain-language gloss under a figure. The numbers are the protagonist; these
+   lines exist so the number means something the first time it is read. */
+.kv-note, .caveat-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  margin: 2px 0 12px;
+  max-width: 46ch;
+}
+.caveat-note {
+  border-left: 1px solid var(--signal-dim);
+  padding-left: 10px;
+  margin-top: 8px;
+}
+
+table.fmt { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
+.fmt td {
+  font-family: var(--font-num);
+  font-size: 11px;
+  padding: 3px 12px 3px 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+.fmt td:first-child { color: var(--ink-faint); white-space: nowrap; }
+
+.finding { padding: 10px 0 12px; border-bottom: 1px solid var(--rule); }
+.finding:last-child { border-bottom: none; }
+
+/* Info-level notes fold behind a count — flags always render in full. */
+.infofold summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 9px 0 8px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.infofold summary::-webkit-details-marker { display: none; }
+.infofold summary::before { content: "▸ "; }
+.infofold[open] summary::before { content: "▾ "; }
+.infofold summary:hover { color: var(--ink-dim); }
+.infofold[open] { border-top: 1px solid var(--rule); }
+.fhead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  margin-bottom: 6px;
+}
+/* Named apart from the masthead .plate on purpose: two bare classes of equal
+   specificity in one sheet, and the later one silently restyles the earlier. */
+.sevplate {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 1px 6px 0;
+  border: 1px solid currentColor;
+}
+.finding.critical .sevplate, .finding.high .sevplate { color: var(--danger); }
+.finding.medium .sevplate { color: var(--signal); }
+.finding.low .sevplate, .finding.info .sevplate { color: var(--ink-dim); }
+.conf { color: var(--ink-faint); }
+.check { color: var(--ink); }
+.lvl { margin-left: auto; color: var(--ink-faint); }
+.finding p { font-size: 12.5px; }
+pre.ev {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-dim);
+  background: color-mix(in oklab, var(--ink) 5%, transparent);
+  border-left: 1px solid var(--rule-strong);
+  padding: 7px 10px;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.floc { font-family: var(--font-num); font-size: 10.5px; color: var(--ink-faint); }
+
+.err {
+  margin: 12px 24px 0;
+  padding: 9px 12px;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.dact {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--rule-strong);
+}
+.ro-note { font-family: var(--font-num); font-size: 10.5px; color: var(--ink-faint); }
+
+/* --- motion discipline ---------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .settle { animation: none !important; }
+  .sweep { display: none; }
+  .drawer { transition: none; }
+}
+
+@media (max-width: 900px) {
+  .readouts { flex-wrap: wrap; gap: 16px 0; }
+  .mast { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .plate { text-align: left; flex-wrap: wrap; }
+}

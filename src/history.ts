@@ -95,17 +95,20 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
     bySkill.set(inv.skill, [...(bySkill.get(inv.skill) ?? []), inv]);
   }
 
-  const toUsage = (name: string, invs: Invocation[]): SkillUsage => ({
-    skill: name,
-    invocations: invs.length,
-    sessions: new Set(invs.map((i) => i.file)).size,
-    lastFired: invs
+  const toUsage = (name: string, invs: Invocation[]): SkillUsage => {
+    const stamps = invs
       .map((i) => i.timestamp)
       .filter((t): t is string => !!t)
-      .sort()
-      .pop(),
-    interruptedAfter: invs.filter((i) => interruptedInvocations.has(i)).length,
-  });
+      .sort();
+    return {
+      skill: name,
+      invocations: invs.length,
+      sessions: new Set(invs.map((i) => i.file)).size,
+      firstFired: stamps[0],
+      lastFired: stamps[stamps.length - 1],
+      interruptedAfter: invs.filter((i) => interruptedInvocations.has(i)).length,
+    };
+  };
 
   const installed = new Set(skills.map((s) => s.dirName));
   const usage: SkillUsage[] = [];

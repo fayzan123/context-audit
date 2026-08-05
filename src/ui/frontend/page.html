@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>context-audit — instruction inventory</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2315171c'/%3E%3Cpath d='M2 12V6M5 12V3M8 12V8M11 12V5M14 12V9' stroke='%23dfa54e' stroke-width='1.6'/%3E%3C/svg%3E">
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<!-- No aria-live on the app itself: it is rebuilt on every sort and filter,
+     which would make a screen reader re-read the whole inventory each time.
+     Announcements go to the small status region below instead. -->
+<div id="app">
+  <div id="page"></div>
+  <aside id="drawer" class="drawer" role="dialog" aria-hidden="true" tabindex="-1"></aside>
+  <div id="catch" class="catch" hidden></div>
+</div>
+<div id="status" role="status" aria-live="polite" class="sr"></div>
+<script>
+/*__JS__*/
+</script>
+</body>
+</html>

@@ -23,6 +23,11 @@ Usage:
   context-audit [dir]            audit one claude-format skills directory
   context-audit scan <path>      pre-install scan of a single skill (dir or .md
                                  file); content + security only, no history
+  context-audit ui [dir]         open the audit as a local dashboard — inventory,
+                                 cost, usage and security in one page, with safe
+                                 enable/disable for Claude user skills. Localhost
+                                 only; --no-open prints the URL without launching
+                                 a browser
 
 Options:
   --source <ids>        audit only these sources (comma-separated:
@@ -41,13 +46,14 @@ Exit codes: 0 = no security flags · 1 = at least one security flag · 2 = usage
 Everything runs locally. Nothing leaves the machine.`;
 
 interface Args {
-  command: "audit" | "scan";
+  command: "audit" | "scan" | "ui";
   target?: string;
   output: "report" | "json" | "agent";
   history: boolean;
   transcripts?: string;
   strict: boolean;
   sources?: SourceId[];
+  open: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -56,6 +62,7 @@ function parseArgs(argv: string[]): Args {
     output: "report",
     history: true,
     strict: false,
+    open: true,
   };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -66,6 +73,7 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "--json") args.output = "json";
     else if (a === "--agent") args.output = "agent";
     else if (a === "--no-history") args.history = false;
+    else if (a === "--no-open") args.open = false;
     else if (a === "--strict") args.strict = true;
     else if (a === "--transcripts") {
       const v = argv[++i];
@@ -88,6 +96,9 @@ function parseArgs(argv: string[]): Args {
     args.command = "scan";
     args.target = positional[1];
     if (!args.target) fail("scan requires a path to a skill directory or .md file");
+  } else if (positional[0] === "ui") {
+    args.command = "ui";
+    args.target = positional[1];
   } else {
     args.target = positional[0];
   }
@@ -115,6 +126,27 @@ function toSourceAudit(source: SourceId, skills: Skill[], strict: boolean): Sour
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const ctx: SourceContext = { home: homedir(), cwd: process.cwd(), transcripts: args.transcripts };
+
+  if (args.command === "ui") {
+    // Deferred import: the dashboard pulls in the http server and the built
+    // page; the plain CLI paths should not pay for either.
+    const { startUiServer } = await import("./ui/server.js");
+    const { openUrl } = await import("./ui/open.js");
+    if (args.target) {
+      const dir = resolve(args.target);
+      if (!existsSync(dir) || !statSync(dir).isDirectory()) fail(`skills directory not found: ${dir}`);
+    }
+    const { url } = await startUiServer(ctx, {
+      history: args.history,
+      dir: args.target ? resolve(args.target) : undefined,
+      sources: args.sources,
+    });
+    console.log(`context-audit ui — dashboard running (localhost only, this session's URL carries its key)`);
+    console.log(`\n  ${url}\n`);
+    console.log(`Ctrl-C stops the server. Nothing leaves the machine.`);
+    if (args.open) openUrl(url);
+    return; // the server keeps the process alive
+  }
 
   if (args.command === "scan") {
     const target = resolve(args.target!);
@@ -179,6 +211,12 @@ function print(output: Args["output"], result: MultiAuditResult): void {
 }
 
 main().catch((err) => {
-  console.error(`context-audit: ${err?.message ?? err}`);
+  // Filesystem errors quote the offending path verbatim, and those paths come
+  // from directory names someone else chose — control characters in one would
+  // reach the terminal as escape sequences.
+  const msg = String(err?.message ?? err)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "?")
+    .slice(0, 500);
+  console.error(`context-audit: ${msg}`);
   process.exit(2);
 });

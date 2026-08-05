@@ -5,8 +5,10 @@ const est = (s: string): number => Math.ceil(s.length / 4);
 /**
  * Characters an asset keeps in context at all times, per its Injection model.
  * An undefined injection is the original claude-skill shape: name + description.
+ * Exported so the ui payload prices items with the same model as the report —
+ * two cost formulas for one number is how a dashboard contradicts its own CLI.
  */
-function injectedChars(asset: Skill): number {
+export function injectedChars(asset: Skill): number {
   switch (asset.injection ?? "description") {
     case "body":
       return asset.dirName.length + asset.body.length;
