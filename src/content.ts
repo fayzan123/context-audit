@@ -1,6 +1,41 @@
-import type { ContentFacts, Skill } from "./types.js";
+import type { ContentFacts, ListingBudget, Skill } from "./types.js";
 
 const est = (s: string): number => Math.ceil(s.length / 4);
+
+/**
+ * Claude Code loads skill names + descriptions into every session under a
+ * character budget of `skillListingBudgetFraction` (default 1% of the context
+ * window — 8,000 chars on a 200K model). Past it, descriptions are dropped
+ * starting with the least-invoked skills; the skill still exists but can no
+ * longer auto-trigger. Documented at code.claude.com/docs/en/skills.
+ *
+ * This is the tool's most actionable number — it is the answer to "why has
+ * Claude stopped firing my skill?" — so it lives here rather than in either
+ * renderer: the report and the dashboard must never disagree about it.
+ */
+export const LISTING_BUDGET_CHARS = 8000;
+
+/** The listing figure and what it means, computed once for every surface. */
+export function listingBudget(chars: number): ListingBudget {
+  return {
+    chars,
+    budgetChars: LISTING_BUDGET_CHARS,
+    // Rounded for display only; `over` is decided on the raw characters, so a
+    // listing at 100.4% never reads "100%" next to the word "within".
+    pct: Math.round((chars / LISTING_BUDGET_CHARS) * 100),
+    over: chars > LISTING_BUDGET_CHARS,
+  };
+}
+
+/**
+ * Characters this asset contributes to the skill listing. Only skills are
+ * listed under the budget, and only while they are loaded — a disabled skill
+ * costs nothing because it is not in the directory Claude Code reads.
+ */
+export function listingChars(asset: Skill): number {
+  if ((asset.kind ?? "skill") !== "skill" || !asset.hasSkillMd) return 0;
+  return asset.dirName.length + (asset.description?.trim().length ?? 0);
+}
 
 /**
  * Characters an asset keeps in context at all times, per its Injection model.
@@ -28,7 +63,7 @@ export function contentFacts(assets: Skill[]): ContentFacts {
   const byDescription = new Map<string, string[]>();
   const tokens: ContentFacts["tokens"] = [];
   let alwaysInjectedChars = 0;
-  let listingChars = 0;
+  let listed = 0;
 
   for (const asset of assets) {
     const kind = asset.kind ?? "skill";
@@ -37,9 +72,7 @@ export function contentFacts(assets: Skill[]): ContentFacts {
       continue;
     }
     alwaysInjectedChars += injectedChars(asset);
-    if (kind === "skill") {
-      listingChars += asset.dirName.length + (asset.description?.trim().length ?? 0);
-    }
+    listed += listingChars(asset);
     const desc = asset.description?.trim() ?? "";
     if (desc === "") {
       // Only kinds that auto-dispatch on their description are broken without
@@ -81,6 +114,6 @@ export function contentFacts(assets: Skill[]): ContentFacts {
     totalBodyEst: tokens.reduce((sum, t) => sum + t.bodyEst, 0),
     alwaysInjectedEst: Math.ceil(alwaysInjectedChars / 4),
     alwaysInjectedChars,
-    listingChars,
+    listingChars: listed,
   };
 }

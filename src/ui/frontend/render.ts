@@ -443,12 +443,37 @@ function headerReadouts(payload: UiPayload, state: AppState): string {
       "",
       `${win.note} Only kinds the transcripts record dispatch for are counted here (skills and commands); agents and instruction files have no dispatch record, so they are not called unused.`
     ),
+    // The listing budget. Absent on machines it does not apply to (no Claude
+    // skills) rather than shown as a zero — a budget nothing is subject to is
+    // not a fact about this setup.
+    ...(h.listing
+      ? [
+          readout(
+            "skill listing",
+            `${fmtInt(h.listing.pct)}%`,
+            "",
+            h.listing.over
+              ? `over the ~${fmtInt(h.listing.budgetChars)}-char budget · descriptions dropped`
+              : `of the ~${fmtInt(h.listing.budgetChars)}-char budget · all descriptions load`,
+            3,
+            state.animate,
+            h.listing.over ? " danger" : "",
+            (h.listing.over
+              ? `Claude Code budgets the skill LISTING — every enabled skill's name and description — in characters (skillListingBudgetFraction, ~1% of the context window). Yours is ${fmtInt(h.listing.chars)} chars, past the ~${fmtInt(h.listing.budgetChars)} budget, so Claude Code is dropping descriptions starting with the skills you invoke least. Those skills still exist; they just stop auto-triggering, which looks exactly like the model ignoring you. Filter to "no fires" to see which go first. Fix it by removing or shortening descriptions, or raise skillListingBudgetFraction.`
+              : `Claude Code budgets the skill LISTING — every enabled skill's name and description — in characters (skillListingBudgetFraction, ~1% of the context window). Yours is ${fmtInt(h.listing.chars)} of ~${fmtInt(h.listing.budgetChars)} chars, so every description loads and every skill can still auto-trigger. Past 100%, Claude Code drops them starting with the skills you invoke least.`) +
+              // The CLI's claude adapter does not inventory plugins, so its
+              // figure is user + project skills only. Two numbers for one fact
+              // is confusing; two numbers with their scopes stated is not.
+              ` Counted here: user, project AND plugin skills, since all three are listed. The \`context-audit\` CLI reports a lower figure — it counts user and project skills only.`
+          ),
+        ]
+      : []),
     readout(
       "flagged",
       fmtInt(h.flagged),
       "",
       flaggedSub,
-      3,
+      4,
       state.animate,
       h.flaggedHigh > 0 ? " danger" : h.flagged > 0 ? " signal" : "",
       "Items carrying at least one security flag. Open the row to read the evidence line and verify it at the cited file before acting."

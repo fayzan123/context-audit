@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { injectedChars } from "../content.js";
+import { injectedChars, listingBudget, listingChars } from "../content.js";
 import { historyFacts } from "../history.js";
 import { securityScan } from "../security.js";
 import { discoverSkills, isSkillMd, parseFrontmatter } from "../skills.js";
@@ -310,6 +310,23 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
 
   const enabledItems = items.filter((i) => i.enabled);
   const injected = enabledItems.reduce((sum, i) => sum + i.injectedChars, 0);
+
+  // The skill listing, and the budget that silently truncates it. This is the
+  // answer to "why has Claude stopped firing my skill?", so the dashboard has
+  // to carry it — the CLI reported it from the start and the page did not,
+  // which left the tool's most actionable number missing from its most-read
+  // surface.
+  //
+  // Counted from the rows that are actually listed: enabled Claude skills,
+  // user, project and plugin alike. Disabled ones are out of the directory
+  // Claude Code reads, and no other vendor has this budget. Note this can
+  // exceed the CLI's figure on the same machine — the CLI's claude adapter
+  // does not inventory plugin skills, and plugin skills are listed.
+  const listedRows = rows.filter(
+    (r) => (r.source === "claude" || r.source === "custom") && r.enabled && (r.skill.kind ?? "skill") === "skill"
+  );
+  const listedChars = listedRows.reduce((sum, r) => sum + listingChars(r.skill), 0);
+  const listing = listedChars > 0 ? listingBudget(listedChars) : undefined;
   const tracked = items.filter((i) => i.fires !== undefined);
   const flagged = items.filter((i) => i.findings.some((f) => f.level === "flag"));
 
@@ -321,6 +338,7 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
     header: {
       items: items.length,
       providers: sources.length,
+      listing,
       injectedChars: injected,
       injectedTokens: Math.ceil(injected / 4),
       neverFired: tracked.filter((i) => i.fires === null).length,

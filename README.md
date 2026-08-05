@@ -2,7 +2,7 @@
 
 **The dashboard for your skills: what they cost in every session, what actually fires, what's dead weight, and what's dangerous — for Claude Code, Codex, Cursor and the cross-tool AGENTS.md standard.**
 
-![context-audit dashboard — skills view with cost meters, fire counts and dead-weight highlighting](docs/dashboard.png)
+![context-audit dashboard — skills view showing a listing 107% over the character budget, per-skill cost meters, fire counts and dead-weight highlighting](docs/dashboard.png)
 
 ```
 npx context-audit ui
@@ -23,6 +23,8 @@ Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md.
 ## The dashboard
 
 The page boots to **your skills** — the layer you actually manage: togglable, usage-tracked, marketplace-installed. Everything else the inventory found (agents, commands, rules, instruction files) is one click away behind the `everything` switch, and the header totals always count all of it — a skills view that understated your real context bill would be lying with a filter.
+
+The header carries the diagnosis. **Skill listing** is the percentage of Claude Code's ~8,000-character listing budget your enabled skills occupy — over 100% it turns red and says what that costs you, because past the budget Claude Code drops descriptions starting with the skills you invoke least, and those skills stop auto-triggering. That is the answer to "why has Claude stopped firing my skill?", which is the question people actually arrive with. It counts user, project and plugin skills alike, since all three are listed; the CLI's figure covers user and project skills only.
 
 What the table shows per row: tokens per session (with a meter scaled to your most expensive item), fires in the usage window, last fired, and security findings. **Dead weight gets the amber** — an item that is enabled, carries a real share of the bill, and fired zero times in the window. A cheap silent skill and an expensive busy one are both fine; the intersection is what you're paying for nothing.
 

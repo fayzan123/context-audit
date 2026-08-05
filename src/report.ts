@@ -1,4 +1,9 @@
 import type { AssetKind, MultiAuditResult, SecurityFinding, SourceAudit } from "./types.js";
+// The listing budget is Claude-specific, so it is only compared for claude
+// sources below. The figure itself and the over/under call live in content.ts,
+// so this report and the dashboard cannot drift apart on the tool's single
+// most actionable number.
+import { LISTING_BUDGET_CHARS, listingBudget } from "./content.js";
 
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (code: number, s: string): string => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -31,16 +36,6 @@ function printFinding(f: SecurityFinding): void {
   // against the asset list by hand.
   if (f.path) console.log(`        ${dim("verify:")} ${f.path}${f.line ? `:${f.line}` : ""}`);
 }
-
-/**
- * Claude Code loads skill names + descriptions into every session under a
- * character budget of `skillListingBudgetFraction` (default 1% of the context
- * window — 8,000 chars on a 200K model). Past it, descriptions are dropped
- * starting with the least-invoked skills; the skill still exists but can no
- * longer auto-trigger. Documented at code.claude.com/docs/en/skills.
- * This budget is Claude-specific, so it is only compared for claude sources.
- */
-const LISTING_BUDGET_CHARS = 8000;
 
 const KIND_LABEL: Record<AssetKind, [string, string]> = {
   skill: ["skill", "skills"],
@@ -80,9 +75,9 @@ function printSource(s: SourceAudit): void {
   );
   let overBudget = false;
   if (hasListingBudget(s)) {
-    const chars = content.listingChars;
-    const pct = Math.round((chars / LISTING_BUDGET_CHARS) * 100);
-    overBudget = chars > LISTING_BUDGET_CHARS;
+    const b = listingBudget(content.listingChars);
+    const pct = b.pct;
+    overBudget = b.over;
     if (overBudget) {
       console.log(
         `  ${red(`skill listing at ${pct}% of the ~${LISTING_BUDGET_CHARS.toLocaleString()}-char budget`)} — over it, Claude Code drops`

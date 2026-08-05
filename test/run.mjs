@@ -1260,6 +1260,28 @@ console.log("UI HTTP tier (server security + endpoints):");
     chmodSync(join(stubBin, "claude"), 0o755);
     const dormant = payload?.items?.find((i) => i.name === "dormant");
     check("disabled skill is present, first-class, disabled", !!dormant && dormant.enabled === false && dormant.togglable === true);
+    // The listing budget counts what Claude Code actually reads: enabled
+    // skills only (a disabled one is out of the directory), plugin skills
+    // included (they are listed), and no other kind — an agent's description
+    // is not in the skill listing. An unparseable item declares nothing, so
+    // like its injected cost it contributes zero rather than its folder name.
+    const listedSum = payload?.items
+      ?.filter(
+        (i) => i.enabled && i.kind === "skill" && !i.parseError && (i.source === "claude" || i.source === "custom")
+      )
+      .reduce((s, i) => s + i.name.length + (i.description?.trim().length ?? 0), 0);
+    check(
+      "listing budget counts enabled claude skills only",
+      payload?.header?.listing?.chars === listedSum && payload?.header?.listing?.budgetChars === 8000,
+      `header ${payload?.header?.listing?.chars} vs enabled-skill sum ${listedSum}`
+    );
+    check(
+      "a disabled skill is excluded from the listing figure",
+      (dormant?.description?.length ?? 0) > 0 &&
+        !JSON.stringify(payload?.header?.listing ?? {}).includes("undefined") &&
+        payload.header.listing.chars < listedSum + dormant.description.length,
+      `listing ${payload?.header?.listing?.chars}`
+    );
     const enabledSum = payload?.items?.filter((i) => i.enabled).reduce((s, i) => s + i.injectedChars, 0);
     check(
       "header total counts enabled items only (disabled excluded)",
@@ -1568,6 +1590,44 @@ console.log("UI FRONTEND tier (fixture render):");
   }
   check("disabled row is marked off", /class="off[ "]/.test(html));
   check("read-only row explains itself instead of a toggle", html.includes('title="v1"'));
+
+  // --- The listing budget -------------------------------------------------
+  // The answer to "why has Claude stopped firing my skill?" — the tool's most
+  // actionable number. The CLI reported it from v0.1 and the dashboard did
+  // not, which left it missing from the surface the companion skill hands
+  // people when they ask exactly that question.
+  const overPayload = {
+    ...payload,
+    header: { ...payload.header, listing: { chars: 9934, budgetChars: 8000, pct: 124, over: true } },
+  };
+  const overHtml = renderApp(overPayload, defaultState());
+  check(
+    "an over-budget listing renders as a header readout in the danger tone",
+    overHtml.includes('class="num">124%') && /class="readout[^"]* danger"/.test(overHtml),
+    "listing readout missing or not toned"
+  );
+  check(
+    "the over-budget readout names the consequence, not just the number",
+    /descriptions dropped/.test(overHtml) && /stop auto-triggering/.test(overHtml),
+    "no consequence stated"
+  );
+  const underHtml = renderApp(
+    { ...payload, header: { ...payload.header, listing: { chars: 4000, budgetChars: 8000, pct: 50, over: false } } },
+    defaultState()
+  );
+  check(
+    "an under-budget listing states that every description loads",
+    underHtml.includes('class="num">50%') && /all descriptions load/.test(underHtml) &&
+      !/descriptions dropped/.test(underHtml),
+    "under-budget readout wrong"
+  );
+  // A budget nothing on the machine is subject to is not a fact about it. A
+  // Codex/Cursor-only setup must not be shown a Claude-specific 0%.
+  check(
+    "a machine with no claude skills shows no listing readout at all",
+    !html.includes("skill listing"),
+    "listing readout rendered without a listing"
+  );
 
   // --- Usage honesty ------------------------------------------------------
   // The usage window is a transcript-RETENTION window: Claude Code deletes old

@@ -252,10 +252,28 @@ export interface UiItem {
   twinPath?: string;
 }
 
-/** The pitch in four numbers, plus the denominators that keep them honest. */
+/**
+ * The Claude Code skill-listing budget and where this setup sits against it.
+ * Absent when nothing on the machine is subject to it (no Claude skills).
+ */
+export interface ListingBudget {
+  chars: number;
+  budgetChars: number;
+  pct: number;
+  /** Decided on raw characters, never on the rounded percentage. */
+  over: boolean;
+}
+
+/** The pitch in five numbers, plus the denominators that keep them honest. */
 export interface UiHeader {
   items: number;
   providers: number;
+  /**
+   * Claude's skill listing, when this machine has one. Counts every ENABLED
+   * skill whose description loads — user, project and plugin alike — because
+   * that is what Claude Code reads.
+   */
+  listing?: ListingBudget;
   /** Enabled items only — what the setup actually costs per session. */
   injectedChars: number;
   injectedTokens: number;
