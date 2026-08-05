@@ -18,7 +18,7 @@ import type {
   UiPayload,
   UiPluginMeta,
 } from "../types.js";
-import { discoverPluginAssets, latestKnownVersion, resolveActivePlugins } from "./plugins.js";
+import { discoverPluginAssets, latestKnownVersion, resolveActivePlugins } from "../plugins.js";
 
 export interface UiBuildOptions {
   history: boolean;
@@ -129,6 +129,12 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
     const wanted = ADAPTERS.filter((a) => !opts.sources || opts.sources.includes(a.id));
     for (const adapter of wanted.filter((a) => a.detect(ctx))) {
       for (const skill of adapter.discover(ctx)) {
+        // The claude adapter discovers plugin assets too, so the CLI's figures
+        // cover what Claude Code really loads. The dashboard needs each
+        // install's version and marketplace to group and update them, so it
+        // discovers plugins itself below — skip the adapter's copies here or
+        // every plugin asset lands in the inventory twice.
+        if (skill.fromPlugin) continue;
         const kind = skill.kind ?? "skill";
         const userSkillsRoot = join(ctx.home, ".claude", "skills");
         // A direct child of the root, matching what toggle.ts will actually
@@ -319,9 +325,10 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
   //
   // Counted from the rows that are actually listed: enabled Claude skills,
   // user, project and plugin alike. Disabled ones are out of the directory
-  // Claude Code reads, and no other vendor has this budget. Note this can
-  // exceed the CLI's figure on the same machine — the CLI's claude adapter
-  // does not inventory plugin skills, and plugin skills are listed.
+  // Claude Code reads, and no other vendor has this budget. The CLI inventories
+  // plugins on the same terms, so the two surfaces report the identical figure
+  // — they disagreed while only one of them could see plugins, which is
+  // indefensible for a tool whose whole claim is that its numbers are facts.
   const listedRows = rows.filter(
     (r) => (r.source === "claude" || r.source === "custom") && r.enabled && (r.skill.kind ?? "skill") === "skill"
   );

@@ -24,7 +24,7 @@ Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md.
 
 The page boots to **your skills** — the layer you actually manage: togglable, usage-tracked, marketplace-installed. Everything else the inventory found (agents, commands, rules, instruction files) is one click away behind the `everything` switch, and the header totals always count all of it — a skills view that understated your real context bill would be lying with a filter.
 
-The header carries the diagnosis. **Skill listing** is the percentage of Claude Code's ~8,000-character listing budget your enabled skills occupy — over 100% it turns red and says what that costs you, because past the budget Claude Code drops descriptions starting with the skills you invoke least, and those skills stop auto-triggering. That is the answer to "why has Claude stopped firing my skill?", which is the question people actually arrive with. It counts user, project and plugin skills alike, since all three are listed; the CLI's figure covers user and project skills only.
+The header carries the diagnosis. **Skill listing** is the percentage of Claude Code's ~8,000-character listing budget your enabled skills occupy — over 100% it turns red and says what that costs you, because past the budget Claude Code drops descriptions starting with the skills you invoke least, and those skills stop auto-triggering. That is the answer to "why has Claude stopped firing my skill?", which is the question people actually arrive with. It counts user, project and plugin skills alike, since Claude Code lists all three — and the CLI reports the identical figure.
 
 What the table shows per row: tokens per session (with a meter scaled to your most expensive item), fires in the usage window, last fired, and security findings. **Dead weight gets the amber** — an item that is enabled, carries a real share of the bill, and fired zero times in the window. A cheap silent skill and an expensive busy one are both fine; the intersection is what you're paying for nothing.
 
@@ -119,6 +119,8 @@ Auto-invocation matches on descriptions, so two assets with identical descriptio
 
 The honest answer, because it's the only part that isn't replaceable by asking your agent nicely:
 
+**Knowing what is actually loaded.** A marketplace pack's skills sit in the same listing and pay the same per-session rent as the ones you wrote, and the plugin cache keeps every version you have ever downloaded side by side. Counting the active version of each enabled plugin — and nothing else — is the difference between a real figure and one that is either an undercount or a triple-count.
+
 **Counting.** Producing "69 of 75 never fired" means parsing 99 JSONL transcript files. An agent doing that in-session burns an enormous amount of context and still gets the arithmetic subtly wrong, because counting at scale is the thing language models are worst at. A CLI does it exactly, offline, in about a second, and hands back one line. That's a capability difference, not a speed difference.
 
 **Knowing where to look.** The 8,000-char listing budget, which files are always-injected versus on-demand per tool, where Codex keeps its rollouts — these are facts worth encoding once rather than rediscovering per session.
@@ -131,7 +133,7 @@ That's the case. It's a sharp small utility, not a platform.
 
 | Source | Instruction assets | Always-in-context cost | Usage history |
 |---|---|---|---|
-| `claude` | `~/.claude`+`./.claude` skills, agents, commands; `CLAUDE.md` (global + project) | skill/agent names + descriptions; CLAUDE.md bodies | ✅ `~/.claude/projects` transcripts |
+| `claude` | `~/.claude`+`./.claude` skills, agents, commands; `CLAUDE.md` (global + project); **enabled plugins' skills, commands and agents**, at their active version | skill/agent names + descriptions; CLAUDE.md bodies | ✅ `~/.claude/projects` transcripts |
 | `codex` | `~/.codex/AGENTS.md`, `~/.codex/prompts/*.md` | AGENTS.md body; prompt names | ✅ `~/.codex/sessions` rollouts |
 | `cursor` | `./.cursor/rules/*.mdc` (nested dirs included), legacy `./.cursorrules` | `alwaysApply` + legacy rule bodies; rule descriptions | — none kept in a readable form |
 | `agents-md` | `./AGENTS.md`, `~/AGENTS.md` — audited once, not once per tool that reads it | whole body | — |

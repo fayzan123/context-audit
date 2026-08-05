@@ -63,6 +63,9 @@ function printSource(s: SourceAudit): void {
 
   console.log();
   console.log(bold(`━━ ${s.source} `) + dim(`— ${countsLabel(s)}`));
+  // Printed before the figures, not after: a qualifier that arrives once the
+  // reader has already believed the number is not a qualifier.
+  for (const caveat of s.caveats ?? []) console.log(`  ${yellow("caveat:")} ${caveat}`);
 
   // ---- Cost ----
   // Deliberately first. What rides along in every session is the fact most
@@ -233,6 +236,10 @@ export function printAgent(result: MultiAuditResult): void {
     return {
       source: s.source,
       assetCounts,
+      // The agent relays these figures to the user, so a qualifier that only
+      // reached the human-readable report would be dropped exactly where it
+      // matters most.
+      caveats: s.caveats,
       security: { flags, infoCounts: infoByCheck },
       content: {
         alwaysInjectedChars: s.content.alwaysInjectedChars,

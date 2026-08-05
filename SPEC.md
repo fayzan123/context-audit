@@ -24,12 +24,14 @@ Every line of output must be a fact the user can verify in ten seconds. Any chec
 
 | id | discovers | always-injected model | usage history |
 |---|---|---|---|
-| `claude` | `~/.claude` + `./.claude` skills, agents, commands; global + project `CLAUDE.md`; plugin assets at their active version | names + descriptions; instruction-file bodies | `~/.claude/projects` |
+| `claude` | `~/.claude` + `./.claude` skills, agents, commands; global + project `CLAUDE.md`; enabled plugins' assets at their active version | names + descriptions; instruction-file bodies | `~/.claude/projects` |
 | `codex` | `~/.codex/AGENTS.md`, `~/.codex/prompts/*.md` | AGENTS.md body; prompt names | `~/.codex/sessions` |
 | `cursor` | `./.cursor/rules/*.mdc` (nested included), legacy `./.cursorrules` | `alwaysApply` + legacy bodies; rule descriptions | none kept |
 | `agents-md` | `./AGENTS.md`, `~/AGENTS.md` — audited once, not per consuming tool | whole body | — |
 
-The unit of audit is "an instruction file an agent will execute," not "a Claude skill." The engine is shared; each source contributes discovery, a cost model, and (where transcripts exist) usage.
+The unit of audit is "an instruction file an agent will execute," not "a Claude skill." The engine is shared; each source contributes discovery, a cost model, (where transcripts exist) usage, and (where a figure had to be inferred rather than read) caveats.
+
+Plugins are part of that inventory, not a dashboard extra: Claude Code loads a marketplace pack's skills into the same listing and charges the same per-session rent as the ones you wrote, so omitting them made every figure an undercount. Only enabled installs count, and only the active version — the cache keeps every downloaded version side by side. When `installed_plugins.json` cannot be read, the active version is inferred from the newest cached one and the report says so rather than presenting a guess as a measurement.
 
 ## Non-goals
 

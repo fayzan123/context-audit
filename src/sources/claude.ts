@@ -1,57 +1,10 @@
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { discoverSkills, loadSkill } from "../skills.js";
+import { discoverSkills, fileAsset, mdFilesUnder } from "../skills.js";
+import { discoverPluginAssets, resolveActivePlugins } from "../plugins.js";
 import { historyFacts } from "../history.js";
-import type { AssetKind, HistoryFacts, Injection, Skill } from "../types.js";
+import type { HistoryFacts, Skill } from "../types.js";
 import type { SourceAdapter, SourceContext } from "./types.js";
-
-/** Every .md file under a directory, symlink-tolerant, silent on unreadable entries. */
-export function mdFilesUnder(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const walk = (d: string): void => {
-    // statSync below follows symlinks, so a directory linking to an ancestor
-    // would recurse forever without this.
-    try {
-      const real = realpathSync(d);
-      if (seen.has(real)) return;
-      seen.add(real);
-    } catch {
-      return;
-    }
-    let entries;
-    try {
-      entries = readdirSync(d, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const p = join(d, entry.name);
-      let stat;
-      try {
-        stat = statSync(p); // follows symlinks, same policy as the skills walker
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) walk(p);
-      else if (stat.isFile() && entry.name.endsWith(".md")) out.push(p);
-    }
-  };
-  walk(dir);
-  return out;
-}
-
-/** Load a single .md file as an asset with an explicit dispatch name and kind. */
-export function fileAsset(
-  path: string,
-  name: string,
-  source: Skill["source"],
-  kind: AssetKind,
-  injection: Injection
-): Skill {
-  return { ...loadSkill(path), dirName: name, source, kind, injection };
-}
 
 function skillRoots(ctx: SourceContext): string[] {
   // A Set because cwd can sit inside HOME (or be it) — auditing the same
@@ -110,7 +63,57 @@ export const claudeAdapter: SourceAdapter = {
       }
     }
 
+    // Plugin-shipped assets. Claude Code loads these exactly like the ones you
+    // wrote yourself — a marketplace pack's skills sit in the same listing and
+    // pay the same per-session rent — so omitting them made every figure this
+    // tool reports an undercount, and made the CLI disagree with its own
+    // dashboard on the same machine.
+    //
+    // Only ENABLED installs, and only the versions Claude Code actually
+    // resolved: the cache keeps every downloaded version side by side, and
+    // auditing all of them would multiply the exact numbers the report exists
+    // to get right. Note that one plugin CAN legitimately resolve to more than
+    // one install — a user-scope and a project-scope entry are two live copies
+    // — so the rule is one audit per distinct install on disk, not one per
+    // plugin name.
+    for (const install of resolveActivePlugins(ctx.home).installs) {
+      if (!install.enabled) continue;
+      for (const { skill } of discoverPluginAssets(install)) assets.push(skill);
+    }
+
     return assets;
+  },
+
+  caveats(ctx) {
+    // Plugin versions normally come from installed_plugins.json. When that file
+    // is missing or unreadable the resolver falls back to newest-cached-version
+    // per plugin, which is a guess — and now that plugin assets are part of the
+    // CLI's cost, usage and security figures, a guessed version silently shapes
+    // every number in the report. The dashboard has always shown this as a
+    // caveat; the report cannot quietly present it as a measurement.
+    // Counted over the installs that actually CONTRIBUTED — disabled ones are
+    // not inventoried, so a caveat about them qualifies nothing and is just a
+    // warning the reader cannot act on.
+    const { installs, resolution } = resolveActivePlugins(ctx.home);
+    const live = installs.filter((i) => i.enabled);
+    const out: string[] = [];
+    if (resolution === "newest-fallback" && live.length > 0) {
+      out.push(
+        `plugin versions resolved by newest-cached fallback (${live.length} plugin(s)) — ` +
+          `installed_plugins.json was missing or unreadable, so which version is active is inferred, not read`
+      );
+    }
+    // A plugin present at two install paths can only dispatch under one name,
+    // so the figures describe one of them. Which one is a choice, and a choice
+    // the reader cannot see is indistinguishable from a measurement.
+    const ambiguous = live.filter((i) => (i.candidates ?? 1) > 1);
+    for (const i of ambiguous) {
+      out.push(
+        `${i.name} is installed at ${i.candidates} paths — these figures describe ` +
+          `version ${i.version} at ${i.root}; the others are not counted`
+      );
+    }
+    return out;
   },
 
   async usage(ctx, assets): Promise<HistoryFacts> {

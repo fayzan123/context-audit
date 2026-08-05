@@ -797,6 +797,336 @@ const BENIGN_SKILL = FM() + "Say hello politely.\n";
     .find((f) => f.check === "broad-tool-grant" && f.skill === "danger");
   check("allowed-tools grant in a command file is reported", !!grant2c, "finding missing entirely");
 
+  // --- Plugins are part of the CLI inventory --------------------------------
+  // Claude Code loads a plugin's skills exactly like the ones you wrote: same
+  // listing, same per-session rent. The CLI used to inventory none of them, so
+  // every figure it reported was an undercount AND it disagreed with its own
+  // dashboard on the same machine. Only ENABLED installs count, and only the
+  // ACTIVE version — the cache keeps every downloaded version side by side.
+  for (const [p, content] of Object.entries({
+    ".claude/plugins/cache/mkt/kit/1.0.0/skills/stale/SKILL.md": FM() + "Old version.\n",
+    ".claude/plugins/cache/mkt/kit/2.0.0/skills/plugskill/SKILL.md":
+      "---\nname: plugskill\ndescription: A plugin-shipped skill that is listed like any other.\n---\n\nHi.\n",
+    ".claude/plugins/cache/mkt/kit/2.0.0/commands/deploy/prod.md": "---\ndescription: Deploy to prod.\n---\n\nGo.\n",
+    ".claude/plugins/cache/mkt/off/1.0.0/skills/dark/SKILL.md":
+      "---\nname: dark\ndescription: Belongs to a disabled plugin and is therefore not loaded at all.\n---\n\nHi.\n",
+  })) {
+    const f = join(home, p);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, content);
+  }
+  writeFileSync(join(home, ".claude/plugins/installed_plugins.json"), JSON.stringify({
+    version: 2,
+    plugins: {
+      "kit@mkt": [{ scope: "user", installPath: join(home, ".claude/plugins/cache/mkt/kit/2.0.0"), version: "2.0.0" }],
+      "off@mkt": [{ scope: "user", installPath: join(home, ".claude/plugins/cache/mkt/off/1.0.0"), version: "1.0.0" }],
+    },
+  }));
+  writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ enabledPlugins: { "off@mkt": false } }));
+
+  const rp = audit(["--json", "--no-history"], home, proj);
+  const claudeP = (parse(rp)?.sources ?? []).find((s) => s.source === "claude");
+  const pNames = (claudeP?.assets ?? []).map((a) => a.name);
+  check(
+    "CLI discovers plugin skills under their dispatch name",
+    pNames.includes("kit:plugskill"),
+    `assets: ${pNames.filter((n) => n.includes(":")).join(", ") || "none namespaced"}`
+  );
+  check(
+    "CLI namespaces plugin commands by directory, like user commands",
+    pNames.includes("kit:deploy:prod"),
+    `assets: ${pNames.filter((n) => n.startsWith("kit:")).join(", ")}`
+  );
+  check(
+    "a non-active cached version is not inventoried",
+    !pNames.includes("kit:stale"),
+    "an inactive cached version was counted"
+  );
+  check(
+    "a DISABLED plugin's skills are not inventoried — they are not loaded",
+    !pNames.some((n) => n.startsWith("off:")),
+    `leaked: ${pNames.filter((n) => n.startsWith("off:")).join(", ")}`
+  );
+  // The payoff: the CLI and the dashboard now compute the SAME listing figure
+  // from the same machine. They disagreed while only one of them saw plugins,
+  // which is indefensible for a tool whose claim is that its numbers are facts.
+  {
+    const { buildUiPayload } = await import(join(root, "dist", "ui", "inventory.js"));
+    const uiPayload = await buildUiPayload({ home, cwd: proj }, { history: false });
+    check(
+      "CLI and dashboard agree on the skill-listing figure",
+      uiPayload.header.listing?.chars === claudeP?.content?.listingChars,
+      `dashboard ${uiPayload.header.listing?.chars} vs CLI ${claudeP?.content?.listingChars}`
+    );
+    // The adapter now returns plugin assets AND the dashboard discovers them
+    // itself for their version metadata — counting both copies would double
+    // every plugin row.
+    const plugRows = uiPayload.items.filter((i) => i.name === "kit:plugskill");
+    check("the dashboard lists each plugin asset exactly once", plugRows.length === 1,
+      `${plugRows.length} rows for kit:plugskill`);
+  }
+  // The `plugin:` prefix on a dispatch name is added by the harness, so
+  // `kit:plugskill` for a `plugskill` directory is agreement, not drift.
+  // Comparing the composed name flagged every well-formed plugin skill on a
+  // real machine — 14 findings that were all noise, which is how a check
+  // teaches people to ignore it.
+  check(
+    "a well-formed plugin skill is not a name mismatch",
+    !(claudeP?.content?.nameMismatches ?? []).some((m) => m.skill.startsWith("kit:")),
+    `mismatches: ${JSON.stringify(claudeP?.content?.nameMismatches)}`
+  );
+  {
+    // ...and a GENUINE mismatch inside a plugin still surfaces: the directory
+    // and the frontmatter really do disagree, so it dispatches under a name
+    // its own folder does not predict.
+    const drifted = join(home, ".claude/plugins/cache/mkt/kit/2.0.0/skills/folder/SKILL.md");
+    mkdirSync(dirname(drifted), { recursive: true });
+    writeFileSync(drifted, "---\nname: notfolder\ndescription: Drifted.\n---\n\nHi.\n");
+    const rd = parse(audit(["--json", "--no-history"], home, proj));
+    const mm = ((rd?.sources ?? []).find((s) => s.source === "claude")?.content?.nameMismatches ?? []);
+    check(
+      "a real name mismatch inside a plugin is still reported",
+      mm.some((m) => m.fmName === "notfolder"),
+      `mismatches: ${JSON.stringify(mm)}`
+    );
+    rmSync(dirname(drifted), { recursive: true, force: true });
+  }
+
+  // Plugin versions normally come from installed_plugins.json. Without it the
+  // resolver INFERS the active version (newest cached), and that guess now
+  // shapes every figure the CLI reports — so the report has to say so rather
+  // than present an inference as a measurement.
+  check(
+    "no caveat while plugin versions are read from config",
+    claudeP?.caveats === undefined,
+    `caveats: ${JSON.stringify(claudeP?.caveats)}`
+  );
+  {
+    const fbHome = join(tmp, "ms-fallback-home");
+    const fbSkill = join(fbHome, ".claude/plugins/cache/m/p/2.0.0/skills/y/SKILL.md");
+    mkdirSync(dirname(fbSkill), { recursive: true });
+    writeFileSync(fbSkill, BENIGN_SKILL);
+    mkdirSync(join(fbHome, ".claude/skills"), { recursive: true });
+    const fb = parse(audit(["--json", "--no-history"], fbHome, proj));
+    const fbClaude = (fb?.sources ?? []).find((s) => s.source === "claude");
+    check(
+      "an inferred plugin version is reported as a caveat",
+      (fbClaude?.caveats ?? []).some((c) => /newest-cached fallback/.test(c)),
+      `caveats: ${JSON.stringify(fbClaude?.caveats)}`
+    );
+    check(
+      "the caveat rides along in --agent output, where an agent will relay it",
+      (parse(audit(["--agent", "--no-history"], fbHome, proj))?.sources ?? [])
+        .some((s) => (s.caveats ?? []).some((c) => /newest-cached fallback/.test(c))),
+      "agent output dropped the caveat"
+    );
+  }
+
+  // --- Robustness of the paths the CLI newly depends on ---------------------
+  // installed_plugins.json and the plugin cache are inputs this tool does not
+  // control, and the whole report now rests on them. Each case below made the
+  // audit wrong or made it die outright.
+  {
+    // One directory, three spellings. Keying dedup on the STRING counted it
+    // three times and tripled the always-injected cost with it.
+    const dupHome = join(tmp, "plug-dup-home");
+    const dupRoot = join(dupHome, ".claude/plugins/cache/m/tri/1.0.0");
+    mkdirSync(join(dupRoot, "skills/one"), { recursive: true });
+    mkdirSync(join(dupHome, ".claude/skills"), { recursive: true });
+    writeFileSync(join(dupRoot, "skills/one/SKILL.md"), BENIGN_SKILL);
+    writeFileSync(join(dupHome, ".claude/plugins/installed_plugins.json"), JSON.stringify({
+      version: 2,
+      plugins: {
+        "tri@m": [
+          { scope: "user", installPath: dupRoot, version: "1.0.0" },
+          { scope: "project", installPath: dupRoot + "/", version: "1.0.0" },
+          { scope: "user", installPath: dupRoot + "/.", version: "1.0.0" },
+        ],
+      },
+    }));
+    const names = ((parse(audit(["--json", "--no-history"], dupHome, proj))?.sources ?? [])
+      .find((s) => s.source === "claude")?.assets ?? []).map((a) => a.name);
+    check(
+      "three spellings of one install path are one plugin, not three",
+      names.filter((n) => n === "tri:one").length === 1,
+      `assets: ${names.join(", ")}`
+    );
+  }
+  {
+    // Two install paths for one plugin at different versions. Inventorying
+    // both double-counted every asset AND collapsed their security findings
+    // together by dispatch name — which could hide a payload in the live copy
+    // behind an identical finding filed against the stale one, with `verify:`
+    // pointing at the wrong file.
+    const twoHome = join(tmp, "plug-two-home");
+    mkdirSync(join(twoHome, ".claude/skills"), { recursive: true });
+    const roots = {};
+    for (const v of ["1.0.0", "2.0.0"]) {
+      roots[v] = join(twoHome, `.claude/plugins/cache/m/two/${v}`);
+      const f = join(roots[v], "skills/one/SKILL.md");
+      mkdirSync(dirname(f), { recursive: true });
+      // Only the NEWER copy carries the payload.
+      writeFileSync(f, v === "2.0.0" ? FM() + `    ${PAYLOAD}\n` : BENIGN_SKILL);
+    }
+    writeFileSync(join(twoHome, ".claude/plugins/installed_plugins.json"), JSON.stringify({
+      version: 2,
+      plugins: {
+        "two@m": [
+          { scope: "user", installPath: roots["1.0.0"], version: "1.0.0" },
+          { scope: "project", installPath: roots["2.0.0"], version: "2.0.0" },
+        ],
+      },
+    }));
+    const two = audit(["--json", "--no-history"], twoHome, proj);
+    const twoClaude = (parse(two)?.sources ?? []).find((s) => s.source === "claude");
+    const twoNames = (twoClaude?.assets ?? []).map((a) => a.name);
+    check(
+      "a plugin at two install paths is inventoried once, not twice",
+      twoNames.filter((n) => n === "two:one").length === 1,
+      `assets: ${twoNames.join(", ")}`
+    );
+    check(
+      "choosing between them is stated as a caveat, not resolved silently",
+      (twoClaude?.caveats ?? []).some((c) => /installed at 2 paths/.test(c)),
+      `caveats: ${JSON.stringify(twoClaude?.caveats)}`
+    );
+    const twoFlag = (twoClaude?.security ?? []).find((f) => f.level === "flag" && f.skill === "two:one");
+    check(
+      "the payload in the live copy flags, and verify: names the live copy",
+      !!twoFlag && twoFlag.path.includes("/2.0.0/") && two.code === 1,
+      `path: ${twoFlag?.path}, exit ${two.code}`
+    );
+  }
+  {
+    // The fallback picks which version the entire report describes, so a stray
+    // directory name must not outrank a real version, and a release must beat
+    // its own prerelease.
+    const vHome = join(tmp, "plug-ver-home");
+    mkdirSync(join(vHome, ".claude/skills"), { recursive: true });
+    for (const [v, name] of [["9.9.9", "old"], ["10.0.0", "newest"], ["latest", "stray"], ["10.0.0-beta", "pre"]]) {
+      const f = join(vHome, `.claude/plugins/cache/m/p/${v}/skills/${name}/SKILL.md`);
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, `---\nname: ${name}\ndescription: Version ${v}.\n---\n\nHi.\n`);
+    }
+    const vNames = ((parse(audit(["--json", "--no-history"], vHome, proj))?.sources ?? [])
+      .find((s) => s.source === "claude")?.assets ?? []).map((a) => a.name);
+    check(
+      "newest-cached fallback picks the highest real version, not a stray name or a prerelease",
+      vNames.includes("p:newest") && !vNames.some((n) => ["p:stray", "p:pre", "p:old"].includes(n)),
+      `assets: ${vNames.join(", ")}`
+    );
+  }
+  {
+    // A plugin is third-party code. Following a symlink out of its own install
+    // made the audit read — and quote as `evidence` — arbitrary files
+    // elsewhere on the machine, so a plugin shipping one relative symlink
+    // turned the tool into a reader of the user's private files.
+    //
+    // Both halves are asserted: nothing outside is read, AND the escape is
+    // reported. Silently skipping it would trade one bug for a hiding place,
+    // which is the failure the walker's own comments keep documenting.
+    const { symlinkSync } = await import("node:fs");
+    const escHome = join(tmp, "plug-escape-home");
+    const escRoot = join(escHome, ".claude/plugins/cache/m/sneak/1.0.0");
+    mkdirSync(join(escRoot, "skills/s"), { recursive: true });
+    mkdirSync(join(escHome, ".claude/skills"), { recursive: true });
+    mkdirSync(join(escHome, "secrets"), { recursive: true });
+    writeFileSync(join(escHome, "secrets/notes.sh"), `${PAYLOAD}\n`);
+    writeFileSync(join(escRoot, "skills/s/SKILL.md"), BENIGN_SKILL);
+    symlinkSync(join(escHome, "secrets"), join(escRoot, "skills/s/ref"));
+    writeFileSync(join(escHome, ".claude/plugins/installed_plugins.json"), JSON.stringify({
+      version: 2, plugins: { "sneak@m": [{ scope: "user", installPath: escRoot, version: "1.0.0" }] },
+    }));
+    const escSec = ((parse(audit(["--json", "--no-history"], escHome, proj))?.sources ?? [])
+      .find((s) => s.source === "claude")?.security ?? []);
+    check(
+      "a plugin symlink out of its install is not followed — nothing outside is read",
+      !escSec.some((f) => (f.path ?? "").includes("/secrets/")),
+      `paths: ${escSec.map((f) => f.path).filter((p) => (p ?? "").includes("secrets")).join(", ")}`
+    );
+    check(
+      "the escape is REPORTED rather than silently skipped",
+      escSec.some((f) => f.check === "symlink-escape" && f.level === "flag"),
+      `checks: ${escSec.map((f) => f.check).join(", ")}`
+    );
+  }
+  {
+    // The containment applies to PLUGINS only. A user's own skills directory is
+    // commonly a symlink farm into their repos, and content the agent can read
+    // through such a link still has to be scanned — confining those would
+    // create exactly the hiding place the plugin rule reports its way out of.
+    const { symlinkSync } = await import("node:fs");
+    const farmHome = join(tmp, "user-symlink-farm-home");
+    mkdirSync(join(farmHome, ".claude/skills"), { recursive: true });
+    const realSkill = join(farmHome, "repos/linked-skill");
+    mkdirSync(realSkill, { recursive: true });
+    writeFileSync(join(realSkill, "SKILL.md"), FM() + `Setup:\n\n    ${PAYLOAD}\n`);
+    symlinkSync(realSkill, join(farmHome, ".claude/skills/linked-skill"));
+    const farm = audit(["--json", "--no-history"], farmHome, proj);
+    const farmSec = ((parse(farm)?.sources ?? []).find((s) => s.source === "claude")?.security ?? []);
+    check(
+      "a user skill symlinked into a repo is still followed and scanned",
+      farmSec.some((f) => f.level === "flag" && f.check === "download-execute" && f.skill === "linked-skill"),
+      `checks: ${farmSec.map((f) => `${f.skill}:${f.check}`).join(", ") || "none"}`
+    );
+  }
+  {
+    // installPath comes from a JSON file this tool does not control. Pointed
+    // at ~/.claude it made every user skill, command and agent get inventoried
+    // a SECOND time under the plugin's namespace, inflating every figure.
+    const swHome = join(tmp, "plug-swallow-home");
+    mkdirSync(join(swHome, ".claude/skills/mine"), { recursive: true });
+    mkdirSync(join(swHome, ".claude/plugins"), { recursive: true });
+    writeFileSync(join(swHome, ".claude/skills/mine/SKILL.md"), BENIGN_SKILL);
+    writeFileSync(join(swHome, ".claude/plugins/installed_plugins.json"), JSON.stringify({
+      version: 2, plugins: { "kit@m": [{ scope: "user", installPath: join(swHome, ".claude"), version: "1.0.0" }] },
+    }));
+    const swNames = ((parse(audit(["--json", "--no-history"], swHome, proj))?.sources ?? [])
+      .find((s) => s.source === "claude")?.assets ?? []).map((a) => a.name);
+    check(
+      "an installPath swallowing ~/.claude does not re-inventory user assets",
+      swNames.includes("mine") && !swNames.some((n) => n.startsWith("kit:")),
+      `assets: ${swNames.join(", ")}`
+    );
+  }
+  if (process.getuid && process.getuid() !== 0) {
+    // An unreadable directory under a plugin threw out of discovery and killed
+    // the ENTIRE multi-source run — exit 2, no report, including for sources
+    // that were perfectly readable.
+    const { chmodSync } = await import("node:fs");
+    const lockHome = join(tmp, "plug-eacces-home");
+    const lockRoot = join(lockHome, ".claude/plugins/cache/m/lk/1.0.0");
+    mkdirSync(join(lockRoot, "skills/locked"), { recursive: true });
+    mkdirSync(join(lockHome, ".claude/skills/mine"), { recursive: true });
+    writeFileSync(join(lockHome, ".claude/skills/mine/SKILL.md"), BENIGN_SKILL);
+    writeFileSync(join(lockRoot, "skills/locked/SKILL.md"), BENIGN_SKILL);
+    writeFileSync(join(lockHome, ".claude/plugins/installed_plugins.json"), JSON.stringify({
+      version: 2, plugins: { "lk@m": [{ scope: "user", installPath: lockRoot, version: "1.0.0" }] },
+    }));
+    chmodSync(join(lockRoot, "skills/locked"), 0o000);
+    const locked = audit(["--json", "--no-history"], lockHome, proj);
+    chmodSync(join(lockRoot, "skills/locked"), 0o755);
+    const lockedNames = ((parse(locked)?.sources ?? []).find((s) => s.source === "claude")?.assets ?? [])
+      .map((a) => a.name);
+    check(
+      "an unreadable plugin directory does not kill the whole audit",
+      locked.code === 0 && lockedNames.includes("mine"),
+      `exit ${locked.code}, assets: ${lockedNames.join(", ") || "none"}`
+    );
+  }
+
+  // A payload inside a plugin is scanned like anything else — plugin code is
+  // code the agent runs, and it was previously invisible to the CLI entirely.
+  writeFileSync(join(home, ".claude/plugins/cache/mkt/kit/2.0.0/skills/plugskill/SKILL.md"),
+    FM() + `Setup:\n\n    ${PAYLOAD}\n`);
+  const rpFlag = audit(["--json", "--no-history"], home, proj);
+  check(
+    "a payload shipped inside a plugin flags in the CLI",
+    (parse(rpFlag)?.sources ?? []).flatMap((s) => s.security ?? [])
+      .some((f) => f.level === "flag" && f.skill === "kit:plugskill") && rpFlag.code === 1,
+    `exit ${rpFlag.code}`
+  );
+
   // --source narrows; unknown source is a usage error.
   const r3 = audit(["--source", "claude", "--json", "--no-history"], home, proj);
   check("--source claude still audits claude", parse(r3)?.sources?.length === 1);

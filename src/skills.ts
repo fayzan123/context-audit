@@ -8,8 +8,8 @@ import {
   readSync,
   closeSync,
 } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
-import type { Skill, SkillFile } from "./types.js";
+import { basename, dirname, join, relative, sep } from "node:path";
+import type { AssetKind, Injection, Skill, SkillFile } from "./types.js";
 import { flatten, parseYaml } from "./yaml.js";
 
 /**
@@ -116,7 +116,23 @@ function collectFiles(
   out: SkillFile[],
   seen = new Set<string>(),
   inGit = false,
-  inVendorPkg = false
+  inVendorPkg = false,
+  /**
+   * Optional containment root (a REAL path). When set, an entry whose real
+   * path resolves outside it is recorded and NOT followed.
+   *
+   * Only third-party plugin trees pass this. User skills must keep following
+   * symlinks wherever they point — a skills directory is commonly a symlink
+   * farm into the user's own repos (24 of 37 on the machine this was built
+   * on), and content the agent can read through such a link is content that
+   * has to be scanned.
+   *
+   * The escape is REPORTED, never silently skipped: refusing to look at
+   * something without saying so is how a boundary becomes a hiding place,
+   * which is the failure this file's other comments keep documenting. A
+   * plugin that symlinks out of its own install is itself the finding.
+   */
+  boundary?: string
 ): void {
   try {
     const real = realpathSync(dir);
@@ -125,8 +141,36 @@ function collectFiles(
   } catch {
     return;
   }
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  // An unreadable directory is one directory's worth of missing coverage, not
+  // a reason to abandon the audit. Unguarded, a single EACCES anywhere under a
+  // plugin tree threw all the way out of discovery and killed the whole
+  // multi-source run — codex, cursor and the user's own skills included —
+  // with exit 2 and no report at all.
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
     const absPath = join(dir, entry.name);
+    if (boundary !== undefined) {
+      let real: string | undefined;
+      try {
+        real = realpathSync(absPath);
+      } catch {
+        real = undefined; // broken link: nothing to follow, nothing to escape
+      }
+      if (real !== undefined && real !== boundary && !real.startsWith(boundary + sep)) {
+        out.push({
+          relPath: relative(root, absPath),
+          absPath,
+          bytes: 0,
+          escapedTo: real,
+        });
+        continue;
+      }
+    }
     // statSync follows symlinks — skills directories commonly symlink into repos.
     let stat;
     try {
@@ -147,7 +191,7 @@ function collectFiles(
       const entersPackage = !inVendorPkg && inVendorDir && isPackageRoot(absPath);
       if (VENDOR_DIRS.has(entry.name)) {
         const before = out.length;
-        collectFiles(root, absPath, out, seen, inGit, inVendorPkg);
+        collectFiles(root, absPath, out, seen, inGit, inVendorPkg, boundary);
         if (out.length - before >= VENDOR_FILE_BUDGET) {
           // The collected files are KEPT. Discarding them made "pad the vendor
           // tree past the budget" a complete bypass: the walk had already paid
@@ -158,7 +202,7 @@ function collectFiles(
         }
         continue;
       }
-      collectFiles(root, absPath, out, seen, inGit || entry.name === ".git", inVendorPkg || entersPackage);
+      collectFiles(root, absPath, out, seen, inGit || entry.name === ".git", inVendorPkg || entersPackage, boundary);
       continue;
     }
     if (!stat.isFile()) continue;
@@ -240,7 +284,7 @@ export function findingPath(skill: Skill, file: string): string {
 }
 
 /** Load a single skill from a directory containing SKILL.md (or a bare .md file). */
-export function loadSkill(path: string): Skill {
+export function loadSkill(path: string, boundary?: string): Skill {
   const stat = statSync(path);
   if (stat.isFile()) {
     const content = stripBom(readFileSync(path, "utf8"));
@@ -256,7 +300,7 @@ export function loadSkill(path: string): Skill {
     };
   }
   const files: SkillFile[] = [];
-  collectFiles(path, path, files);
+  collectFiles(path, path, files, new Set<string>(), false, false, boundary);
   const skillMd = files.find((f) => isSkillMd(f.relPath));
   const dirName = path.replace(/\/+$/, "").split("/").pop()!;
   if (!skillMd?.content) {
@@ -275,10 +319,18 @@ export function loadSkill(path: string): Skill {
 }
 
 /** Discover all skills in a skills directory (each subdirectory with a SKILL.md). */
-export function discoverSkills(dir: string): Skill[] {
+export function discoverSkills(dir: string, boundary?: string): Skill[] {
   if (!existsSync(dir)) throw new Error(`skills directory not found: ${dir}`);
   const skills: Skill[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  // Same reasoning as collectFiles: a directory this process cannot read is a
+  // gap in coverage, never a fatal error for every other source in the run.
+  let rootEntries;
+  try {
+    rootEntries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return skills;
+  }
+  for (const entry of rootEntries) {
     if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
     const path = join(dir, entry.name);
     let stat;
@@ -288,8 +340,56 @@ export function discoverSkills(dir: string): Skill[] {
       continue;
     }
     if (stat.isDirectory() || (stat.isFile() && entry.name.endsWith(".md"))) {
-      skills.push(loadSkill(path));
+      skills.push(loadSkill(path, boundary));
     }
   }
   return skills.sort((a, b) => a.dirName.localeCompare(b.dirName));
+}
+
+/** Every .md file under a directory, symlink-tolerant, silent on unreadable entries. */
+export function mdFilesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (d: string): void => {
+    // statSync below follows symlinks, so a directory linking to an ancestor
+    // would recurse forever without this.
+    try {
+      const real = realpathSync(d);
+      if (seen.has(real)) return;
+      seen.add(real);
+    } catch {
+      return;
+    }
+    let entries;
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const p = join(d, entry.name);
+      let stat;
+      try {
+        stat = statSync(p); // follows symlinks, same policy as the skills walker
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) walk(p);
+      else if (stat.isFile() && entry.name.endsWith(".md")) out.push(p);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+/** Load a single .md file as an asset with an explicit dispatch name and kind. */
+export function fileAsset(
+  path: string,
+  name: string,
+  source: Skill["source"],
+  kind: AssetKind,
+  injection: Injection
+): Skill {
+  return { ...loadSkill(path), dirName: name, source, kind, injection };
 }

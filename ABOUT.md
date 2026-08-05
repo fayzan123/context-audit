@@ -18,7 +18,7 @@ It never scores or judges. Every line of output is a fact you can verify in ten 
 
 ## What it does, mechanically
 
-1. **Discovers** every instruction asset per source — Claude skills/agents/commands/CLAUDE.md, Codex prompts and AGENTS.md, Cursor rules — reading *all* files in each (bundled scripts and reference files are things your agent can read and run).
+1. **Discovers** every instruction asset per source — Claude skills/agents/commands/CLAUDE.md (including the skills, commands and agents shipped by enabled plugins, which Claude Code loads exactly like your own), Codex prompts and AGENTS.md, Cursor rules — reading *all* files in each (bundled scripts and reference files are things your agent can read and run).
 2. **Normalizes** each file (NFKC, invisible-character stripping, homoglyph folding) before pattern-matching, so keyword-splitting evasions don't slip through.
 3. **Runs three analyzers** — content (arithmetic and string comparison), security (mechanism-modeled pattern and structural checks plus whole-package checks), and usage (streams local JSONL transcripts and Codex rollouts, attributing invocations and post-invocation interrupts).
 4. **Reports** — as the dashboard, as a human-readable report, as `--agent` compact JSON (~1.8k tokens instead of ~22k on a 75-skill directory), or as full `--json` — and **exits 1 if anything is flagged**, so it can gate CI.

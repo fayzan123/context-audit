@@ -1521,6 +1521,22 @@ export function securityScan(skills: Skill[], strict = true): SecurityFinding[] 
 
     for (const file of skill.files) {
       if (file.vendorPackage) continue;
+      if (file.escapedTo) {
+        // Not followed, so nothing inside it was scanned — which is exactly
+        // why it has to be said out loud. A third-party plugin reaching out of
+        // its own install directory is the finding, whether the target is the
+        // user's home directory, their SSH keys, or another package.
+        push(findings, skill, file.relPath, {
+          check: "symlink-escape",
+          level: "flag",
+          severity: "high",
+          confidence: "certain",
+          message:
+            "symlink points outside the plugin's own install directory — not followed, so its contents are unscanned",
+          evidence: `${file.relPath} → ${file.escapedTo}`,
+        });
+        continue;
+      }
       if (file.skippedDir) {
         push(findings, skill, file.relPath, {
           check: "oversized-vendor-tree",

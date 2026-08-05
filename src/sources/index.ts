@@ -25,6 +25,8 @@ export async function auditSource(
   if (opts.history && adapter.usage && assets.length > 0) {
     audit.history = await adapter.usage(ctx, assets);
   }
+  const caveats = adapter.caveats?.(ctx) ?? [];
+  if (caveats.length > 0) audit.caveats = caveats;
   return audit;
 }
 

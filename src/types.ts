@@ -23,6 +23,14 @@ export interface SkillFile {
    * decides how the bytes are *reported*, never whether they are read.
    */
   gitObject?: boolean;
+  /**
+   * A symlink that resolves outside its asset's containment root (plugin trees
+   * only). Recorded with its real target and NOT followed — reported as a
+   * finding, because a third-party package reaching out of its own install is
+   * the fact worth knowing, and silently skipping it would make the boundary a
+   * hiding place.
+   */
+  escapedTo?: string;
 }
 
 /** Which tool's configuration an asset belongs to. */
@@ -54,6 +62,14 @@ export interface Skill {
   source?: SourceId;
   kind?: AssetKind;
   injection?: Injection;
+  /**
+   * Shipped by an installed plugin rather than written by the user. The CLI
+   * discovers these so its cost and usage figures cover what Claude Code
+   * actually loads; the dashboard discovers them separately (it needs each
+   * install's version and marketplace for grouping), so it uses this flag to
+   * skip the adapter's copies rather than counting every plugin asset twice.
+   */
+  fromPlugin?: boolean;
 }
 
 export type Level = "flag" | "info";
@@ -168,6 +184,8 @@ export interface SourceAudit {
   security: SecurityFinding[];
   /** Absent when the tool keeps no parseable local transcripts — never fabricated. */
   history?: HistoryFacts;
+  /** Qualifiers on this source's figures — see SourceAdapter.caveats. */
+  caveats?: string[];
 }
 
 export interface MultiAuditResult {

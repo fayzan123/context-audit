@@ -23,4 +23,10 @@ export interface SourceAdapter {
   detect(ctx: SourceContext): boolean;
   discover(ctx: SourceContext): Skill[];
   usage?(ctx: SourceContext, assets: Skill[]): Promise<HistoryFacts>;
+  /**
+   * Anything that qualifies this source's numbers — a degraded resolution, a
+   * guess the report would otherwise present as a measurement. Printed next to
+   * the figures they affect. A tool that had to guess says so.
+   */
+  caveats?(ctx: SourceContext): string[];
 }

@@ -2,7 +2,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Skill } from "../types.js";
 import type { SourceAdapter } from "./types.js";
-import { fileAsset } from "./claude.js";
+import { fileAsset } from "../skills.js";
 
 /**
  * AGENTS.md is a cross-tool standard: Codex, Cursor, OpenCode and others all

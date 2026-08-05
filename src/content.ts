@@ -89,7 +89,17 @@ export function contentFacts(assets: Skill[]): ContentFacts {
     }
     // Directory-vs-frontmatter drift only exists where the directory IS the
     // dispatch name; file-based kinds take their name from the file or `name:`.
-    if (kind === "skill" && asset.fmName && asset.fmName !== asset.dirName) {
+    //
+    // A plugin skill's dispatch name carries a `plugin:` prefix the harness
+    // adds — `superpowers:brainstorming` for a `brainstorming` directory is
+    // agreement, not drift. Comparing the composed name flagged every
+    // well-formed plugin skill on a real machine (14 of them), which is the
+    // definition of a check that trains people to ignore it. Compare what the
+    // author actually wrote: the name under the prefix.
+    const declaredName = asset.fromPlugin
+      ? asset.dirName.slice(asset.dirName.indexOf(":") + 1)
+      : asset.dirName;
+    if (kind === "skill" && asset.fmName && asset.fmName !== declaredName) {
       nameMismatches.push({ skill: asset.dirName, fmName: asset.fmName });
     }
     tokens.push({ skill: asset.dirName, bodyEst: est(asset.body), descriptionEst: est(desc) });

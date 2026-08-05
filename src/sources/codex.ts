@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { findJsonlFiles, TS_RE } from "../history.js";
 import type { HistoryFacts, Skill, SkillUsage } from "../types.js";
 import type { SourceAdapter, SourceContext } from "./types.js";
-import { fileAsset, mdFilesUnder } from "./claude.js";
+import { fileAsset, mdFilesUnder } from "../skills.js";
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
