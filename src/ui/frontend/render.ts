@@ -721,7 +721,14 @@ function nameCell(item: UiItem): string {
     item.plugin && colon > 0
       ? `<span class="pfx">${esc(item.name.slice(0, colon + 1))}</span>${esc(item.name.slice(colon + 1))}`
       : esc(item.name);
-  return `${name}${item.enabled ? "" : `<span class="offtag">off</span>`}`;
+  const off = item.enabled ? "" : `<span class="offtag">off</span>`;
+  // A disabled copy whose name also exists enabled never dispatches and can't
+  // be re-enabled in place — visibly different from an ordinary "off" row.
+  const shadowed =
+    item.twinPath && !item.enabled
+      ? `<span class="offtag" title="An enabled copy of this dispatch name exists at ${esc(item.twinPath)}. While it does, this copy never dispatches, and toggling is blocked until one copy is removed or renamed.">shadowed</span>`
+      : "";
+  return `${name}${off}${shadowed}`;
 }
 
 function row(
@@ -740,14 +747,21 @@ function row(
   const firedNote = (u: NonNullable<UiItem["fires"]>): string =>
     `${fmtInt(u.invocations)} invocation${u.invocations === 1 ? "" : "s"} across ${fmtInt(u.sessions)} session${u.sessions === 1 ? "" : "s"}` +
     `${u.firstFired ? ` · first ${fmtDay(u.firstFired)}` : ""}${u.lastFired ? ` · last ${fmtDay(u.lastFired)}` : ""}\n\n${win.note}`;
-  const firesCell =
-    f === undefined
+  // Fires are recorded by dispatch name; a shadowed disabled copy never
+  // dispatches, so repeating the name's count here would double-report it.
+  const shadowed = !!item.twinPath && !item.enabled;
+  const shadowNote =
+    "fires are recorded by dispatch name, and an enabled copy of this name exists — its row carries the history";
+  const firesCell = shadowed
+    ? `<td class="c-num na" title="${esc(shadowNote)}">—</td>`
+    : f === undefined
       ? `<td class="c-num na" title="${esc(untracked)}">n/a</td>`
       : f === null
         ? `<td class="c-num zero" title="${esc(win.note)}">0</td>`
         : `<td class="c-num" title="${esc(firedNote(f))}">${fmtInt(f.invocations)}</td>`;
-  const last =
-    f === undefined
+  const last = shadowed
+    ? `<td class="na" title="${esc(shadowNote)}">—</td>`
+    : f === undefined
       ? `<td class="na" title="${esc(untracked)}">n/a</td>`
       : f === null
         ? `<td class="zero" title="${esc(win.note)}">${esc(win.none)}</td>`
@@ -877,7 +891,9 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
   const f = item.fires;
   const w = win ?? { span: "", note: "", none: "no data" };
   const fireLine =
-    f === undefined
+    item.twinPath && !item.enabled
+      ? `<span class="na">shadowed — fires are recorded by dispatch name, and the enabled copy of this name carries the history</span>`
+      : f === undefined
       ? `<span class="na">n/a — this kind leaves no dispatch record, so its use cannot be counted either way</span>`
       : f === null
         ? `<span class="zero">no fires in the scanned window</span>`
@@ -939,6 +955,15 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
       <section>
         <span class="engr">file</span>
         <button class="path" data-open="${item.id}" title="open in editor">${esc(item.path)}</button>
+        ${
+          item.twinPath
+            ? `<p class="caveat-note">${
+                item.enabled
+                  ? `A second copy of this dispatch name sits disabled at ${esc(item.twinPath)}. Toggling is blocked while both exist — remove or rename one copy first.`
+                  : `Shadowed: an enabled copy of this dispatch name exists at ${esc(item.twinPath)}. While it does, this copy never dispatches, and toggling is blocked — remove or rename one copy first.`
+              }</p>`
+            : ""
+        }
       </section>
       <section>
         <span class="engr">cost</span>

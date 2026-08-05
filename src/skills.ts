@@ -217,6 +217,28 @@ export function isSkillMd(relPath: string): boolean {
   return relPath.toLowerCase() === "skill.md";
 }
 
+/**
+ * The absolute file a finding is about, resolved from the asset that produced
+ * it. Every finding must carry this, and it has to be computed with the asset
+ * in hand: findings identify their asset by DISPATCH NAME, and a name is not
+ * unique on a real machine — an agent and a skill can share one, as can a user
+ * and a project copy. Resolving afterwards through a name-keyed map hands the
+ * finding whichever same-named asset was registered last: the wrong file to
+ * open, which is precisely the failure "verify before you alarm the user"
+ * depends on not having.
+ *
+ * A single-file asset (an agent or command `.md`) IS its own `dir`, so the
+ * fallback must not re-join its basename onto it — that produced `…/x.md/x.md`.
+ * Synthetic labels (`node_modules`, `.git/objects`) match no real file and
+ * resolve to the asset itself.
+ */
+export function findingPath(skill: Skill, file: string): string {
+  const hit = skill.files.find((f) => f.relPath === file);
+  if (hit) return hit.absPath;
+  const singleFile = skill.files.length === 1 && skill.files[0].absPath === skill.dir;
+  return singleFile ? skill.dir : join(skill.dir, file);
+}
+
 /** Load a single skill from a directory containing SKILL.md (or a bare .md file). */
 export function loadSkill(path: string): Skill {
   const stat = statSync(path);

@@ -180,6 +180,19 @@ export async function startUiServer(
             error: item.readOnlyReason ?? "this item cannot be toggled",
           });
         }
+        // A name that exists on both sides of the toggle is a collision the
+        // drawer tells the user about, so the refusal has to be real at the
+        // level the drawer states it: the DISPATCH NAME. performToggle's own
+        // guard compares basenames, which is the filesystem's question and a
+        // different one — a bare `zed.md` whose frontmatter says `name: eta`
+        // is the same dispatch name as `eta/` with a different basename, and
+        // moving it would silently produce two enabled copies of one name.
+        if (item.twinPath) {
+          return sendJson(res, 409, {
+            ok: false,
+            error: `"${item.name}" exists both enabled and disabled (${item.path} and ${item.twinPath}) — resolve the duplicate before toggling`,
+          });
+        }
         const result = performToggle(item.path, skillRoots);
         if (!result.ok) return sendJson(res, 409, { ok: false, error: result.error });
         console.log(`context-audit ui: ${result.action}d ${plain(item.name)} (${plain(result.from)} → ${plain(result.to)})`);

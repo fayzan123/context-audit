@@ -1,5 +1,5 @@
 import type { SecurityFinding, Skill } from "./types.js";
-import { isSkillMd } from "./skills.js";
+import { findingPath, isSkillMd } from "./skills.js";
 import { flatten, parseYaml } from "./yaml.js";
 
 const snip = (s: string, n = 100): string =>
@@ -75,7 +75,10 @@ const KNOWN_KEYS = new Set([
 export function frontmatterFindings(skills: Skill[]): SecurityFinding[] {
   const findings: SecurityFinding[] = [];
   const add = (skill: Skill, f: Omit<SecurityFinding, "skill">): void => {
-    findings.push({ skill: skill.dirName, ...f });
+    // Resolved here, from the skill that produced the finding — see
+    // findingPath in security.ts for why a name-keyed lookup afterwards
+    // resolves to the wrong file when two assets share a dispatch name.
+    findings.push({ skill: skill.dirName, path: findingPath(skill, f.file), ...f });
   };
 
   for (const skill of skills) {

@@ -1,12 +1,20 @@
 # context-audit
 
-**The dashboard for your skills: what they cost in every session, what actually fires, what's dead weight, and what's dangerous — for Claude Code, Codex, Cursor and every AGENTS.md on the machine.**
+**The dashboard for your skills: what they cost in every session, what actually fires, what's dead weight, and what's dangerous — for Claude Code, Codex, Cursor and the cross-tool AGENTS.md standard.**
 
 ![context-audit dashboard — skills view with cost meters, fire counts and dead-weight highlighting](docs/dashboard.png)
 
 ```
 npx context-audit ui
 ```
+
+Most people don't run audit tools — they ask their agent. Install the companion skill once and the tool becomes something you can ask for in plain language:
+
+```
+npx context-audit install-skill
+```
+
+Then, in any session: *"why isn't my skill firing?"* · *"audit my skills"* · *"what is my context costing?"* — your agent runs the audit, verifies the findings before alarming you, and opens the dashboard when you want to browse and clean up.
 
 Everything runs locally. Nothing leaves the machine.
 
@@ -68,6 +76,7 @@ result: listing over budget · 73 asset(s) never fired · 2 security flag(s)
 ```
 npx context-audit                  # detect every tool on the machine, audit them all
 npx context-audit ui               # the audit as a local dashboard
+npx context-audit install-skill    # teach your agent to run all of this on request
 npx context-audit --source codex,cursor     # narrow to specific tools
 npx context-audit path/to/skills   # audit one claude-format skills directory
 npx context-audit --agent          # compact JSON for AI agents
@@ -135,11 +144,13 @@ context-audit is for what they don't cover: it is **tool-agnostic** (`/doctor` i
 
 ## Agent-first
 
-Most people won't run this raw — their agent will:
+Most people won't run this raw — their agent will. The companion skill ([`skill/SKILL.md`](skill/SKILL.md), installed by `npx context-audit install-skill`) is the primary surface, and it's built around the symptoms people actually feel rather than the tool's own taxonomy:
 
+- **The acute one: "why is Claude ignoring my skill?"** The skill dispatches on that question and knows the answer is usually the listing budget — over ~8,000 chars, descriptions get silently dropped and auto-triggering dies. The audit turns a vague frustration into a percentage and a fix.
+- **The chronic one: dead weight.** Nobody wakes up wanting an audit report, so the skill delivers the cleanup conversation once you're in the door — and when browsing beats chat, it starts the dashboard and hands you the URL instead of narrating 38 rows.
 - `--agent` emits a token-efficient report: security flags in full (agents must verify them), informational noise aggregated to counts, tables trimmed. On a 75-skill directory that's ~1.8k tokens instead of ~22k.
 - Every finding carries an absolute `path` alongside its `line`. "Verify before you alarm the user" is only followable if the finding names the file to open — asking a reader to join a skill name against a relative path is asking for the wrong file to be opened, and in testing that is exactly what happened: a verifying agent checked a same-named file elsewhere on the machine and reported two bugs that did not exist.
-- [`skill/SKILL.md`](skill/SKILL.md) is a companion skill you can drop into your skills directory. It teaches your agent to run the audit, verify findings against the cited lines before alarming you, and propose cleanups (paired with [skillet](https://github.com/fayzan123/skillet)).
+- Cleanups pair with [skillet](https://github.com/fayzan123/skillet), which does the rewriting this tool deliberately doesn't.
 
 ## Facts, not judgment
 

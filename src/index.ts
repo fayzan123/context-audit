@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { discoverSkills, loadSkill } from "./skills.js";
 import { contentFacts } from "./content.js";
 import { securityScan } from "./security.js";
@@ -11,7 +11,8 @@ import { ADAPTERS, SOURCE_IDS, auditSource } from "./sources/index.js";
 import type { SourceContext } from "./sources/index.js";
 import type { AuditResult, MultiAuditResult, Skill, SourceAudit, SourceId } from "./types.js";
 
-const HELP = `context-audit — npm audit for agent instructions. Facts, not judgment.
+const HELP = `context-audit — what your skills cost every session, what actually
+fires, what's dead weight, and what's dangerous. Facts, not judgment.
 
 Audits the instruction files your AI coding tools execute — Claude Code
 skills/agents/commands/CLAUDE.md, Codex prompts and AGENTS.md, Cursor rules,
@@ -28,6 +29,10 @@ Usage:
                                  enable/disable for Claude user skills. Localhost
                                  only; --no-open prints the URL without launching
                                  a browser
+  context-audit install-skill    install the companion skill into
+                                 ~/.claude/skills/context-audit — after that,
+                                 asking your agent "why isn't my skill firing?"
+                                 or "audit my skills" runs this tool for you
 
 Options:
   --source <ids>        audit only these sources (comma-separated:
@@ -46,7 +51,7 @@ Exit codes: 0 = no security flags · 1 = at least one security flag · 2 = usage
 Everything runs locally. Nothing leaves the machine.`;
 
 interface Args {
-  command: "audit" | "scan" | "ui";
+  command: "audit" | "scan" | "ui" | "install-skill";
   target?: string;
   output: "report" | "json" | "agent";
   history: boolean;
@@ -99,6 +104,8 @@ function parseArgs(argv: string[]): Args {
   } else if (positional[0] === "ui") {
     args.command = "ui";
     args.target = positional[1];
+  } else if (positional[0] === "install-skill") {
+    args.command = "install-skill";
   } else {
     args.target = positional[0];
   }
@@ -114,6 +121,36 @@ function fail(msg: string): never {
 const hasFlags = (sources: SourceAudit[]): boolean =>
   sources.some((s) => s.security.some((f) => f.level === "flag"));
 
+/**
+ * Copy the bundled companion skill into the user's skills directory. The skill
+ * is the surface most users actually meet — they ask their agent, not a
+ * terminal — so installing it has to be one command, not "clone the repo and
+ * copy a file". Idempotent: same content means no write and says so.
+ */
+function installSkill(home: string): void {
+  let content: string;
+  try {
+    content = readFileSync(new URL("../skill/SKILL.md", import.meta.url), "utf8");
+  } catch {
+    return fail("bundled companion skill missing — reinstall context-audit (npm i -g context-audit)");
+  }
+  const dir = join(home, ".claude", "skills", "context-audit");
+  const dest = join(dir, "SKILL.md");
+  const existing = existsSync(dest) ? readFileSync(dest, "utf8") : undefined;
+  if (existing === content) {
+    console.log(`already installed and up to date: ${dest}`);
+    return;
+  }
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(dest, content);
+  console.log(`${existing === undefined ? "installed" : "updated"}: ${dest}`);
+  console.log(`
+Your agent picks this up in new sessions. Ask in plain language:
+  "why isn't my skill firing?" · "audit my skills" · "what is my context costing?"
+The skill runs the audit, verifies findings before alarming you, and starts
+the dashboard (context-audit ui) when you want to browse and clean up.`);
+}
+
 function toSourceAudit(source: SourceId, skills: Skill[], strict: boolean): SourceAudit {
   return {
     source,
@@ -126,6 +163,11 @@ function toSourceAudit(source: SourceId, skills: Skill[], strict: boolean): Sour
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const ctx: SourceContext = { home: homedir(), cwd: process.cwd(), transcripts: args.transcripts };
+
+  if (args.command === "install-skill") {
+    installSkill(ctx.home);
+    return;
+  }
 
   if (args.command === "ui") {
     // Deferred import: the dashboard pulls in the http server and the built

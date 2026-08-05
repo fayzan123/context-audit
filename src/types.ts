@@ -241,6 +241,15 @@ export interface UiItem {
   findings: SecurityFinding[];
   /** The engine could not fully parse this item (no readable entry file). */
   parseError?: boolean;
+  /**
+   * Absolute path of this skill's other copy when the same name sits in both
+   * `~/.claude/skills` and `~/.claude/skills-disabled`. Set on both rows —
+   * `enabled` says which side this row is. The disabled side is shadowed: it
+   * can never dispatch and cannot be re-enabled while the twin exists, and
+   * fire history (keyed by dispatch name) is attributed to the enabled copy
+   * only.
+   */
+  twinPath?: string;
 }
 
 /** The pitch in four numbers, plus the denominators that keep them honest. */

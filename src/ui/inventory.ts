@@ -47,6 +47,8 @@ interface Row {
   plugin?: UiPluginMeta;
   /** Fire tracking exists for this row's kind (claude skills/commands, codex prompts). */
   tracked: boolean;
+  /** The other copy's path when this name exists both enabled and disabled. */
+  twinPath?: string;
 }
 
 const V1_READONLY = {
@@ -192,6 +194,27 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
     }
   }
 
+  // The same dispatch name on both sides of the toggle — a copy in skills/ AND
+  // one in skills-disabled/ — is a real machine state. Both rows stay (their
+  // contents, and therefore their findings, can differ), but they are linked:
+  // the disabled copy is SHADOWED — it never dispatches, its toggle would
+  // collide, and the name's fire history belongs to the enabled copy — and
+  // rendering the two as unrelated rows with identical fire counts read as a
+  // double-count bug on the machine this was found on.
+  const enabledUserSkills = new Map(
+    rows
+      .filter((r) => r.source === "claude" && (r.skill.kind ?? "skill") === "skill" && r.enabled && r.togglable)
+      .map((r) => [r.skill.dirName, r])
+  );
+  for (const row of rows) {
+    if (row.enabled || row.source !== "claude" || (row.skill.kind ?? "skill") !== "skill" || !row.togglable) continue;
+    const twin = enabledUserSkills.get(row.skill.dirName);
+    if (twin) {
+      row.twinPath = twin.skill.dir;
+      twin.twinPath = row.skill.dir;
+    }
+  }
+
   const findingsByRow = new Map<Row, SecurityFinding[]>();
   for (const row of rows) findingsByRow.set(row, findingsFor(row));
   const sources = [...new Set(rows.map((r) => r.source))];
@@ -206,7 +229,7 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
   // plausible name in both), which is a fabricated number in a tool whose
   // entire claim is that it does not fabricate numbers.
   const usageByName = new Map<string, UiFires>();
-  const usageKey = (source: string, name: string): string => `${source} ${name}`;
+  const usageKey = (source: string, name: string): string => `${source}\u0000${name}`;
   let history: UiPayload["history"];
   if (opts.history) {
     // Claude-format assets — user, project, plugin, and explicit-directory
@@ -273,7 +296,12 @@ export async function buildUiPayload(ctx: SourceContext, opts: UiBuildOptions): 
       bodyChars: s.body.length,
       findings: findingsByRow.get(row) ?? [],
     };
-    if (row.tracked && opts.history) {
+    if (row.twinPath) item.twinPath = row.twinPath;
+    // Fires are recorded by dispatch name. A shadowed disabled copy never
+    // dispatches while its enabled twin exists, so handing it the name's
+    // count would report the same fires twice; it gets no fires field and
+    // the frontend explains why instead of showing "n/a — untracked".
+    if (row.tracked && opts.history && !(row.twinPath && !row.enabled)) {
       item.fires = usageByName.get(usageKey(row.source, s.dirName)) ?? null;
     }
     if (!s.hasSkillMd) item.parseError = true;

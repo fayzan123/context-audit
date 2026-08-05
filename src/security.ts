@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { Confidence, SecurityFinding, Severity, Skill } from "./types.js";
 import { frontmatterFindings } from "./frontmatter.js";
-import { isSkillMd, VENDOR_FILE_BUDGET } from "./skills.js";
+import { findingPath, isSkillMd, VENDOR_FILE_BUDGET } from "./skills.js";
 
 const snip = (s: string, n = 100): string =>
   (s.length > n ? s.slice(0, n) + "…" : s).replace(/\s+/g, " ").trim();
@@ -160,7 +160,7 @@ interface Check {
 type Add = Omit<SecurityFinding, "skill" | "file">;
 
 function push(findings: SecurityFinding[], skill: Skill, file: string, add: Add): void {
-  findings.push({ skill: skill.dirName, file, ...add });
+  findings.push({ skill: skill.dirName, file, path: findingPath(skill, file), ...add });
 }
 
 /**
@@ -296,6 +296,42 @@ const INTERPRETER_STAGE =
 
 /** Fetches bytes from the network. */
 const FETCH = /\b(?:curl|wget|aria2c|Invoke-WebRequest|iwr)\b/i;
+
+/**
+ * Evidence that is a REGEX DESCRIBING a command rather than a command.
+ * `powershell.exe.*-enc` is a detection rule — a real SIEM allowlist entry of
+ * exactly that shape produced this tool's one critical flag on a clean machine
+ * — and a rule cannot execute: the program name itself is not a program.
+ *
+ * The test is deliberately narrow, because the rule that decides this has to
+ * be one an attacker cannot satisfy while keeping the attack working:
+ * **the metacharacter must sit in the COMMAND token** — the first whitespace-
+ * separated word of a pipeline stage. That is where a detection rule always
+ * puts it, and the one place a working attack cannot: `curl` and `bash` have
+ * to be spelled exactly or nothing runs.
+ *
+ * Everywhere else, metacharacters are free for an attacker to add and prove
+ * nothing, which is why the span is narrowed first (URL tokens, quoted spans,
+ * and anything past `#` or `;` are dropped) and why testing the whole span was
+ * wrong: `curl … | bash -s .[^.]*` is a fully working download-execute — bash
+ * passes an unmatched glob through as a literal argument — and a span-wide
+ * test demoted it to info. An ARGUMENT is not evidence of anything.
+ *
+ * Narrowed, not un-buyable: a command token could in principle carry a class
+ * that expands to a real binary (`/bin/ba[^x]h`), which is filesystem-
+ * dependent and far more contrived. Anything failing this test keeps its flag,
+ * so every miss here is the status quo, never a new pass.
+ */
+const URL_TOKEN = /\bhttps?:\/\/[^\s"'<>]+/gi;
+const REGEX_METACHAR = /\S\.[*+]|\.[*+]\S|\[\^|\(\?:/;
+function regexPatternText(evidence: string): boolean {
+  const span = evidence
+    .replace(URL_TOKEN, "")
+    .replace(/"[^"]*"|'[^']*'/g, "")
+    .split(/(?:^|\s)#/)[0]
+    .split(";")[0];
+  return span.split("|").some((stage) => REGEX_METACHAR.test(stage.trim().split(/\s+/)[0] ?? ""));
+}
 
 /**
  * Git plumbing that prints stored bytes to stdout. Not a network fetch, but the
@@ -463,14 +499,21 @@ const checks: Check[] = [
     run(skill, file, content, findings) {
       const emit = (line: number, text: string, label: string, evidence: string): void => {
         const comment = (COMMENT_SYNTAX.find((s) => s.re.test(file))?.test ?? /^\s*#/).test(text);
+        // A regex DESCRIBING a command cannot itself execute (see
+        // regexPatternText) — detection-engineering content is where the
+        // engine's own patterns appear quoted back at it, and flagging a SIEM
+        // allowlist entry critical teaches the reader that "critical" can
+        // mean "documentation".
+        const patternText = !comment && regexPatternText(evidence);
+        const inert = comment || patternText;
         // A commented-out command does not execute — report it, but don't fail on it.
         push(findings, skill, file, {
           line,
           check: "download-execute",
-          level: comment ? "info" : "flag",
-          severity: comment ? "low" : "critical",
-          confidence: comment ? "possible" : "likely",
-          message: `${label}${comment ? " (commented out — inert)" : ""}`,
+          level: inert ? "info" : "flag",
+          severity: inert ? "low" : "critical",
+          confidence: inert ? "possible" : "likely",
+          message: `${label}${comment ? " (commented out — inert)" : ""}${patternText ? " (regex pattern text — describes a command, cannot execute as written)" : ""}`,
           evidence: snip(evidence),
         });
       };
@@ -1456,21 +1499,6 @@ const CAPABILITY_DISCLOSURE = new Set([
   "bundled-script-autorun",
 ]);
 
-/**
- * Absolute path per (skill, relative file), so every finding can name the file
- * to open rather than a path fragment the reader has to reassemble from the
- * skill list. Synthetic file labels (`node_modules`, `.git/objects`) have no
- * real file behind them and fall back to the skill directory.
- */
-function absolutePaths(skills: Skill[]): Map<string, string> {
-  const paths = new Map<string, string>();
-  for (const skill of skills) {
-    for (const f of skill.files) paths.set(`${skill.dirName} ${f.relPath}`, f.absPath);
-    paths.set(`${skill.dirName} `, skill.dir);
-  }
-  return paths;
-}
-
 export function securityScan(skills: Skill[], strict = true): SecurityFinding[] {
   const findings: SecurityFinding[] = [...frontmatterFindings(skills)];
   const packageRoots = new Map<string, string[]>();
@@ -1555,15 +1583,15 @@ export function securityScan(skills: Skill[], strict = true): SecurityFinding[] 
   // has a package.json (or dist-info/__init__.py) at its root; a payload dropped
   // into a directory called `node_modules` has none. Keying on the path alone
   // would have handed attackers the exemption for the price of one mkdir.
-  const paths = absolutePaths(skills);
-  const dirs = new Map(skills.map((s) => [s.dirName, s.dir]));
+  //
+  // Every finding already carries its absolute `path`, resolved at push time
+  // from the asset that produced it (see findingPath in skills.ts). It is
+  // never looked up afterwards by dispatch name — a name is not unique across
+  // kinds or scopes, so a name-keyed map hands same-named assets each other's
+  // files.
   const scoped = findings.map((f) => {
     const relaxed = !strict && f.level === "flag" && CAPABILITY_DISCLOSURE.has(f.check);
-    const withPath = {
-      ...f,
-      path: paths.get(`${f.skill} ${f.file}`) ?? join(dirs.get(f.skill) ?? "", f.file),
-    };
-    const g = relaxed ? { ...withPath, level: "info" as const } : withPath;
+    const g = relaxed ? { ...f, level: "info" as const } : f;
     if (!isVendoredPackage(g.skill, g.file, packageRoots)) return g;
     return g.level === "flag" ? { ...g, level: "info" as const, vendored: true } : { ...g, vendored: true };
   });

@@ -1,33 +1,40 @@
 # context-audit — spec
 
-npm audit for agent skills. Scans a skills directory (Claude Code, Codex, OpenClaw layout: `<dir>/<name>/SKILL.md`) and reports **facts, never judgment**. The subjective step — merge, rewrite, delete — belongs to the model (skillet) or the human, with this tool's evidence in hand.
+The dashboard for your skills, and the deterministic engine under it. Audits the instruction files AI coding tools execute — Claude Code skills/agents/commands/CLAUDE.md, Codex prompts and AGENTS.md, Cursor rules — and reports **facts, never judgment**: what each asset costs per session, what actually fired in the local transcript window, and whether anything looks dangerous. The subjective step — merge, rewrite, delete, uninstall — belongs to the model (skillet) or the human, with this tool's evidence in hand.
 
 ## The one design rule
 
 Every line of output must be a fact the user can verify in ten seconds. Any check that needs an indefensible threshold either becomes empirical or gets cut. No scores, no grades, no "quality."
 
-## Three evidence classes (v0 ships all three)
+## Surfaces, in the order users meet them
 
-**Content facts** (deterministic, from the files): missing/empty descriptions; exact-duplicate descriptions; frontmatter name ≠ directory name; per-skill and total body token estimates (chars/4, labeled as estimates); the always-injected cost (names + descriptions) vs on-invoke cost (bodies).
+1. **The companion skill** (`skill/SKILL.md`, installed by `context-audit install-skill`). Most users ask their agent, not a terminal. The skill dispatches on the symptoms people feel ("my skill isn't firing", "context feels bloated"), runs `--agent`, verifies findings against cited lines before alarming, and hands over the dashboard when browsing beats chat.
+2. **The dashboard** (`context-audit ui`). Skills-first inventory on a localhost server: per-item token cost with meters, fires in the usage window, dead-weight highlighting, security findings, enable/disable for Claude user skills, plugin updates via the official CLI. Binds to 127.0.0.1, token-gated on every request, Host/Origin validated.
+3. **The CLI**. Deterministic and scriptable: exit codes, `--json`, `--agent`, diffable over time. `scan <path>` is the pre-install gate — it runs strict (capability grants fail it) and lets an agent decide before untrusted content enters its context.
 
-**Security facts** (deterministic, from the files — this is why it's a CLI, not a skill: a skill-based scanner feeds the malicious content to the model it's trying to protect): base64 blobs that decode to URLs/commands; external URLs and their domains; `curl|sh`, `eval`, `rm -rf` in bundled scripts; zero-width/bidi unicode (hidden-instruction vector); known injection phrases ("ignore previous instructions", "do not tell the user", credential-file references); path traversal out of the skill dir. Findings carry the evidence (file, line, decoded snippet). Exit code 1 when any security finding exists — CI-able.
+## Three evidence classes
 
-**History facts** (empirical, from local transcripts in `~/.claude/projects/**/*.jsonl`): per-skill invocation count, session count, last-fired date; never-fired skills; invocations followed by a user interrupt. The scan window is reported so the facts are scoped. Nothing leaves the machine.
+**Content facts** (deterministic, from the files): missing/empty/duplicate descriptions; frontmatter name ≠ directory name; per-asset and total body token estimates (chars/4, labeled as estimates); the always-injected cost (names + descriptions, or whole bodies for instruction files) vs on-invoke cost; the Claude Code skill-listing character budget and the percentage of it in use.
 
-## CLI
+**Security facts** (deterministic, from the files — a CLI rather than a skill because a skill-based scanner feeds the malicious content to the model it is trying to protect): the detection engine in `src/security.ts` and `src/frontmatter.ts`, built from documented campaign shapes and organized around mechanisms rather than spellings. Findings carry severity and confidence as separate axes, plus an absolute `path` and `line` to verify. Exit 1 on any flag.
 
-```
-context-audit [dir]              # audit a skills directory (default ~/.claude/skills)
-context-audit scan <path>        # pre-install: content+security only, on any skill dir/file
-  --json                       # machine output
-  --no-history                 # skip transcript scan
-  --transcripts <dir>          # override ~/.claude/projects
-```
+**History facts** (empirical, from local transcripts): per-asset invocation count, session count, last-fired date; never-fired assets; post-invocation interrupts. Claude transcripts and Codex rollouts are read; Cursor keeps no readable history and the report says so instead of guessing. The scan window is stated everywhere it matters — it starts at the oldest surviving transcript, so "none in window" is never "never". Nothing leaves the machine.
 
-## Non-goals (earned by observed friction, never designed in advance)
+## Sources
 
-Routing/dispatch simulator (v0.3 candidate), remote URL/tarball scanning, marketplace integration, fix application (that's skillet), scores of any kind, a GUI.
+| id | discovers | always-injected model | usage history |
+|---|---|---|---|
+| `claude` | `~/.claude` + `./.claude` skills, agents, commands; global + project `CLAUDE.md`; plugin assets at their active version | names + descriptions; instruction-file bodies | `~/.claude/projects` |
+| `codex` | `~/.codex/AGENTS.md`, `~/.codex/prompts/*.md` | AGENTS.md body; prompt names | `~/.codex/sessions` |
+| `cursor` | `./.cursor/rules/*.mdc` (nested included), legacy `./.cursorrules` | `alwaysApply` + legacy bodies; rule descriptions | none kept |
+| `agents-md` | `./AGENTS.md`, `~/AGENTS.md` — audited once, not per consuming tool | whole body | — |
+
+The unit of audit is "an instruction file an agent will execute," not "a Claude skill." The engine is shared; each source contributes discovery, a cost model, and (where transcripts exist) usage.
+
+## Non-goals
+
+Fix application (that's skillet's job), in-browser editing/installing/deleting, sandboxed runtime detonation, marketplace browsing or installing (updating an *already-installed* plugin does ship — it shells out to the official `claude` CLI and reads the local marketplace checkout for the version claim), remote URL/tarball scanning, scores of any kind. A routing-collision simulator and SARIF output are the likeliest next additions.
 
 ## Constraints
 
-Zero runtime dependencies (a security tool should be auditable in one sitting). Node 18+. TypeScript, `tsc` build, single `bin`.
+Zero runtime dependencies (a security-adjacent tool should be auditable in one sitting). Node 18+. TypeScript, `tsc` build plus an esbuild bundling step for the dashboard page, single `bin`. The regression corpus in `test/run.mjs` pins every fixed evasion and a false-positive floor that must stay clean.
