@@ -1,0 +1,4 @@
+{"timestamp":"2026-07-03T08:00:00.000Z","type":"session_meta","payload":{"id":"sess-cccc","timestamp":"2026-07-03T08:00:00.000Z","cwd":"/proj/beta","originator":"codex_vscode","cli_version":"0.142.0","source":"vscode"}}
+{"timestamp":"2026-07-03T08:00:00.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /proj/beta\n\n<INSTRUCTIONS>\nBeta rules.\n</INSTRUCTIONS>"}]}}
+{"timestamp":"2026-07-03T08:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"/review the diff"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"/review once more"}]}}

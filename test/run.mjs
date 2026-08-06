@@ -2438,14 +2438,74 @@ console.log("UI FRONTEND tier (fixture render):");
     !/<img src=x|<script>alert|<svg onload|<b>f<\/b>|<u>c<\/u>/.test(hostilePage),
     (hostilePage.match(/<img src=x|<script>alert|<svg onload/g) ?? []).join(", ")
   );
+
+  // --- Ledger degradation, backfill horizon, purged events ------------------
+  // A broken ledger must degrade LOUDLY: the payload's caveat renders in the
+  // rail instead of the page quietly showing window-only figures as complete.
+  const caveatHtml = renderApp(
+    { ...payload, ledgerCaveat: "usage ledger unavailable (EACCES) — lifetime figures omitted" },
+    defaultState()
+  );
+  check(
+    "a broken ledger renders its caveat in the filter rail",
+    caveatHtml.includes("usage ledger unavailable — window figures only") &&
+      caveatHtml.includes("lifetime figures omitted"),
+    "ledger caveat missing"
+  );
+  check(
+    "no ledger caveat renders when the ledger worked",
+    !html.includes("usage ledger unavailable"),
+    "phantom ledger caveat"
+  );
+  // The backfill horizon extends the typed channel past the transcript window;
+  // the label names its method inline so the two windows are never conflated.
+  const backfillHtml = renderApp(
+    { ...payload, history: { ...payload.history, backfilledSince: "2026-02-26T08:00:00Z" } },
+    defaultState()
+  );
+  check(
+    "a backfilled horizon renders labeled with its method",
+    backfillHtml.includes("typed-channel history extends to 2026-02-26 (backfilled)"),
+    "backfill horizon line missing"
+  );
+  check(
+    "no backfill claim without backfilled events",
+    !html.includes("(backfilled)"),
+    "phantom backfill claim"
+  );
+  // An event whose transcript was already purged at scan time renders disabled
+  // up front — not after a dead open round-trip.
+  const purgedItem = item({
+    id: "purgeditem000000",
+    name: "purgy",
+    fires: {
+      invocations: 1,
+      sessions: 1,
+      interruptedAfter: 0,
+      lifetime: { invocations: 2, sessions: 2, firstFired: "2026-03-01T00:00:00Z", lastFired: "2026-08-01T00:00:00Z" },
+      trackedSince: "2026-03-01T00:00:00Z",
+      events: [
+        { id: "ev-live", ts: "2026-08-01T00:00:00Z", project: "proj", channel: "auto" },
+        { id: "ev-gone", ts: "2026-03-01T00:00:00Z", project: "proj", channel: "typed", purged: true },
+      ],
+    },
+  });
+  const purgedDrawer = renderDrawer(purgedItem, defaultState(), usageWindow(payload));
+  check(
+    "a scan-time-purged event row renders disabled and says why",
+    /data-open-event="ev-gone"[^>]*disabled/.test(purgedDrawer) &&
+      purgedDrawer.includes("transcript deleted (event retained)"),
+    "purged row not disabled up front"
+  );
+  check(
+    "an event whose transcript survives stays openable",
+    /data-open-event="ev-live"(?![^>]*disabled)/.test(purgedDrawer),
+    "live event row wrongly disabled"
+  );
 }
 
 rmSync(tmp, { recursive: true, force: true });
 
-if (failures > 0) {
-  console.error(`\n${failures} assertion(s) failed`);
-  process.exit(1);
-}
 // --- Companion-skill install ------------------------------------------------
 // `install-skill` is the agent-first front door: it must be one command,
 // idempotent, and byte-identical to the skill shipped in the package.
@@ -2471,6 +2531,40 @@ console.log("INSTALL-SKILL tier (companion skill):");
     r2.code === 0 && /already installed and up to date/.test(r2.out),
     `exit ${r2.code}: ${r2.out.slice(0, 120)}`
   );
+}
+
+// --- Unit suites ------------------------------------------------------------
+// Each test/unit-*.mjs is a standalone node script that exits non-zero on
+// failure. They run post-build (importing dist/) and their exit codes fold
+// into the same failure count as everything above.
+console.log("UNIT suites:");
+{
+  const { readdirSync } = await import("node:fs");
+  const { spawnSync } = await import("node:child_process");
+  const units = readdirSync(join(root, "test"))
+    .filter((n) => /^unit-.+\.mjs$/.test(n))
+    .sort();
+  for (const unit of units) {
+    const r = spawnSync("node", [join(root, "test", unit)], { encoding: "utf8" });
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    const checks = (out.match(/^\s*ok: /gm) ?? []).length;
+    if (r.status === 0) {
+      ok(`${unit} (${checks} checks)`);
+    } else {
+      const fails = out
+        .split("\n")
+        .filter((l) => /FAIL/.test(l))
+        .slice(0, 5)
+        .join(" | ");
+      check(unit, false, fails || out.slice(-300).replace(/\n/g, " | "));
+    }
+  }
+  check("unit suites were found and run", units.length > 0, "no test/unit-*.mjs files");
+}
+
+if (failures > 0) {
+  console.error(`\n${failures} assertion(s) failed`);
+  process.exit(1);
 }
 
 console.log("\nall assertions passed");

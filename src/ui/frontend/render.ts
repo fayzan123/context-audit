@@ -1,7 +1,14 @@
 // Pure string rendering — no DOM APIs anywhere in this file. That is a load-
 // bearing constraint, not a style choice: the frontend smoke test imports this
 // module into Node and renders fixture payloads without a browser rig.
-import type { SecurityFinding, UiItem, UiPayload } from "../../types.js";
+import type {
+  Provenance,
+  ProvenanceSource,
+  SecurityFinding,
+  UiFires,
+  UiItem,
+  UiPayload,
+} from "../../types.js";
 
 export type SortKey =
   | "name"
@@ -10,6 +17,7 @@ export type SortKey =
   | "scope"
   | "injected"
   | "fires"
+  | "tokPerFire"
   | "lastFired"
   | "findings"
   | "state";
@@ -49,6 +57,12 @@ export interface AppState {
   /** Replay the load choreography (first paint and rescan only). */
   animate?: boolean;
   sweep?: boolean;
+  /**
+   * Event ids whose transcript the server reported deleted (410). The rows
+   * stay listed — the ledger event is retained — but render disabled, stating
+   * that fact instead of offering a dead open button.
+   */
+  purgedEvents?: string[];
 }
 
 export function defaultState(): AppState {
@@ -107,6 +121,26 @@ export function fmtInt(n: number): string {
 export const tokens = (chars: number): number => Math.ceil(chars / 4);
 const fmtDay = (iso?: string): string => (iso ? iso.slice(0, 10) : "");
 
+const DAY = 86_400_000;
+
+/**
+ * Whole days from `iso` to the payload's scan stamp — the page's only clock.
+ * Date.now() would make the same payload render differently tomorrow.
+ */
+function daysAgo(iso: string, asOf?: string): number | undefined {
+  if (!asOf) return undefined;
+  const a = Date.parse(iso);
+  const b = Date.parse(asOf);
+  if (Number.isNaN(a) || Number.isNaN(b)) return undefined;
+  return Math.max(0, Math.floor((b - a) / DAY));
+}
+
+/** Compact figure for sub-lines: 31200 → "31k", 7750 → "7.8k", 480 → "480". */
+export function fmtK(n: number): string {
+  if (n < 1000) return fmtInt(n);
+  return n < 10_000 ? `${Math.round(n / 100) / 10}k` : `${Math.round(n / 1000)}k`;
+}
+
 /**
  * The payload stamps UTC; this renders in the viewer's own zone. Slicing the
  * ISO string dropped the `Z` and showed UTC as if it were local time — a
@@ -137,6 +171,8 @@ export interface Window {
   note: string;
   /** Short qualifier for table cells: "none in 42d". */
   none: string;
+  /** The payload's scan stamp — the deterministic "now" behind every age figure. */
+  asOf?: string;
 }
 
 export function usageWindow(payload: UiPayload): Window {
@@ -146,6 +182,7 @@ export function usageWindow(payload: UiPayload): Window {
       span: "",
       note: "no local transcripts were scanned, so no usage can be counted",
       none: "no data",
+      asOf: payload.generatedAt,
     };
   }
   const days = Math.max(
@@ -161,6 +198,7 @@ export function usageWindow(payload: UiPayload): Window {
       `Older sessions are deleted by Claude Code and cannot be counted — a skill you used ` +
       `before ${fmtDay(h.windowStart)} shows zero fires here. This is "not used lately", not "never used".`,
     none: `none in ${span}`,
+    asOf: payload.generatedAt,
   };
 }
 
@@ -192,6 +230,70 @@ export const KIND_NOTE: Record<string, string> = {
   rule: "A Cursor rule: applies by glob, always, or on request depending on its frontmatter.",
   instructions: "An instruction file (CLAUDE.md / AGENTS.md): its whole body is in context in every session.",
 };
+
+/**
+ * Which link of the install-date fallback chain produced the date. Stated
+ * next to every date it qualifies: a manifest entry, a file birthtime and a
+ * last-edit mtime are different-strength claims, and the reader is told which
+ * one they are looking at.
+ */
+export const PROVENANCE_LABEL: Record<ProvenanceSource, string> = {
+  "plugin-manifest": "the plugin manifest's install record",
+  birthtime: "file creation time on this machine",
+  git: "first added in git history",
+  mtime: "file modification time — a last edit, not an install date",
+  "first-seen": "first sighting by this tool's ledger",
+};
+
+/** An mtime date is a last edit; calling it an install would overclaim. */
+const provVerb = (p: Provenance): string => (p.source === "mtime" ? "edited" : "installed");
+
+export type Trend = "rising" | "flat" | "quiet" | "new";
+
+export const TREND_GLYPH: Record<Trend, string> = { rising: "↗", flat: "→", quiet: "↘", new: "∗" };
+
+/**
+ * Four-week comparison measured back from the scan stamp: fires in the last 4
+ * ISO weeks vs the 4 before. Counts, not curve-fitting — the glyph's title
+ * states the two numbers the verdict was decided on.
+ */
+export function trendOf(
+  bins: { weekStart: string; count: number }[] | undefined,
+  asOf: string | undefined
+): { trend: Trend; recent: number; prior: number } | undefined {
+  if (!bins || bins.length === 0 || !asOf) return undefined;
+  const t = Date.parse(asOf);
+  if (Number.isNaN(t)) return undefined;
+  let recent = 0;
+  let prior = 0;
+  let oldest = Infinity;
+  for (const b of bins) {
+    const w = Date.parse(b.weekStart);
+    if (Number.isNaN(w) || b.count <= 0) continue;
+    oldest = Math.min(oldest, w);
+    if (w > t - 28 * DAY) recent += b.count;
+    else if (w > t - 56 * DAY) prior += b.count;
+  }
+  if (oldest === Infinity) return undefined;
+  if (recent === 0) return { trend: "quiet", recent, prior };
+  if (oldest > t - 28 * DAY) return { trend: "new", recent, prior };
+  return { trend: recent > prior ? "rising" : "flat", recent, prior };
+}
+
+/**
+ * Cost per recorded fire, window figures on both sides of the division:
+ * (always-in-context cost × sessions + body cost × fires) ÷ fires. Lifetime
+ * fires are never mixed in — they have no matching session denominator.
+ * Undefined when there is nothing to divide by; the cell states what WAS
+ * paid instead, and sorting handles that case explicitly — never Infinity,
+ * never NaN.
+ */
+export function tokPerFire(item: UiItem, totalSessions: number): number | undefined {
+  const f = item.fires;
+  if (!f || f.invocations <= 0) return undefined;
+  const sessions = Math.max(totalSessions, f.sessions);
+  return Math.ceil((item.injectedChars * sessions + item.bodyChars * f.invocations) / 4 / f.invocations);
+}
 
 // --- filtering and sorting (pure, exercised directly by the smoke test) ----
 
@@ -268,7 +370,8 @@ export function visibleItems(payload: UiPayload, state: AppState): UiItem[] {
         matchKinds(i, state.kinds) &&
         matchLens(i, state.lens)
     ),
-    state.sort
+    state.sort,
+    payload.history?.transcriptFiles ?? 0
   );
 }
 
@@ -310,7 +413,7 @@ export function chipCounts(
   return counts;
 }
 
-function sortItems(items: UiItem[], sort: AppState["sort"]): UiItem[] {
+function sortItems(items: UiItem[], sort: AppState["sort"], sessions: number): UiItem[] {
   const key = (i: UiItem): string | number => {
     switch (sort.key) {
       case "name":
@@ -328,7 +431,22 @@ function sortItems(items: UiItem[], sort: AppState["sort"]): UiItem[] {
       // so a tracked zero — the row that actually means "never fired" — is
       // never buried under rows the data cannot speak to.
       case "fires":
-        return i.fires === undefined ? (sort.dir === 1 ? Number.MAX_SAFE_INTEGER : -1) : i.fires?.invocations ?? 0;
+        // Sort follows the cell's leading figure: lifetime when the ledger
+        // join supplied one, the window count otherwise.
+        return i.fires === undefined
+          ? sort.dir === 1
+            ? Number.MAX_SAFE_INTEGER
+            : -1
+          : i.fires?.lifetime?.invocations ?? i.fires?.invocations ?? 0;
+      case "tokPerFire": {
+        const r = tokPerFire(i, sessions);
+        if (r !== undefined) return r;
+        // Nothing to divide by. Tracked-but-fireless rows sort last, and
+        // untracked n/a rows after them — in BOTH directions, without ever
+        // manufacturing an Infinity or NaN key.
+        const rank = i.fires === undefined ? 2 : 1;
+        return sort.dir === 1 ? Number.MAX_SAFE_INTEGER - 2 + rank : -rank;
+      }
       case "lastFired":
         return i.fires?.lastFired ?? "";
       case "findings":
@@ -395,7 +513,8 @@ function readout(
   idx: number,
   animate?: boolean,
   tone = "",
-  note = ""
+  note = "",
+  sub2 = ""
 ): string {
   const style = animate ? ` style="animation-delay:${180 + idx * 70}ms"` : "";
   const title = note ? ` data-tip="${esc(note)}"` : "";
@@ -403,6 +522,7 @@ function readout(
     <span class="engr">${label}${note ? `<b class="why">?</b>` : ""}</span>
     <span class="num">${value}<i>${unit}</i></span>
     <span class="sub">${esc(sub)}</span>
+    ${sub2 ? `<span class="sub sub2">${esc(sub2)}</span>` : ""}
   </div>`;
 }
 
@@ -418,6 +538,13 @@ function headerReadouts(payload: UiPayload, state: AppState): string {
     h.tracked > 0
       ? `of ${fmtInt(h.tracked)} tracked · ${win.span || "no"} window`
       : "no dispatch-tracked items";
+  // Rent is stated per SESSION because that is what the payload's figure is:
+  // Σ always-in-context chars over age-gated silent items. Tone unchanged —
+  // amber stays reserved for dead-weight cost cells and severity.
+  const rent =
+    h.deadWeightChars !== undefined && h.deadWeightChars > 0
+      ? `~${fmtK(tokens(h.deadWeightChars))} tok/session on silent items`
+      : "";
   return [
     readout("inventory", fmtInt(h.items), "files", providers, 0, state.animate, "",
       "Every instruction file found: skills, agents, commands, instruction files and plugin assets, enabled or not."),
@@ -441,7 +568,11 @@ function headerReadouts(payload: UiPayload, state: AppState): string {
       2,
       state.animate,
       "",
-      `${win.note} Only kinds the transcripts record dispatch for are counted here (skills and commands); agents and instruction files have no dispatch record, so they are not called unused.`
+      `${win.note} Only kinds the transcripts record dispatch for are counted here (skills and commands); agents and instruction files have no dispatch record, so they are not called unused.` +
+        (rent
+          ? ` Silent-item rent: the summed always-in-context cost of enabled items that predate the window start yet recorded no fires in it — paid every session either way.`
+          : ""),
+      rent
     ),
     // The listing budget. Absent on machines it does not apply to (no Claude
     // skills) rather than shown as a zero — a budget nothing is subject to is
@@ -613,6 +744,13 @@ function filterRail(payload: UiPayload, state: AppState): string {
       ? `<span class="caveat tip-r" data-tip="installed_plugins.json was missing or unreadable">plugin versions: newest-cached fallback</span>`
       : "";
 
+  // A broken ledger must degrade loudly: lifetime, provenance and dead-weight
+  // are absent from this payload, and the page says so instead of quietly
+  // rendering window-only figures as if they were the whole story.
+  const ledgerCaveat = payload.ledgerCaveat
+    ? `<span class="caveat tip-r" data-tip="${esc(payload.ledgerCaveat)}">usage ledger unavailable — window figures only</span>`
+    : "";
+
   return `<div class="rail">
     ${modes}
     <label class="find">
@@ -626,6 +764,7 @@ function filterRail(payload: UiPayload, state: AppState): string {
     ${clear}
     ${flaggedElsewhere}
     ${caveat}
+    ${ledgerCaveat}
   </div>`;
 }
 
@@ -642,6 +781,12 @@ const COLS: { key: SortKey; label: string; cls?: string; note?: string }[] = [
     note: "What this item costs you in EVERY session: tokens loaded into the model's context before you type anything, used or not. Not the size of the file — just the always-loaded part (name + description for skills, whole body for instruction files).",
   },
   { key: "fires", label: "fires", cls: "c-num" },
+  {
+    key: "tokPerFire",
+    label: "tok / fire",
+    cls: "c-num",
+    note: "What one fire cost over the window: (always-in-context cost × sessions + body cost × fires) ÷ fires. An item that never fired shows what was paid for it instead, and sorts last in either direction.",
+  },
   { key: "lastFired", label: "last fired" },
   { key: "findings", label: "findings" },
 ];
@@ -694,11 +839,12 @@ function costCell(item: UiItem, maxInjected: number, win: Window): string {
 function tableHead(state: AppState, win: Window, cols: typeof COLS): string {
   const noteFor = (key: SortKey, fallback?: string): string => {
     if (key === "fires" || key === "lastFired") return win.note;
+    if (key === "tokPerFire") return `${fallback ?? ""}${win.note ? `\n\n${win.note}` : ""}`;
     return fallback ?? "";
   };
   // Tooltips on the right-hand columns anchor right, or they would push the
   // scrollport wider and put a horizontal scrollbar under the whole table.
-  const RIGHT_TIPPED = new Set<SortKey>(["injected", "fires", "lastFired", "findings"]);
+  const RIGHT_TIPPED = new Set<SortKey>(["injected", "fires", "tokPerFire", "lastFired", "findings"]);
   const cells = cols.map((c) => {
     const active = state.sort.key === c.key;
     const arrow = active ? (state.sort.dir === 1 ? "▴" : "▾") : "";
@@ -710,7 +856,7 @@ function tableHead(state: AppState, win: Window, cols: typeof COLS): string {
     const title = note ? ` data-tip="${esc(note)}"` : "";
     const tipR = note && RIGHT_TIPPED.has(c.key) ? " tip-r" : "";
     const label =
-      win.span && (c.key === "lastFired" || c.key === "fires")
+      win.span && (c.key === "lastFired" || c.key === "fires" || c.key === "tokPerFire")
         ? `${c.label} · ${win.span}`
         : c.label;
     return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}${tipR}" data-sort="${c.key}" tabindex="0"${sorted}${title}>${esc(label)}<s aria-hidden="true">${arrow}</s></th>`;
@@ -725,11 +871,25 @@ function switchCell(item: UiItem): string {
   return `<button class="sw${item.enabled ? " on" : ""}" data-toggle="${item.id}" role="switch" aria-checked="${item.enabled}" aria-label="${item.enabled ? "disable" : "enable"} ${esc(item.name)}" title="${item.enabled ? "disable" : "enable"}"><i></i></button>`;
 }
 
-function findingsCell(item: UiItem): string {
+function findingsCell(item: UiItem, win: Window): string {
   const flags = flagCount(item);
   const parts: string[] = [];
   if (flags > 0) {
-    parts.push(`<span class="badge ${hasHigh(item) ? "danger" : "signal"}">▲ ${flags}</span>`);
+    // The fire count rides on the badge only when both facts exist — a flag
+    // on something that actually runs is a different fact from a flag on a
+    // dormant file, and the qualifier says which count this is.
+    const f = item.fires;
+    const n = f ? f.lifetime?.invocations ?? f.invocations : 0;
+    const fireTag = f && n > 0 ? ` · ${fmtInt(n)} fires` : "";
+    const qual =
+      f && n > 0
+        ? f.lifetime && f.trackedSince
+          ? `the flagged item has ${fmtInt(n)} recorded fires since tracking began ${fmtDay(f.trackedSince)}`
+          : `the flagged item has ${fmtInt(n)} recorded fires in the ${win.span || "scanned"} window`
+        : "";
+    parts.push(
+      `<span class="badge ${hasHigh(item) ? "danger" : "signal"}"${qual ? ` title="${esc(qual)}"` : ""}>▲ ${flags}${fireTag}</span>`
+    );
   }
   if (item.parseError) {
     parts.push(`<span class="badge warn" title="the engine could not fully parse this item">couldn&#39;t parse</span>`);
@@ -753,13 +913,28 @@ function nameCell(item: UiItem): string {
   return `${name}${off}${shadowed}`;
 }
 
+/** The fires cell's trend glyph — the verdict and the numbers it rests on, on hover. */
+function trendGlyph(f: UiFires, win: Window): string {
+  const t = trendOf(f.weeklyBins, win.asOf);
+  if (!t) return "";
+  const lastFired = f.lifetime?.lastFired ?? f.lastFired;
+  const note =
+    t.trend === "quiet"
+      ? `quiet — 0 fires in the last 4 ISO weeks, measured back from the scan stamp${lastFired ? ` · last fired ${fmtDay(lastFired)}` : ""}`
+      : t.trend === "new"
+        ? `new — every recorded fire falls inside the last 4 ISO weeks before the scan stamp`
+        : `${t.trend} — ${fmtInt(t.recent)} fire${t.recent === 1 ? "" : "s"} in the last 4 ISO weeks vs ${fmtInt(t.prior)} in the 4 before, measured back from the scan stamp`;
+  return `<i class="trend" title="${esc(note)}">${TREND_GLYPH[t.trend]}</i>`;
+}
+
 function row(
   item: UiItem,
   idx: number,
   state: AppState,
   win: Window,
   maxInjected: number,
-  cols: typeof COLS
+  cols: typeof COLS,
+  sessions: number
 ): string {
   const f = item.fires;
   const has = (key: SortKey): boolean => cols.some((c) => c.key === key);
@@ -768,19 +943,64 @@ function row(
   // both carry the window in their text or their tooltip.
   const firedNote = (u: NonNullable<UiItem["fires"]>): string =>
     `${fmtInt(u.invocations)} invocation${u.invocations === 1 ? "" : "s"} across ${fmtInt(u.sessions)} session${u.sessions === 1 ? "" : "s"}` +
-    `${u.firstFired ? ` · first ${fmtDay(u.firstFired)}` : ""}${u.lastFired ? ` · last ${fmtDay(u.lastFired)}` : ""}\n\n${win.note}`;
+    `${u.firstFired ? ` · first ${fmtDay(u.firstFired)}` : ""}${u.lastFired ? ` · last ${fmtDay(u.lastFired)}` : ""}` +
+    (u.lifetime
+      ? `\n${fmtInt(u.lifetime.invocations)} lifetime across ${fmtInt(u.lifetime.sessions)} session${u.lifetime.sessions === 1 ? "" : "s"}${u.trackedSince ? ` since tracking began ${fmtDay(u.trackedSince)}` : ""} — lifetime counts come from the durable ledger (dated events); the window count comes from transcript lines, a different method.`
+      : "") +
+    `\n\n${win.note}`;
   // Fires are recorded by dispatch name; a shadowed disabled copy never
   // dispatches, so repeating the name's count here would double-report it.
   const shadowed = !!item.twinPath && !item.enabled;
   const shadowNote =
     "fires are recorded by dispatch name, and an enabled copy of this name exists — its row carries the history";
+  // The never-fired cell states the age fact inline when provenance can date
+  // the item: "never" alone is a claim, "never though installed 62d ago" is
+  // the fact worth acting on. Without a provenance date it stays a plain "0".
+  const neverCell = (): string => {
+    const p = item.provenance;
+    const age = p ? daysAgo(p.installedAt, win.asOf) : undefined;
+    return p && age !== undefined
+      ? `<td class="c-num zero" title="${esc(`${provVerb(p)} ${fmtDay(p.installedAt)} (date from ${PROVENANCE_LABEL[p.source]}) — no recorded fires.\n\n${win.note}`)}">never · ${provVerb(p)} ${fmtInt(age)}d</td>`
+      : `<td class="c-num zero" title="${esc(win.note)}">0</td>`;
+  };
   const firesCell = shadowed
     ? `<td class="c-num na" title="${esc(shadowNote)}">—</td>`
     : f === undefined
       ? `<td class="c-num na" title="${esc(untracked)}">n/a</td>`
       : f === null
-        ? `<td class="c-num zero" title="${esc(win.note)}">0</td>`
-        : `<td class="c-num" title="${esc(firedNote(f))}">${fmtInt(f.invocations)}</td>`;
+        ? neverCell()
+        : `<td class="c-num" title="${esc(firedNote(f))}">${
+            f.lifetime
+              ? win.span
+                ? `${fmtInt(f.lifetime.invocations)} <span class="winpart">· ${fmtInt(f.invocations)} in ${win.span}</span>`
+                : fmtInt(f.lifetime.invocations)
+              : fmtInt(f.invocations)
+          }${trendGlyph(f, win)}</td>`;
+  // tok/fire: a ratio when the window has fires to divide by; what was paid,
+  // stated as a fact, when it does not. Never Infinity, never NaN.
+  const ratio = tokPerFire(item, sessions);
+  const tokFireCell = (): string => {
+    if (shadowed) return `<td class="c-num na" title="${esc(shadowNote)}">—</td>`;
+    if (f === undefined) return `<td class="c-num na" title="${esc(untracked)}">n/a</td>`;
+    if (f && ratio !== undefined) {
+      const s = Math.max(sessions, f.sessions);
+      const method =
+        `≈ (${fmtInt(tokens(item.injectedChars))} tok/session × ${fmtInt(s)} sessions + ${fmtInt(tokens(item.bodyChars))} tok body × ${fmtInt(f.invocations)} fires) ÷ ${fmtInt(f.invocations)} fires — window figures on both sides.\n\n${win.note}`;
+      return `<td class="c-num" title="${esc(method)}">${fmtInt(ratio)}</td>`;
+    }
+    if (!item.enabled)
+      return `<td class="c-num na" title="off — no always-in-context cost is being paid">—</td>`;
+    if (!win.span || sessions <= 0) return `<td class="c-num na" title="${esc(win.note)}">n/a</td>`;
+    const paid = tokens(item.injectedChars * sessions);
+    const tail = f === null ? "never fired" : `none in ${win.span}`;
+    const note =
+      `${fmtInt(tokens(item.injectedChars))} tok × ${fmtInt(sessions)} sessions in the ${win.span} window, paid with zero fires recorded in it — there is no per-fire cost to state.` +
+      (f && f.lifetime && f.lifetime.invocations > 0
+        ? `\n${fmtInt(f.lifetime.invocations)} lifetime fire${f.lifetime.invocations === 1 ? "" : "s"} exist${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""}, outside this window.`
+        : "") +
+      `\n\n${win.note}`;
+    return `<td class="c-num zero" title="${esc(note)}">paid ${fmtInt(paid)} · ${tail}</td>`;
+  };
   const last = shadowed
     ? `<td class="na" title="${esc(shadowNote)}">—</td>`
     : f === undefined
@@ -807,8 +1027,9 @@ function row(
     ${has("scope") ? `<td class="dim">${item.scope === "user" ? "user" : "proj"}</td>` : ""}
     ${costCell(item, maxInjected, win)}
     ${firesCell}
+    ${tokFireCell()}
     ${last}
-    <td>${findingsCell(item)}</td>
+    <td>${findingsCell(item, win)}</td>
     <td class="c-act"><button class="act" data-open="${item.id}" title="open in editor">edit</button></td>
   </tr>`;
 }
@@ -853,10 +1074,11 @@ function table(payload: UiPayload, state: AppState): string {
   // bar that grows when you filter would be lying about relative cost.
   const maxInjected = Math.max(...payload.items.map((i) => i.injectedChars), 0);
   const { loose, groups } = grouped(items);
+  const sessions = payload.history?.transcriptFiles ?? 0;
   let idx = 0;
-  const looseRows = loose.map((i) => row(i, idx++, state, win, maxInjected, cols)).join("");
+  const looseRows = loose.map((i) => row(i, idx++, state, win, maxInjected, cols, sessions)).join("");
   const groupRows = groups
-    .map((g) => groupRow(g, span, state.busy) + g.items.map((i) => row(i, idx++, state, win, maxInjected, cols)).join(""))
+    .map((g) => groupRow(g, span, state.busy) + g.items.map((i) => row(i, idx++, state, win, maxInjected, cols, sessions)).join(""))
     .join("");
   // Two different empty states: filters that matched nothing (clear them), and
   // a mode whose base is empty (the way out is the mode, not the filters).
@@ -903,6 +1125,40 @@ const INJECTION_NOTE: Record<UiItem["injection"], string> = {
 };
 
 /**
+ * The trend strip: one discrete cell per ISO week from the first recorded bin
+ * through the scan week, missing weeks rendered as explicit empty cells — a
+ * gap is a fact, not an absence of markup. Countable on purpose; not a line.
+ */
+function weekStrip(f: UiFires, w: Window): string {
+  const bins = f.weeklyBins;
+  if (!bins || bins.length === 0) return "";
+  const byWeek = new Map<string, number>();
+  for (const b of bins) byWeek.set(b.weekStart.slice(0, 10), b.count);
+  const starts = [...byWeek.keys()].sort();
+  const first = Date.parse(starts[0]);
+  if (Number.isNaN(first)) return "";
+  let end = Date.parse(starts[starts.length - 1]);
+  if (w.asOf) {
+    const t = Date.parse(w.asOf);
+    // Extend to the scan week so trailing quiet weeks are visible cells.
+    if (!Number.isNaN(t)) end = Math.max(end, t);
+  }
+  const cells: string[] = [];
+  for (let t0 = first; t0 <= end; t0 += 7 * DAY) {
+    const key = new Date(t0).toISOString().slice(0, 10);
+    const n = byWeek.get(key) ?? 0;
+    const bucket = n === 0 ? "" : n <= 2 ? " b1" : n <= 5 ? " b2" : " b3";
+    cells.push(
+      `<i class="wk${bucket}" title="${esc(`week of ${key} — ${fmtInt(n)} fire${n === 1 ? "" : "s"}`)}"></i>`
+    );
+  }
+  const shown = cells.length > 104 ? cells.slice(cells.length - 104) : cells;
+  const earlier = cells.length - shown.length;
+  return `<div class="wkstrip" role="img" aria-label="fires per ISO week">${shown.join("")}</div>
+    <p class="kv-note">one cell per ISO week, oldest to the scan week${earlier > 0 ? ` · ${fmtInt(earlier)} earlier weeks not shown` : ""} · darker = more fires (1–2, 3–5, 6+)</p>`;
+}
+
+/**
  * The drawer's CONTENTS. Held apart from its container because the container
  * has to outlive a re-render: the 260ms slide is a CSS transition, and a node
  * that is replaced wholesale arrives already-open with nothing to transition
@@ -927,6 +1183,102 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
   // is a transcript-retention limit and the number means nothing without it.
   const fireCaveat =
     f === undefined || !w.note ? "" : `<p class="caveat-note">${esc(w.note)}</p>`;
+
+  // Ledger-backed extras: absent until the ledger join runs, and withheld from
+  // a shadowed twin — the enabled copy's row carries the history.
+  const fx = item.twinPath && !item.enabled ? undefined : f ?? undefined;
+
+  const prov = item.provenance;
+  const provAge = prov ? daysAgo(prov.installedAt, w.asOf) : undefined;
+  const provSection = prov
+    ? `<section>
+        <span class="engr">provenance</span>
+        ${kv(
+          prov.source === "mtime" ? "last edited" : "installed",
+          `<b>${esc(fmtDay(prov.installedAt))}</b>${provAge !== undefined ? ` · ${fmtInt(provAge)}d ago` : ""}${prov.origin ? ` <span class="dim">· from ${esc(prov.origin)}</span>` : ""}`
+        )}
+        <p class="kv-note">Date from ${esc(PROVENANCE_LABEL[prov.source])}. Snapshotted at first sighting, because the filesystem evidence behind it decays.</p>
+      </section>`
+    : "";
+
+  const lifetimeLine = fx?.lifetime
+    ? fx.lifetime.invocations > 0
+      ? `<p class="lifeline"><b>${fmtInt(fx.lifetime.invocations)}</b> lifetime invocation${fx.lifetime.invocations === 1 ? "" : "s"} across <b>${fmtInt(fx.lifetime.sessions)}</b> session${fx.lifetime.sessions === 1 ? "" : "s"}${fx.trackedSince ? ` since tracking began ${fmtDay(fx.trackedSince)}` : " (tracking start date unavailable)"}` +
+        `${fx.lifetime.firstFired ? `<br>first ${fmtDay(fx.lifetime.firstFired)}` : ""}${fx.lifetime.lastFired ? ` · last ${fmtDay(fx.lifetime.lastFired)}` : ""}</p>`
+      : `<p class="lifeline zero">0 recorded in the durable ledger${fx.trackedSince ? ` since tracking began ${fmtDay(fx.trackedSince)}` : ""} — the window count above comes from transcript lines, a different method.</p>`
+    : "";
+
+  const ch = fx?.byChannel;
+  const chTotal = ch ? ch.auto + ch.typed : 0;
+  const channelBlock =
+    ch && chTotal > 0
+      ? (() => {
+          const pa = Math.round((ch.auto / chTotal) * 100);
+          return (
+            `<div class="chsplit" title="${esc(`model-dispatched (auto) vs user-typed fires, lifetime${fx!.trackedSince ? ` since ${fmtDay(fx!.trackedSince)}` : ""}`)}">
+              <span class="chbar" aria-hidden="true"><i class="ch-auto" style="width:${pa}%"></i><i class="ch-typed" style="width:${100 - pa}%"></i></span>
+              <span class="chlab">auto <b>${fmtInt(ch.auto)}</b> · typed <b>${fmtInt(ch.typed)}</b></span>
+            </div>` +
+            (ch.auto === 0
+              ? `<p class="kv-note">never auto-fired — every recorded fire was typed. The model has not reached for this on its own${fx!.trackedSince ? ` since tracking began ${fmtDay(fx!.trackedSince)}` : ""}.</p>`
+              : "")
+          );
+        })()
+      : "";
+
+  const provEntries = fx?.byProvider
+    ? Object.entries(fx.byProvider)
+        .filter((e): e is [string, number] => typeof e[1] === "number")
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    : [];
+  const providerLines =
+    provEntries.length > 1
+      ? `<p class="provline">${provEntries.map(([s, n]) => `${esc(s)} <b>${fmtInt(n)}</b>`).join(" · ")} <span class="dim">lifetime fires per provider</span></p>`
+      : "";
+
+  const oc = fx?.outcomes;
+  const outcomeLine =
+    oc && (oc.error > 0 || oc.rejected > 0)
+      ? `<p class="outcomeline" title="${esc(`launch results recorded in the ledger${fx!.trackedSince ? ` since tracking began ${fmtDay(fx!.trackedSince)}` : ""}`)}"><b>${fmtInt(oc.ok + oc.error + oc.rejected)}</b> fires${oc.error > 0 ? ` · <b>${fmtInt(oc.error)}</b> errored` : ""}${oc.rejected > 0 ? ` · <b>${fmtInt(oc.rejected)}</b> rejected` : ""}</p>`
+      : "";
+
+  const collisionBlock = item.collision
+    ? `<div class="caveat-note">same dispatch name at ${fmtInt(item.collision.paths.length + 1)} paths — fires cannot be split between the copies. The other cop${item.collision.paths.length === 1 ? "y" : "ies"}:
+        <ul class="colpaths">${item.collision.paths.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>`
+    : "";
+
+  const evSection =
+    fx?.events && fx.events.length > 0
+      ? (() => {
+          const evs = fx.events!;
+          const total = fx.lifetime?.invocations;
+          const cap =
+            total !== undefined && total > evs.length
+              ? `latest ${fmtInt(evs.length)} of ${fmtInt(total)} recorded`
+              : `${fmtInt(evs.length)} recorded`;
+          const rows = evs
+            .map((ev) => {
+              // Purged either at scan time (the payload says so) or since —
+              // discovered by a 410 on an open attempt this session.
+              const purged = !!ev.purged || (state.purgedEvents?.includes(ev.id) ?? false);
+              const marks =
+                (ev.outcome === "error" ? `<span class="evmark">error</span>` : "") +
+                (ev.outcome === "rejected" ? `<span class="evmark">rejected</span>` : "") +
+                (ev.interrupted ? `<span class="evmark">interrupted</span>` : "");
+              return `<button class="evrow" data-open-event="${esc(ev.id)}" data-event-item="${item.id}"${purged ? " disabled" : ""} title="${esc(purged ? "transcript deleted (event retained)" : "open the transcript at this invocation")}">
+                <span class="evts">${esc(fmtDay(ev.ts))}</span>
+                <span class="evproj">${esc(ev.project)}</span>
+                <span class="evch">${esc(ev.channel)}</span>${marks}${purged ? `<span class="evgone">transcript deleted (event retained)</span>` : ""}
+              </button>`;
+            })
+            .join("");
+          return `<section>
+            <span class="engr">invocations</span>
+            <p class="evcap dim">${cap} · newest first${fx.trackedSince ? ` · tracked since ${fmtDay(fx.trackedSince)}` : ""} · each row opens its transcript at the line</p>
+            <div class="evlist">${rows}</div>
+          </section>`;
+        })()
+      : "";
 
   const fm = item.frontmatter
     ? `<section><span class="engr">frontmatter</span><table class="fmt">${Object.entries(item.frontmatter)
@@ -998,11 +1350,19 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
         <p class="kv-note">The rest of the file. Loaded only after this item is actually invoked, so it costs nothing on a session that never uses it.</p>
         ${plugin}
       </section>
+      ${provSection}
       <section>
         <span class="engr">fires</span>
         <p>${fireLine}</p>
+        ${lifetimeLine}
+        ${channelBlock}
+        ${providerLines}
+        ${outcomeLine}
+        ${fx ? weekStrip(fx, w) : ""}
+        ${collisionBlock}
         ${fireCaveat}
       </section>
+      ${evSection}
       ${fm}
       ${findings}
     </div>
@@ -1022,8 +1382,14 @@ export function renderDrawer(item: UiItem | undefined, state: AppState, win?: Wi
 
 /** Everything except the drawer, which main.ts keeps as a persistent node. */
 export function renderPage(payload: UiPayload, state: AppState): string {
+  // The backfill horizon rides the window line: the typed channel reaches
+  // further back than any surviving transcript, and the two claims must not
+  // be conflated — the extension names its method inline.
   const hist = payload.history
-    ? `window ${fmtDay(payload.history.windowStart) || "?"} → ${fmtDay(payload.history.windowEnd) || "?"} · ${fmtInt(payload.history.transcriptFiles)} transcripts`
+    ? `window ${fmtDay(payload.history.windowStart) || "?"} → ${fmtDay(payload.history.windowEnd) || "?"} · ${fmtInt(payload.history.transcriptFiles)} transcripts` +
+      (payload.history.backfilledSince
+        ? ` · typed-channel history extends to ${fmtDay(payload.history.backfilledSince)} (backfilled)`
+        : "")
     : "history not scanned";
   return `
   <div class="mast">

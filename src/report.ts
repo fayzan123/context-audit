@@ -1,4 +1,4 @@
-import type { AssetKind, MultiAuditResult, SecurityFinding, SourceAudit } from "./types.js";
+import type { AssetKind, LedgerEvent, MultiAuditResult, SecurityFinding, SourceAudit, SourceId } from "./types.js";
 // The listing budget is Claude-specific, so it is only compared for claude
 // sources below. The figure itself and the over/under call live in content.ts,
 // so this report and the dashboard cannot drift apart on the tool's single
@@ -58,7 +58,114 @@ function countsLabel(s: SourceAudit): string {
 const hasListingBudget = (s: SourceAudit): boolean =>
   (s.source === "claude" || s.source === "custom") && s.content.listingChars > 0;
 
-function printSource(s: SourceAudit): void {
+// --- lifetime (durable ledger) ---------------------------------------------
+// Window figures come from the transcripts the harness still keeps; lifetime
+// figures come from the ledger that outlives them. The two are computed and
+// printed side by side, each with its own qualifier, never conflated.
+
+/** One asset's fires since tracking began. */
+export interface LifetimeUsage {
+  kind: AssetKind;
+  name: string;
+  invocations: number;
+  sessions: number;
+  firstFired: string;
+  lastFired: string;
+}
+
+export interface SourceLifetime {
+  /** ISO-8601 — the qualifier on every figure in this block. */
+  trackedSince: string;
+  /** Oldest backfilled event — typed-channel history reaches back this far. */
+  typedSince?: string;
+  /** Fired since trackedSince, most-invoked first. */
+  fired: LifetimeUsage[];
+  /** Dispatch-tracked assets with zero fires in the ledger AND the window. */
+  neverFired: string[];
+  /**
+   * Always-injected chars of the neverFired assets — what every session pays
+   * for items that have never fired. Reconstructed from the chars/4 token
+   * figures, so it can differ from the true sum by a few chars per asset and
+   * is labeled an estimate wherever it is printed.
+   */
+  deadWeightEstChars: number;
+}
+
+export type LifetimeBySource = Partial<Record<SourceId, SourceLifetime>>;
+
+/**
+ * Join ledger events onto each source's dispatch-tracked assets, keyed
+ * (provider, kind, name). `events` must be ts-sorted ascending, which is how
+ * Ledger.readEvents returns them. Lives beside the printers that consume it
+ * so the formula and the display cannot drift apart.
+ */
+export function buildLifetime(
+  sources: SourceAudit[],
+  events: LedgerEvent[],
+  trackedSince: string
+): LifetimeBySource {
+  const byKey = new Map<string, LedgerEvent[]>();
+  for (const e of events) {
+    const k = `${e.provider}\0${e.kind}\0${e.name}`;
+    const list = byKey.get(k);
+    if (list) list.push(e);
+    else byKey.set(k, [e]);
+  }
+
+  const out: LifetimeBySource = {};
+  for (const s of sources) {
+    if (!s.history) continue;
+    // A custom-directory audit reads Claude transcripts, and its banked
+    // events carry provider "claude" — the join must use the same key.
+    const provider = s.source === "custom" ? "claude" : s.source;
+    const windowFired = new Set(s.history.usage.map((u) => u.skill));
+    // Only kinds the window scan tracks: attaching ledger events to anything
+    // else would grow the neverFired denominator behind the reader's back.
+    const tracked = new Set([...windowFired, ...s.history.neverFired]);
+    const descEst = new Map(s.content.tokens.map((t) => [t.skill, t.descriptionEst]));
+
+    const fired: LifetimeUsage[] = [];
+    const neverFired: string[] = [];
+    let deadChars = 0;
+    const seen = new Set<string>();
+    for (const a of s.assets) {
+      if (!tracked.has(a.name)) continue;
+      // User+project copies merge by dispatch name, like the window figures.
+      const key = `${a.kind}\0${a.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const evts = byKey.get(`${provider}\0${a.kind}\0${a.name}`) ?? [];
+      if (evts.length > 0) {
+        fired.push({
+          kind: a.kind,
+          name: a.name,
+          invocations: evts.length,
+          sessions: new Set(evts.map((e) => e.sessionId)).size,
+          firstFired: evts[0].ts,
+          lastFired: evts[evts.length - 1].ts,
+        });
+      } else if (!windowFired.has(a.name)) {
+        if (!neverFired.includes(a.name)) neverFired.push(a.name);
+        // Injection model per tracked kind: prompts pay their name only;
+        // skills and commands pay name + description.
+        deadChars += a.name.length + (a.kind === "prompt" ? 0 : (descEst.get(a.name) ?? 0) * 4);
+      }
+    }
+    fired.sort((x, y) => y.invocations - x.invocations || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+    neverFired.sort();
+    const typedSince = events.find((e) => e.backfill === true && e.provider === provider)?.ts;
+    const lt: SourceLifetime = { trackedSince, fired, neverFired, deadWeightEstChars: deadChars };
+    if (typedSince) lt.typedSince = typedSince;
+    out[s.source] = lt;
+  }
+  return out;
+}
+
+/** --json stays additive: each source gains an optional `lifetime` key, nothing else moves. */
+export const withLifetime = (result: MultiAuditResult, lifetime?: LifetimeBySource): object =>
+  lifetime ? { sources: result.sources.map((s) => ({ ...s, lifetime: lifetime[s.source] })) } : result;
+
+function printSource(s: SourceAudit, lt?: SourceLifetime): void {
   const { content, security, history } = s;
 
   console.log();
@@ -139,6 +246,26 @@ function printSource(s: SourceAudit): void {
         `  from ${history.transcriptFiles} local transcript file(s), ${day(history.windowStart)} → ${day(history.windowEnd)}`
       )
     );
+    if (lt) {
+      const typed =
+        lt.typedSince && lt.typedSince < lt.trackedSince
+          ? `; typed-channel history extends to ${day(lt.typedSince)} (backfilled)`
+          : "";
+      console.log(dim(`  durable ledger: tracking since ${day(lt.trackedSince)}${typed}`));
+    }
+    // Ledger tail for a window line. "0 since <date>" is a claim ("tracked
+    // that long, never seen"), so it only appears when a ledger was read.
+    const lifetimeTail = (name: string): string => {
+      if (!lt) return "";
+      let n = 0;
+      let since = lt.trackedSince;
+      for (const u of lt.fired) {
+        if (u.name !== name) continue;
+        n += u.invocations;
+        if (u.firstFired < since) since = u.firstFired;
+      }
+      return dim(` · ${n} since ${day(since)}`);
+    };
     const tracked = history.usage.length + history.neverFired.length;
     console.log(
       `  ${bold(`${history.neverFired.length} of ${tracked}`)} never fired in this window ${history.usage.length > 0 ? dim(`(${history.usage.length} fired)`) : ""}`
@@ -151,6 +278,12 @@ function printSource(s: SourceAudit): void {
         console.log(`  ${yellow("these are first in line")} to lose their descriptions while you are over budget`);
       }
     }
+    if (lt && lt.neverFired.length > 0) {
+      console.log(
+        `  dead weight: ${bold(String(lt.neverFired.length))} of those never fired since tracking began ${day(lt.trackedSince)} — ` +
+          `~${lt.deadWeightEstChars.toLocaleString()} chars always in context ${dim(`(~${Math.ceil(lt.deadWeightEstChars / 4).toLocaleString()} tokens, chars/4 estimate)`)}`
+      );
+    }
     const top = history.usage.slice(0, 10);
     if (top.length > 0) {
       console.log(`  most fired:`);
@@ -158,7 +291,7 @@ function printSource(s: SourceAudit): void {
         const interrupted =
           u.interruptedAfter > 0 ? yellow(` — interrupted after ${u.interruptedAfter}/${u.invocations}`) : "";
         console.log(
-          `        ${bold(u.skill)} × ${u.invocations} in ${u.sessions} session(s), last ${day(u.lastFired)}${interrupted}`
+          `        ${bold(u.skill)} × ${u.invocations} in ${u.sessions} session(s), last ${day(u.lastFired)}${lifetimeTail(u.skill)}${interrupted}`
         );
       }
     }
@@ -166,6 +299,20 @@ function printSource(s: SourceAudit): void {
       console.log(
         `        ${bold(u.skill)} ${yellow(`interrupted after ${u.interruptedAfter}/${u.invocations} invocation(s)`)}`
       );
+    }
+    if (lt) {
+      // Fired historically, silent in the current window — invisible to the
+      // window figures, and exactly the rows a "did my skill die?" reader needs.
+      const windowFired = new Set(history.usage.map((w) => w.skill));
+      const quiet = lt.fired.filter((u) => !windowFired.has(u.name));
+      if (quiet.length > 0) {
+        console.log(`  fired before this window, 0 in it:`);
+        for (const u of quiet.slice(0, 10)) {
+          const since = u.firstFired < lt.trackedSince ? u.firstFired : lt.trackedSince;
+          console.log(`        ${bold(u.name)} × ${u.invocations} since ${day(since)}, last ${day(u.lastFired)}`);
+        }
+        if (quiet.length > 10) console.log(dim(`        + ${quiet.length - 10} more`));
+      }
     }
   }
 
@@ -182,7 +329,7 @@ function printSource(s: SourceAudit): void {
   }
 }
 
-export function printReport(result: MultiAuditResult): void {
+export function printReport(result: MultiAuditResult, lifetime?: LifetimeBySource): void {
   const { sources } = result;
   console.log();
   console.log(
@@ -190,7 +337,7 @@ export function printReport(result: MultiAuditResult): void {
       sources.map((s) => s.source).join(", ")
   );
 
-  for (const s of sources) printSource(s);
+  for (const s of sources) printSource(s, lifetime?.[s.source]);
 
   console.log();
   console.log(dim("  static analysis catches commodity attacks; encrypted/staged payloads and"));
@@ -224,7 +371,7 @@ export function printJson(result: object): void {
  * info findings aggregated to counts, tables trimmed. An agent should be able to
  * act on this without paying for 200+ informational entries.
  */
-export function printAgent(result: MultiAuditResult): void {
+export function printAgent(result: MultiAuditResult, lifetime?: LifetimeBySource): void {
   const sources = result.sources.map((s) => {
     const flags = s.security.filter((f) => f.level === "flag");
     const infoByCheck: Record<string, number> = {};
@@ -258,6 +405,9 @@ export function printAgent(result: MultiAuditResult): void {
             transcriptFiles: s.history.transcriptFiles,
             neverFired: s.history.neverFired,
             fired: s.history.usage,
+            // The agent relays these too — trackedSince travels with the block
+            // so a lifetime figure is never repeated without its qualifier.
+            lifetime: lifetime?.[s.source],
           }
         : undefined,
     };

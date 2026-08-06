@@ -1,0 +1,25 @@
+{
+  "model": "opus",
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user-hook"
+          }
+        ],
+        "note": "user data on the entry must survive install and uninstall"
+      }
+    ]
+  },
+  "unknownTopLevelKey": {
+    "keep": true
+  }
+}

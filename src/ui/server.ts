@@ -1,10 +1,11 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { join } from "node:path";
-import type { SourceContext } from "../sources/types.js";
+import { isAbsolute, join } from "node:path";
+import { openLedger } from "../ledger.js";
+import { scanLedgerHome, type AuditContext } from "../sources/index.js";
 import type { UiPayload } from "../types.js";
 import { buildUiPayload, type UiBuildOptions } from "./inventory.js";
 import { openInEditor } from "./open.js";
@@ -68,8 +69,31 @@ const sendJson = (res: ServerResponse, status: number, value: unknown): void =>
 const plain = (s: string): string =>
   s.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?").slice(0, 200);
 
+let codeCliSeen: boolean | undefined;
+
+/**
+ * Open a transcript at a cited line. `code --goto file:line` opens a buffer at
+ * the exact line and never runs its argument; without the VS Code CLI the OS
+ * opener shows the file (no line affordance) behind openInEditor's own
+ * launcher guards.
+ */
+function openTranscriptAt(file: string, line: number): { ok: true; command: string } | { ok: false; error: string } {
+  if (codeCliSeen === undefined) {
+    try {
+      codeCliSeen = spawnSync("code", ["--version"], { stdio: "ignore", timeout: 3000 }).status === 0;
+    } catch {
+      codeCliSeen = false;
+    }
+  }
+  if (!codeCliSeen) return openInEditor(file);
+  const child = spawn("code", ["--goto", `${file}:${line}`], { stdio: "ignore", detached: true });
+  child.on("error", () => {});
+  child.unref();
+  return { ok: true, command: "code" };
+}
+
 export async function startUiServer(
-  ctx: SourceContext,
+  ctx: AuditContext,
   opts: UiBuildOptions
 ): Promise<UiServer> {
   // A closed stdout must never take the dashboard down with it: launch the
@@ -221,6 +245,45 @@ export async function startUiServer(
           return sendJson(res, 409, { ok: false, error: result.error });
         }
         console.log(`context-audit ui: opened ${plain(item.name)} via ${result.command}`);
+        return sendJson(res, 200, { ok: true, command: result.command });
+      }
+
+      if (url.pathname === "/api/open-event" && req.method === "POST") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const item = payload.items.find((i) => i.id === body?.itemId);
+        if (!item) {
+          return sendJson(res, 404, { ok: false, error: "unknown item — rescan and retry" });
+        }
+        // The browser names events by id only, and only ids this item's own
+        // drill-down lists resolve — the payload is the server's inventory of
+        // what the browser may cite, exactly as with item ids.
+        const eventId = typeof body?.eventId === "string" ? body.eventId : "";
+        if (!item.fires?.events?.some((e) => e.id === eventId)) {
+          return sendJson(res, 404, { ok: false, error: "unknown event — rescan and retry" });
+        }
+        // The transcript location comes from the server's own ledger, never
+        // from the request — the browser-side event carries no paths at all.
+        const src = openLedger(scanLedgerHome(ctx))
+          .readEvents()
+          .find((e) => e.id === eventId)?.src;
+        if (!src) {
+          return sendJson(res, 409, { ok: false, error: "no transcript pointer was recorded for this event" });
+        }
+        // The ledger lives in the user's home and is treated like every other
+        // on-disk input: a pointer that is not an absolute path with a real
+        // line number is refused, not repaired.
+        if (!isAbsolute(src.file) || !Number.isInteger(src.line) || src.line < 1) {
+          return sendJson(res, 409, { ok: false, error: "this event's transcript pointer is malformed" });
+        }
+        if (!existsSync(src.file)) {
+          return sendJson(res, 410, { ok: false, error: "transcript deleted (event retained)" });
+        }
+        const result = openTranscriptAt(src.file, src.line);
+        if (!result.ok) {
+          console.error(`context-audit ui: refused to open event ${plain(eventId)} — ${plain(result.error)}`);
+          return sendJson(res, 409, { ok: false, error: result.error });
+        }
+        console.log(`context-audit ui: opened transcript for ${plain(item.name)} at line ${src.line} via ${result.command}`);
         return sendJson(res, 200, { ok: true, command: result.command });
       }
 

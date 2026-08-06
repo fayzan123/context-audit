@@ -30,7 +30,7 @@ What the table shows per row: tokens per session (with a meter scaled to your mo
 
 Two things the dashboard is careful about, because both are easy to get wrong:
 
-- **Usage counts are window-scoped, and it says so everywhere.** Claude Code deletes old sessions, so the scan can only see as far back as your oldest surviving transcript. A skill you used heavily six months ago and not since is indistinguishable, in that data, from one you never used. So the UI never says "never" — it says "none in 42d", labels the header readout "no fires in window", and states the window and its retention limit next to the number in every drawer. This is "not used lately", not "never used", and the difference matters before you delete anything.
+- **Usage counts state their window, and it says so everywhere.** Claude Code deletes old sessions, so a single scan can only see as far back as your oldest surviving transcript — which is why every scan also banks what it saw into a durable local ledger (see below). Window figures say "none in 42d"; lifetime figures say "42 since tracking began 2026-03-01"; the two windows are never conflated, and the retention limit is stated next to the number in every drawer. "Not used lately" and "never used since tracking began" are different claims, and the difference matters before you delete anything.
 - **"Always in context" is explained, not asserted.** Each item shows what it costs on every session *before you type anything* (a skill's name + description, an instruction file's whole body) separately from what it costs only when it actually runs — with a sentence saying which is which, because a raw token count with the word "injected" on it means nothing the first time you see it.
 
 And it acts, deliberately narrowly:
@@ -61,6 +61,8 @@ DISPATCH
   identical descriptions: connect-chrome, open-gstack-browser
 USAGE
   from 99 local transcript file(s), 2026-06-24 → 2026-08-02
+  durable ledger: tracking since 2026-08-05; typed-channel history extends
+  to 2026-02-26 (backfilled)
   69 of 75 never fired in this window (6 fired)
 
 ━━ codex — 6 prompts · 1 instruction file
@@ -84,6 +86,10 @@ npx context-audit path/to/skills   # audit one claude-format skills directory
 npx context-audit --agent          # compact JSON for AI agents
 npx context-audit --json           # everything, machine-readable
 npx context-audit scan ./downloaded-skill   # pre-install triage (see Security, below)
+npx context-audit backfill         # import typed /commands from ~/.claude/history.jsonl
+npx context-audit hooks install    # opt-in: record fires in real time (prints the
+                                   # exact settings diff first; writes only on --yes)
+npx context-audit hooks uninstall  # remove exactly what install added
 ```
 
 ## Cost — what you pay before you type anything
@@ -110,6 +116,18 @@ That number is the point of this tool. It converts "I should clean this up somed
 Two honest caveats the report also prints: the usage window starts when your oldest transcript does, and "never fired" cannot see value-per-invocation. A skill you call twice a year when production is down is not dead weight. This gives you the counts; you decide what they mean.
 
 Where a tool keeps no readable history — Cursor doesn't — the usage section says so instead of guessing. Absent data stays absent.
+
+## The usage ledger — history that survives the purge
+
+Transcript-derived counts evaporate on Claude Code's retention cycle (`cleanupPeriodDays`, default 30). So every scan also **banks the invocation events it can currently see** into an append-only local ledger under `~/.context-audit/usage/` — plain JSONL, written with `node:fs`, nothing resident, nothing leaving the machine. Events carry names, timestamps, session ids and transcript line pointers only; message content, prompt text and skill arguments are never stored. Rescans dedupe by event id, so banking is idempotent.
+
+That turns "6 fires in 42d" into "142 fires since tracking began 2026-03-01" over time, and every lifetime figure carries its `trackedSince` date as the qualifier. Three writers feed it:
+
+- **Scan-time ingestion** — always on, zero setup. Claude transcripts (subagent sidechains included) and Codex rollouts, with channel (model-dispatched vs typed vs passive load), outcome (ok / error / rejected), project, model and agent attribution where the source records them.
+- **`context-audit backfill`** — one-time import of typed `/commands` from `~/.claude/history.jsonl`, which survives the transcript purge and typically reaches months further back. Built-ins (`/usage`, `/model`, …) are dropped unless you pass `--include-builtins`, automation-polluted sessions are filtered, and imported events are labeled: "typed-channel history extends to 2026-02-26 (backfilled)".
+- **`context-audit hooks install`** — opt-in real-time capture via Claude Code hooks. It prints the exact `settings.json` diff and writes nothing without confirmation; `hooks uninstall` removes exactly what install added. Hook and scan events converge on the same ids, so double-capture collapses.
+
+The dashboard's fires cells show both figures ("42 · 6 in 41d"), the drawer gains provenance (install date with the evidence chain that produced it — manifest, file birthtime, git first-add, or ledger first-seen, each labeled), channel/provider/outcome splits, a per-week trend strip, and a drill-down that opens the transcript at the exact line — rows whose transcript was already purged say "transcript deleted (event retained)". The CLI's `--json` gains a per-source `lifetime` block with the same figures, diffable like everything else.
 
 ## Dispatch — descriptions competing for the same trigger
 

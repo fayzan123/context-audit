@@ -1,0 +1,7 @@
+{
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Skill",
+  "tool_input": { "skill": "impeccable" },
+  "tool_use_id": "toolu_no_session"
+}

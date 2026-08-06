@@ -1,0 +1,10 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/tmp/fake/transcript.jsonl",
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Skill",
+  "tool_input": { "skill": "impeccable", "args": "SECRET-ARG must never be stored" },
+  "tool_response": { "success": true },
+  "tool_use_id": "toolu_abc123"
+}

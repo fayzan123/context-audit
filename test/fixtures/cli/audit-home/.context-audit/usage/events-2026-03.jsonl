@@ -1,0 +1,2 @@
+{"v":1,"id":"old-1:evt","ts":"2026-03-05T09:00:00.000Z","provider":"claude","kind":"skill","name":"greet","channel":"auto","sessionId":"old-1","project":"/work/proj"}
+{"v":1,"id":"old-2:evt","ts":"2026-03-06T09:00:00.000Z","provider":"claude","kind":"skill","name":"greet","channel":"auto","sessionId":"old-2","project":"/work/proj"}

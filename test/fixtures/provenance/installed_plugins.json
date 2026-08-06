@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "plugins": {
+    "alpha@official": [
+      {
+        "version": "2.0.0",
+        "installPath": "/nonexistent/alpha/2.0.0",
+        "installedAt": "2026-03-01T00:00:00Z",
+        "lastUpdated": "2026-07-01T00:00:00Z"
+      },
+      {
+        "version": "1.0.0",
+        "installPath": "/nonexistent/alpha/1.0.0",
+        "installedAt": "2026-01-15T00:00:00.000Z"
+      }
+    ],
+    "gamma@official": [
+      {
+        "version": "1.0.0",
+        "installPath": "/nonexistent/gamma/1.0.0",
+        "installedAt": 1735689600000
+      }
+    ],
+    "beta@official": [
+      {
+        "version": "1.0.0",
+        "installPath": "/nonexistent/beta/1.0.0"
+      }
+    ],
+    "epoch@official": [
+      {
+        "version": "1.0.0",
+        "installPath": "/nonexistent/epoch/1.0.0",
+        "installedAt": 0
+      }
+    ]
+  }
+}

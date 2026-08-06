@@ -153,6 +153,66 @@ export interface SkillUsage {
   interruptedAfter: number;
 }
 
+// --- usage ledger ---------------------------------------------------------
+// Durable invocation history under ~/.context-audit/usage — what survives the
+// harness's transcript purge. Events carry names, timestamps, paths and ids
+// ONLY: never message content, prompt text, or skill args.
+
+/** How the invocation happened: model-dispatched, user-typed, or a passive file load. */
+export type LedgerChannel = "auto" | "typed" | "load";
+
+/** Whether the launch itself succeeded — absent where the source doesn't say. */
+export type LedgerOutcome = "ok" | "error" | "rejected";
+
+export interface LedgerEvent {
+  /** Event schema version. */
+  v: number;
+  /** Dedupe key — scan ingestion and hooks derive the same id, so double-capture collapses. */
+  id: string;
+  /** ISO-8601. Also selects the monthly ledger file the event is stored in. */
+  ts: string;
+  /**
+   * The harness that dispatched or loaded the asset — never "agents-md": an
+   * AGENTS.md load is recorded against the provider that READ the file (e.g.
+   * codex), one event per reader.
+   */
+  provider: SourceId;
+  kind: AssetKind;
+  /** Dispatch name exactly as the harness used it. */
+  name: string;
+  channel: LedgerChannel;
+  outcome?: LedgerOutcome;
+  interrupted?: boolean;
+  sessionId: string;
+  /** Absolute cwd the session ran in. */
+  project: string;
+  /** Subagent attribution when the fire happened inside a sidechain. */
+  agent?: { id: string; type: string };
+  model?: string;
+  /** "cli" vs "sdk-cli" — separates interactive use from automation. */
+  entrypoint?: string;
+  caller?: string;
+  /** Transcript file + line the event was read from — the drill-down's proof pointer. */
+  src?: { file: string; line: number };
+  /** Imported from history.jsonl rather than observed in a transcript — typed channel only. */
+  backfill?: boolean;
+}
+
+/** Which rung of the install-date fallback chain produced the date. */
+export type ProvenanceSource = "plugin-manifest" | "birthtime" | "git" | "mtime" | "first-seen";
+
+/**
+ * Install-date snapshot, captured at first sighting because the filesystem
+ * evidence decays (plugin caches get pruned, transcripts get deleted).
+ */
+export interface Provenance {
+  /** ISO-8601. A "mtime" date is a last edit, and the UI labels it as such. */
+  installedAt: string;
+  source: ProvenanceSource;
+  /** Marketplace or plugin the item arrived from, when known. */
+  origin?: string;
+}
+
 export interface HistoryFacts {
   transcriptFiles: number;
   windowStart?: string;
@@ -161,6 +221,11 @@ export interface HistoryFacts {
   neverFired: string[];
   /** Invocations of skills not present in the audited directory (plugins, removed skills). */
   external: SkillUsage[];
+  /**
+   * Ledger-shaped events behind `usage` — what scan-time ingestion appends to
+   * the durable store. Absent until the adapter's usage() pass emits them.
+   */
+  events?: LedgerEvent[];
 }
 
 export interface AuditResult {
@@ -197,6 +262,26 @@ export interface MultiAuditResult {
 // is one-way: disk → audit engine → this payload → browser. The browser sends
 // back only item IDs and the session token, never paths.
 
+/**
+ * One drill-down row. Browser-bound, so it carries NO filesystem paths — the
+ * server resolves the transcript location from the event id.
+ */
+export interface UiFireEvent {
+  id: string;
+  ts: string;
+  /** Project display name, never the absolute path. */
+  project: string;
+  channel: LedgerChannel;
+  outcome?: LedgerOutcome;
+  interrupted?: boolean;
+  /**
+   * The transcript behind this event was already purged at scan time. The row
+   * still renders — the ledger entry is the durable record — but its open
+   * affordance is disabled up front instead of after a dead round-trip.
+   */
+  purged?: boolean;
+}
+
 /** Fire history for one item. `null` on an item means "tracked, never fired". */
 export interface UiFires {
   invocations: number;
@@ -204,6 +289,23 @@ export interface UiFires {
   firstFired?: string;
   lastFired?: string;
   interruptedAfter: number;
+  // Everything below comes from the durable ledger and is absent until the
+  // ledger join runs; the fields above stay scoped to the transcript window,
+  // and the two windows are never conflated.
+  /** Counts since `trackedSince` — the qualifier every lifetime figure carries. */
+  lifetime?: { invocations: number; sessions: number; firstFired?: string; lastFired?: string };
+  /** ISO date tracking began: ledger meta, or the backfill horizon where backfill ran. */
+  trackedSince?: string;
+  /** Model-dispatched vs user-typed fires, lifetime. */
+  byChannel?: { auto: number; typed: number };
+  /** Lifetime fires per provider, for assets read by more than one harness. */
+  byProvider?: Partial<Record<SourceId, number>>;
+  /** Lifetime fires split by recorded launch result. */
+  outcomes?: { ok: number; error: number; rejected: number };
+  /** Fires bucketed by ISO week start — the trend strip's data. */
+  weeklyBins?: { weekStart: string; count: number }[];
+  /** Reverse-chron drill-down, capped server-side ("show all N" pages further). */
+  events?: UiFireEvent[];
 }
 
 export interface UiPluginMeta {
@@ -268,6 +370,15 @@ export interface UiItem {
    * only.
    */
   twinPath?: string;
+  /** Install date and which evidence chain produced it — see the provenance store. */
+  provenance?: Provenance;
+  /** Providers observed loading this asset (an AGENTS.md read by codex, …). */
+  readBy?: SourceId[];
+  /**
+   * Exact dispatch-name copies at other scopes. No transcript evidence can
+   * split fires between them, so counts on both rows carry this warning.
+   */
+  collision?: { paths: string[] };
 }
 
 /**
@@ -298,6 +409,11 @@ export interface UiHeader {
   neverFired: number;
   /** How many items have fire tracking at all — the neverFired denominator. */
   tracked: number;
+  /**
+   * Dead-weight rent: Σ injectedChars × sessions over enabled never-fired
+   * items. Absent until the ledger join computes it.
+   */
+  deadWeightChars?: number;
   flagged: number;
   flaggedHigh: number;
 }
@@ -310,11 +426,27 @@ export interface UiPayload {
   root: string;
   header: UiHeader;
   items: UiItem[];
-  history?: { transcriptFiles: number; windowStart?: string; windowEnd?: string };
+  history?: {
+    transcriptFiles: number;
+    windowStart?: string;
+    windowEnd?: string;
+    /**
+     * Oldest backfilled (history.jsonl-imported) event — the typed channel
+     * reaches back this far, further than any surviving transcript. Absent
+     * when no backfill ran.
+     */
+    backfilledSince?: string;
+  };
   /**
    * How active plugin versions were resolved: from the plugin config, or by
    * newest-version-per-plugin when the config was unreadable (shown as a
    * caveat in the UI — degraded, never dropped).
    */
   pluginResolution?: "config" | "newest-fallback";
+  /**
+   * The durable ledger could not be opened for this scan: lifetime figures,
+   * provenance and dead-weight are absent, window figures stand alone. Shown
+   * as a caveat, never silently.
+   */
+  ledgerCaveat?: string;
 }

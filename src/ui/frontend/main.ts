@@ -99,8 +99,8 @@ function focusKey(): FocusMark | undefined {
       ? "drawer"
       : undefined;
   if (!root) return undefined;
-  for (const attr of ["data-sort", "data-toggle", "data-open", "data-id"]) {
-    const owner = el.closest<HTMLElement>(`[${attr}]`);
+  for (const attr of ["data-sort", "data-toggle", "data-open", "data-open-event", "data-id"]) {
+    const owner: HTMLElement | null = el.closest<HTMLElement>(`[${attr}]`);
     if (owner === el) return { root, sel: `[${attr}="${CSS.escape(el.getAttribute(attr)!)}"]` };
   }
   if (el.hasAttribute("data-rescan")) return { root, sel: "[data-rescan]" };
@@ -351,6 +351,36 @@ async function doOpen(id: string): Promise<void> {
   }
 }
 
+/**
+ * Open the transcript behind one ledger event. A 410 means the harness purged
+ * the transcript after the event was banked: the row stays — the ledger entry
+ * is the durable record — but renders disabled, stating that fact.
+ */
+async function doOpenEvent(itemId: string, eventId: string): Promise<void> {
+  const name = payload?.items.find((i) => i.id === itemId)?.name ?? "item";
+  try {
+    const r = await api("/api/open-event", { itemId, eventId });
+    if (r.ok) {
+      pushLog("ok", `opened transcript for ${name} via ${r.command ?? "editor"}`);
+      renderResultsOnly();
+      return;
+    }
+    const err = String(r.error ?? "could not open this invocation");
+    // The server's own wording for a purged transcript — matched on, so the
+    // row disables itself instead of offering the same dead button again.
+    if (/transcript deleted/i.test(err)) {
+      state.purgedEvents = [...(state.purgedEvents ?? []), eventId];
+    }
+    state.selected = itemId;
+    state.error = err;
+    pushLog("err", `open failed for ${name} — ${err}`);
+    announce(err);
+    render();
+  } catch {
+    connectionLost();
+  }
+}
+
 async function doRescan(): Promise<void> {
   if (state.busy) return;
   const prev = payload?.items.find((i) => i.id === state.selected);
@@ -432,7 +462,7 @@ function clearFilters(): void {
 
 app.addEventListener("click", (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>(
-    "[data-chip], [data-mode], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-rescan], [data-close], [data-clear], #catch, tr[data-id]"
+    "[data-chip], [data-mode], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], #catch, tr[data-id]"
   );
   if (!el || !payload) return;
 
@@ -491,6 +521,12 @@ app.addEventListener("click", (e) => {
   if (el.dataset.toggle) {
     e.stopPropagation();
     void doToggle(el.dataset.toggle);
+    return;
+  }
+
+  if (el.dataset.openEvent) {
+    e.stopPropagation();
+    void doOpenEvent(el.dataset.eventItem ?? "", el.dataset.openEvent);
     return;
   }
 

@@ -518,6 +518,13 @@ td.c-cost.dw .meter i { background: var(--signal-dim); }
 .na, .zero, td.zero { color: var(--ink-faint); }
 .none { color: var(--ink-faint); }
 
+/* Lifetime · window fires cell: the lifetime figure leads, the window share
+   sits dim beside it — two windows, adjacent, never conflated. */
+.winpart { color: var(--ink-faint); font-size: 11px; }
+/* Trend verdict beside the count. Tonal on purpose: amber stays reserved for
+   the dead-weight cost cells; the glyph's title carries the numbers. */
+.trend { font-style: normal; margin-left: 6px; color: var(--ink-faint); cursor: help; }
+
 /* Two-position instrument switch — rectangular on purpose. */
 .sw {
   display: inline-block;
@@ -826,6 +833,73 @@ pre.ev {
   overflow-wrap: anywhere;
 }
 .floc { font-family: var(--font-num); font-size: 10.5px; color: var(--ink-faint); }
+
+/* --- ledger sections -------------------------------------------------------
+   Provenance, lifetime fires, channel split, weekly strip and the invocation
+   drill-down. All tonal: these are measurements, not states. */
+
+.lifeline { font-family: var(--font-num); font-size: 12px; font-variant-numeric: tabular-nums; }
+.provline, .outcomeline {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 8px;
+}
+
+/* Channel split: a two-tone tonal bar — auto in strong ink, typed in faint. */
+.chsplit { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; cursor: help; }
+.chbar { display: inline-flex; width: 120px; height: 5px; background: color-mix(in oklab, var(--ink) 7%, transparent); }
+.chbar i { display: block; height: 100%; }
+.chbar .ch-auto { background: color-mix(in oklab, var(--ink) 55%, transparent); }
+.chbar .ch-typed { background: color-mix(in oklab, var(--ink) 24%, transparent); }
+.chlab { font-family: var(--font-num); font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+/* Weekly strip: one discrete cell per ISO week, filled by count bucket.
+   Data-bearing and drawer-scoped — countable cells, not a decorative line. */
+.wkstrip { display: flex; flex-wrap: wrap; gap: 2px; margin: 8px 0 2px; }
+.wkstrip .wk { width: 8px; height: 11px; background: color-mix(in oklab, var(--ink) 6%, transparent); cursor: help; }
+.wkstrip .wk.b1 { background: color-mix(in oklab, var(--ink) 24%, transparent); }
+.wkstrip .wk.b2 { background: color-mix(in oklab, var(--ink) 46%, transparent); }
+.wkstrip .wk.b3 { background: color-mix(in oklab, var(--ink) 72%, transparent); }
+
+/* Invocation drill-down: every row is the open-the-proof button. A purged
+   row stays listed — the ledger event is retained — but disabled, with the
+   fact stated where the affordance was. */
+.evcap { font-family: var(--font-num); font-size: 10.5px; }
+.evlist { display: flex; flex-direction: column; margin-bottom: 6px; }
+.evrow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-dim);
+  padding: 4px 0 3px;
+  border-bottom: 1px solid var(--rule);
+}
+.evrow:hover:not(:disabled) { color: var(--ink); }
+.evrow:disabled { color: var(--ink-faint); cursor: default; }
+.evts { font-variant-numeric: tabular-nums; }
+.evproj { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Channel and outcome read as words in chips, not as colors: an errored fire
+   is a measurement, and red belongs to finding severity alone. */
+.evch, .evmark {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--rule-strong);
+  padding: 1px 5px 0;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.evgone { font-size: 10px; color: var(--ink-faint); }
+
+/* Exact-name collision paths, listed inside the warning that carries them. */
+.colpaths { list-style: none; margin-top: 4px; }
+.colpaths li { font-family: var(--font-num); font-size: 10.5px; overflow-wrap: anywhere; padding: 2px 0; }
 
 .err {
   margin: 12px 24px 0;
