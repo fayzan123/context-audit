@@ -4,10 +4,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { isAbsolute, join } from "node:path";
-import { openLedger } from "../ledger.js";
+import { openLedger, type Ledger } from "../ledger.js";
 import { scanLedgerHome, type AuditContext } from "../sources/index.js";
 import type { UiPayload } from "../types.js";
-import { buildUiPayload, type UiBuildOptions } from "./inventory.js";
+import { buildUiPayload, eventDigest, type UiBuildOptions } from "./inventory.js";
 import { openInEditor } from "./open.js";
 import { performToggle } from "./toggle.js";
 
@@ -104,7 +104,12 @@ export async function startUiServer(
   process.stdout.on("error", () => {});
   process.stderr.on("error", () => {});
 
-  let payload: UiPayload = await buildUiPayload(ctx, opts);
+  // The scan's own ledger instance, reused by open-event: reopening the
+  // store per click re-parsed the entire event history for one lookup.
+  let scanLedger: Ledger | undefined;
+  const buildOpts: UiBuildOptions = { ...opts, onLedger: (l) => { scanLedger = l; } };
+
+  let payload: UiPayload = await buildUiPayload(ctx, buildOpts);
   const token = randomBytes(16).toString("hex");
 
   // Two tabs, or a toggle landing mid-rescan, race on `payload`: scans are
@@ -114,7 +119,7 @@ export async function startUiServer(
   let scanGen = 0;
   const rescan = async (): Promise<UiPayload> => {
     const gen = ++scanGen;
-    const fresh = await buildUiPayload(ctx, opts);
+    const fresh = await buildUiPayload(ctx, buildOpts);
     if (gen === scanGen) payload = fresh;
     // A superseded scan hands back the CURRENT inventory, not its own stale
     // one — otherwise the tab that asked would render item IDs the server has
@@ -262,10 +267,13 @@ export async function startUiServer(
           return sendJson(res, 404, { ok: false, error: "unknown event — rescan and retry" });
         }
         // The transcript location comes from the server's own ledger, never
-        // from the request — the browser-side event carries no paths at all.
-        const src = openLedger(scanLedgerHome(ctx))
+        // from the request — the browser-side event id is an opaque digest of
+        // the ledger id (raw ids can embed paths), resolved here server-side.
+        // The last scan's ledger instance is reused; the reopen is only the
+        // fallback for a scan that could not hand one over.
+        const src = (scanLedger ?? openLedger(scanLedgerHome(ctx)))
           .readEvents()
-          .find((e) => e.id === eventId)?.src;
+          .find((e) => eventDigest(e.id) === eventId)?.src;
         if (!src) {
           return sendJson(res, 409, { ok: false, error: "no transcript pointer was recorded for this event" });
         }

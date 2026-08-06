@@ -557,6 +557,9 @@ td.c-cost.dw .meter i { background: var(--signal-dim); }
 .badge.danger { color: var(--danger); }
 .badge.signal { color: var(--signal); }
 .badge.warn { color: var(--signal-text); }
+/* Measurement badges (never auto-fired, interrupted): tonal ink — these are
+   facts about dispatch and waste, not states, and amber stays calibrated. */
+.badge.fact { color: var(--ink-dim); border-color: var(--rule-strong); }
 
 .act {
   font-family: var(--font-engr);
@@ -839,13 +842,22 @@ pre.ev {
    drill-down. All tonal: these are measurements, not states. */
 
 .lifeline { font-family: var(--font-num); font-size: 12px; font-variant-numeric: tabular-nums; }
-.provline, .outcomeline {
+.provline, .outcomeline, .projline {
   font-family: var(--font-num);
   font-size: 11.5px;
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
   margin-bottom: 8px;
 }
+/* Per-project chips: name + count compartments, tonal like every measurement. */
+.projline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.pchip {
+  border: 1px solid var(--rule-strong);
+  padding: 1px 6px 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pchip b { font-weight: 400; color: var(--ink); margin-left: 4px; }
 
 /* Channel split: a two-tone tonal bar — auto in strong ink, typed in faint. */
 .chsplit { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; cursor: help; }
@@ -862,6 +874,8 @@ pre.ev {
 .wkstrip .wk.b1 { background: color-mix(in oklab, var(--ink) 24%, transparent); }
 .wkstrip .wk.b2 { background: color-mix(in oklab, var(--ink) 46%, transparent); }
 .wkstrip .wk.b3 { background: color-mix(in oklab, var(--ink) 72%, transparent); }
+/* The budget-crossing week: outlined, tonal — a dated event marker, not a state. */
+.wkstrip .wk.crossed { outline: 1px solid var(--ink-dim); outline-offset: 1px; }
 
 /* Invocation drill-down: every row is the open-the-proof button. A purged
    row stays listed — the ledger event is retained — but disabled, with the

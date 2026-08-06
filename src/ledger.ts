@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AssetKind, LedgerEvent, Provenance, SourceId } from "./types.js";
@@ -8,6 +8,40 @@ export const LEDGER_SCHEMA_VERSION = 1;
 const EVENTS_FILE_RE = /^events-\d{4}-\d{2}\.jsonl$/;
 const MONTH_RE = /^\d{4}-\d{2}/;
 const CHANNELS = new Set(["auto", "typed", "load"]);
+
+/**
+ * Dispatch tokens only — anything shaped like args or prose is refused.
+ * Shared by every writer of the typed/auto channels (hooks, transcript
+ * ingestion, backfill) so the privacy gate is one regex, not one per writer.
+ */
+export const NAME_RE = /^[A-Za-z0-9:_-]+$/;
+/**
+ * The durable boundary admits one extra character: codex prompt and skill
+ * names legitimately carry "." (release.notes, my.skill). Load-channel events
+ * record the path the harness announced as their name — a path, not a
+ * dispatch token — so they are exempt where this gate is applied.
+ */
+const STORE_NAME_RE = /^[A-Za-z0-9:._-]+$/;
+
+/** Optional fields a later same-id sighting may fill in on the survivor. */
+const ENRICH_FIELDS = ["outcome", "interrupted", "src", "model", "entrypoint", "caller", "agent"] as const;
+
+/**
+ * Fold fields the survivor lacks from a later same-id sighting — a hook banks
+ * a poor real-time record (no outcome, no src) and the scan re-derives the
+ * same id carrying the transcript's enrichment. The survivor's own values are
+ * never overwritten; only its gaps fill.
+ */
+function enrichEvent(target: LedgerEvent, from: LedgerEvent): boolean {
+  let changed = false;
+  for (const f of ENRICH_FIELDS) {
+    if (target[f] === undefined && from[f] !== undefined) {
+      (target as unknown as Record<string, unknown>)[f] = from[f];
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 export interface LedgerMeta {
   schemaVersion: number;
@@ -22,6 +56,12 @@ export interface LedgerSnapshot {
   enabled: number;
   injectedChars: number;
   byProvider: Record<string, number>;
+  /**
+   * Claude's skill-listing figure at snapshot time — the series the
+   * under→over budget crossing is detected on. Absent on snapshots written
+   * before the field existed ("unknown", never "under").
+   */
+  listingChars?: number;
 }
 
 /** All conditions ANDed; ts bounds are inclusive string compares on ISO-8601. */
@@ -43,7 +83,12 @@ export interface LedgerDiagnostics {
 export interface Ledger {
   /** The usage/ directory this ledger reads and writes. */
   dir: string;
-  appendEvents(events: LedgerEvent[]): { appended: number; skipped: number };
+  /**
+   * Dedupe is by exact id; a duplicate whose copy carries optional fields the
+   * stored event lacks ENRICHES it (counted in `enriched`, and persisted) —
+   * counts stay deduped either way.
+   */
+  appendEvents(events: LedgerEvent[]): { appended: number; skipped: number; enriched: number };
   readEvents(filter?: LedgerFilter): LedgerEvent[];
   meta(): LedgerMeta;
   readProvenance(): Record<string, Provenance>;
@@ -59,9 +104,12 @@ export function ledgerBase(base?: string): string {
 }
 
 /**
- * Minimal shape gate, shared with `log-event` stdin validation: required
- * fields present and typed, nothing else inspected. Content-bearing fields
- * (skill args, prompt text) have no place in the schema at all.
+ * Shape gate at the durable boundary, shared with `log-event` stdin
+ * validation: required fields present and typed, `ts` must actually parse as
+ * a date (a month-prefixed junk string would otherwise pick a junk monthly
+ * file and crash date math downstream), and dispatch-channel names must be
+ * tokens — content-bearing fields (skill args, prompt text) have no place in
+ * the schema at all, whichever writer sends them.
  */
 export function isLedgerEvent(x: unknown): x is LedgerEvent {
   const e = x as LedgerEvent | null;
@@ -73,6 +121,7 @@ export function isLedgerEvent(x: unknown): x is LedgerEvent {
     e.id.length > 0 &&
     typeof e.ts === "string" &&
     MONTH_RE.test(e.ts) &&
+    !Number.isNaN(Date.parse(e.ts)) &&
     typeof e.provider === "string" &&
     e.provider.length > 0 &&
     typeof e.kind === "string" &&
@@ -81,6 +130,7 @@ export function isLedgerEvent(x: unknown): x is LedgerEvent {
     e.name.length > 0 &&
     typeof e.channel === "string" &&
     CHANNELS.has(e.channel) &&
+    (e.channel === "load" || STORE_NAME_RE.test(e.name)) &&
     typeof e.sessionId === "string" &&
     typeof e.project === "string"
   );
@@ -90,13 +140,33 @@ function writeAtomic(path: string, data: string): void {
   // rename is atomic on the same filesystem — a crash mid-write can never
   // leave a torn meta or provenance file behind.
   const tmp = path + ".tmp";
-  writeFileSync(tmp, data);
+  writeFileSync(tmp, data, { mode: 0o600 });
   renameSync(tmp, path);
 }
 
-export function openLedger(base?: string): Ledger {
+/**
+ * `mode: "append"` skips the historical event parse entirely — the per-hook-
+ * fire path must not pay O(lifetime store) work to bank one line. Dedupe then
+ * checks ids against only the monthly files a batch actually touches, loaded
+ * lazily; reads on an append-mode ledger cover only those months.
+ */
+export function openLedger(base?: string, opts?: { mode?: "full" | "append" }): Ledger {
+  const appendOnly = opts?.mode === "append";
   const dir = join(ledgerBase(base), "usage");
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  // The store is a behavioral profile (who works on what, when) that outlives
+  // the transcript purge — owner-only, and stores created before the modes
+  // were set get retrofitted here. A chmod failure never blocks an audit.
+  const entries = readdirSync(dir);
+  try {
+    chmodSync(dir, 0o700);
+    for (const f of entries) {
+      if (EVENTS_FILE_RE.test(f) || f === "meta.json" || f === "provenance.json" || f === "snapshots.jsonl") {
+        chmodSync(join(dir, f), 0o600);
+      }
+    }
+  } catch {}
 
   const diag: LedgerDiagnostics = { malformedLines: 0, byFile: {} };
   const bad = (file: string): void => {
@@ -124,19 +194,31 @@ export function openLedger(base?: string): Ledger {
   };
 
   // One parse pass at open builds the dedupe index and serves every read;
-  // appends keep file and memory in step.
-  const ids = new Set<string>();
+  // appends keep file and memory in step. On a repeated id the first-seen
+  // event survives and later lines only fill its missing optional fields —
+  // that is how a durably appended enrichment line is folded back in.
+  const byId = new Map<string, LedgerEvent>();
   const events: LedgerEvent[] = [];
-  for (const file of readdirSync(dir).filter((f) => EVENTS_FILE_RE.test(f)).sort()) {
+  const loadedFiles = new Set<string>();
+  const loadFile = (file: string): void => {
+    if (loadedFiles.has(file)) return;
+    loadedFiles.add(file);
     for (const obj of readLines(file)) {
       if (!isLedgerEvent(obj)) {
         bad(file);
         continue;
       }
-      if (ids.has(obj.id)) continue;
-      ids.add(obj.id);
+      const seen = byId.get(obj.id);
+      if (seen) {
+        enrichEvent(seen, obj);
+        continue;
+      }
+      byId.set(obj.id, obj);
       events.push(obj);
     }
+  };
+  if (!appendOnly) {
+    for (const file of entries.filter((f) => EVENTS_FILE_RE.test(f)).sort()) loadFile(file);
   }
 
   const metaPath = join(dir, "meta.json");
@@ -151,12 +233,19 @@ export function openLedger(base?: string): Ledger {
   };
   let stored = loadMeta();
   if (!stored) {
-    // A corrupt meta must not reset the horizon: the oldest stored event
-    // proves tracking had begun by then.
-    let oldest: string | undefined;
-    for (const e of events) if (!oldest || e.ts < oldest) oldest = e.ts;
-    stored = { schemaVersion: LEDGER_SCHEMA_VERSION, trackedSince: oldest ?? new Date().toISOString() };
-    writeAtomic(metaPath, JSON.stringify(stored) + "\n");
+    if (appendOnly) {
+      // Without the full parse the oldest stored event is unknown — hold an
+      // in-memory meta and leave the file for a full open to establish, so a
+      // hook fire can never reset the horizon to its own wall clock.
+      stored = { schemaVersion: LEDGER_SCHEMA_VERSION, trackedSince: new Date().toISOString() };
+    } else {
+      // A corrupt meta must not reset the horizon: the oldest stored event
+      // proves tracking had begun by then.
+      let oldest: string | undefined;
+      for (const e of events) if (!oldest || e.ts < oldest) oldest = e.ts;
+      stored = { schemaVersion: LEDGER_SCHEMA_VERSION, trackedSince: oldest ?? new Date().toISOString() };
+      writeAtomic(metaPath, JSON.stringify(stored) + "\n");
+    }
   }
   const meta = stored;
 
@@ -186,25 +275,43 @@ export function openLedger(base?: string): Ledger {
     appendEvents(batch) {
       let appended = 0;
       let skipped = 0;
+      let enriched = 0;
       const byFile = new Map<string, string>();
       for (const e of batch) {
         // Invalid events land in `skipped` too — a broken hook payload must
         // never crash the caller's session.
-        if (!isLedgerEvent(e) || ids.has(e.id)) {
+        if (!isLedgerEvent(e)) {
           skipped++;
           continue;
         }
-        ids.add(e.id);
-        events.push(e);
         // Monthly file chosen by the event's own ts, never wall clock.
         const file = `events-${e.ts.slice(0, 7)}.jsonl`;
+        // Append mode checks ids against the target month only — the one file
+        // this batch could collide in; a cross-month double-capture is folded
+        // together by the load-time merge on the next full open.
+        loadFile(file);
+        const seen = byId.get(e.id);
+        if (seen) {
+          skipped++;
+          if (enrichEvent(seen, e)) {
+            // A duplicate that filled gaps is persisted append-only: the full
+            // merged record lands in the SURVIVOR's monthly file, where the
+            // load-time merge reconstructs this state after a reopen.
+            const survivorFile = `events-${seen.ts.slice(0, 7)}.jsonl`;
+            byFile.set(survivorFile, (byFile.get(survivorFile) ?? "") + JSON.stringify(seen) + "\n");
+            enriched++;
+          }
+          continue;
+        }
+        byId.set(e.id, e);
+        events.push(e);
         byFile.set(file, (byFile.get(file) ?? "") + JSON.stringify(e) + "\n");
         appended++;
       }
       // One append of complete lines per touched month — concurrent writers
       // interleave whole events, never fragments.
-      for (const [file, data] of byFile) appendFileSync(join(dir, file), data);
-      return { appended, skipped };
+      for (const [file, data] of byFile) appendFileSync(join(dir, file), data, { mode: 0o600 });
+      return { appended, skipped, enriched };
     },
     readEvents(filter) {
       const hit = events.filter(
@@ -239,7 +346,7 @@ export function openLedger(base?: string): Ledger {
     },
     appendSnapshot(snap) {
       snapshots.push(snap);
-      appendFileSync(join(dir, "snapshots.jsonl"), JSON.stringify(snap) + "\n");
+      appendFileSync(join(dir, "snapshots.jsonl"), JSON.stringify(snap) + "\n", { mode: 0o600 });
     },
     readSnapshots() {
       return [...snapshots];

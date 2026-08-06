@@ -7,7 +7,7 @@ import { contentFacts } from "./content.js";
 import { securityScan } from "./security.js";
 import { historyFacts } from "./history.js";
 import { hooksInstall, hooksUninstall, logEvent } from "./hooks.js";
-import { openLedger } from "./ledger.js";
+import { openLedger, type Ledger, type LedgerSnapshot } from "./ledger.js";
 import { runBackfill } from "./backfill.js";
 import { buildLifetime, printAgent, printJson, printReport, withLifetime } from "./report.js";
 import type { LifetimeBySource } from "./report.js";
@@ -225,7 +225,9 @@ async function runLogEvent(ctx: SourceContext, eventName?: string): Promise<void
       let stdin = "";
       process.stdin.setEncoding("utf8");
       for await (const chunk of process.stdin) stdin += chunk;
-      logEvent(stdin, openLedger(scanLedgerHome(ctx)), eventName);
+      // Append mode: this runs per tool call INSIDE the user's session, and a
+      // full open re-parses the entire lifetime store to bank one line.
+      logEvent(stdin, openLedger(scanLedgerHome(ctx), { mode: "append" }), eventName);
     }
   } catch {}
   process.exitCode = 0;
@@ -404,6 +406,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  // One full ledger open per run: auditSource banks per adapter and
+  // ledgerLifetime reads the store back — each opening (and parsing) the
+  // whole store separately was O(adapters × lifetime). A failed open here
+  // degrades at each use site exactly as an inline open would have; opened
+  // only once an audit is actually going to run, so a failed detection never
+  // creates the dotdir as a side effect.
+  let sharedLedger: Ledger | undefined;
   let sources: SourceAudit[];
   if (args.target) {
     // Explicit directory: the original single-directory audit, now one source.
@@ -428,8 +437,15 @@ async function main(): Promise<void> {
           : `no supported agent tools detected (looked for ~/.claude, ~/.codex, .cursor/rules, .cursorrules, AGENTS.md)`
       );
     }
+    if (args.history) {
+      try {
+        sharedLedger = openLedger(scanLedgerHome(ctx));
+      } catch {
+        // Each consumer states its own caveat when it cannot open one either.
+      }
+    }
     const audits = await Promise.all(
-      detected.map((a) => auditSource(a, ctx, { history: args.history, strict: args.strict }))
+      detected.map((a) => auditSource(a, ctx, { history: args.history, strict: args.strict, ledger: sharedLedger }))
     );
     // A tool whose directory exists but holds no instruction assets has nothing
     // to say; keeping the empty section would just pad the report.
@@ -438,7 +454,13 @@ async function main(): Promise<void> {
   }
 
   const result: MultiAuditResult = { sources };
-  const lifetime = args.history ? ledgerLifetime(ctx, sources) : undefined;
+  const lifetime = args.history ? ledgerLifetime(ctx, sources, sharedLedger) : undefined;
+  // The raw events array exists to be banked (done above); every printer
+  // works from projections. Leaving it on history would put session ids,
+  // cwds and transcript paths into --json — and break the additive contract
+  // report.ts states ("each source gains an optional lifetime key, nothing
+  // else moves").
+  for (const s of sources) delete s.history?.events;
   print(args.output, result, lifetime);
   process.exitCode = hasFlags(sources) ? 1 : 0;
 }
@@ -449,9 +471,13 @@ async function main(): Promise<void> {
  * snapshot line for this run. An unavailable ledger degrades to the
  * window-only report the audit always had — with a caveat, never a crash.
  */
-function ledgerLifetime(ctx: SourceContext, sources: SourceAudit[]): LifetimeBySource | undefined {
+function ledgerLifetime(
+  ctx: SourceContext,
+  sources: SourceAudit[],
+  shared?: Ledger
+): LifetimeBySource | undefined {
   try {
-    const ledger = openLedger(scanLedgerHome(ctx));
+    const ledger = shared ?? openLedger(scanLedgerHome(ctx));
     for (const s of sources) {
       const events = s.history?.events ?? [];
       if (s.source === "custom" && events.length > 0) ledger.appendEvents(events);
@@ -460,15 +486,27 @@ function ledgerLifetime(ctx: SourceContext, sources: SourceAudit[]): LifetimeByS
     const byProvider: Record<string, number> = {};
     let items = 0;
     let injectedChars = 0;
+    let listingChars = 0;
     for (const s of sources) {
       byProvider[s.source] = (byProvider[s.source] ?? 0) + s.assets.length;
       items += s.assets.length;
       injectedChars += s.content.alwaysInjectedChars;
+      // The budget-bearing sources' listing figure, recorded so the
+      // budget-crossing date stays derivable (see buildUiPayload).
+      if (s.source === "claude" || s.source === "custom") listingChars += s.content.listingChars;
     }
     try {
       // One snapshot per run, mirroring buildUiPayload's dashboard-side line.
       // The CLI discovers enabled assets only, so enabled = items here.
-      ledger.appendSnapshot({ ts: new Date().toISOString(), items, enabled: items, injectedChars, byProvider });
+      const snap: LedgerSnapshot & { listingChars?: number } = {
+        ts: new Date().toISOString(),
+        items,
+        enabled: items,
+        injectedChars,
+        byProvider,
+        listingChars,
+      };
+      ledger.appendSnapshot(snap);
     } catch {
       // Snapshots power deltas, not this report; a failed append changes nothing here.
     }

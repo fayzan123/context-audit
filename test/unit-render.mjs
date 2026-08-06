@@ -30,8 +30,10 @@ const payload = JSON.parse(
 const byName = (n) => payload.items.find((i) => i.name === n);
 const win = R.usageWindow(payload);
 const html = R.renderApp(payload, R.defaultState());
+// The transcript total rides into every drawer render, the way main.ts and
+// renderApp thread it — the breadth denominator tests depend on it.
 const drawerFor = (name, state = R.defaultState()) =>
-  R.renderDrawerBody(byName(name), state, win);
+  R.renderDrawerBody(byName(name), state, win, payload.history.transcriptFiles);
 
 console.log("RENDER unit (ledger surface):");
 
@@ -121,7 +123,7 @@ check("no cell ever renders Infinity or NaN", !/NaN|Infinity/.test(html));
 {
   const asc = R.visibleItems(payload, { ...R.defaultState(), sort: { key: "tokPerFire", dir: 1 } });
   const desc = R.visibleItems(payload, { ...R.defaultState(), sort: { key: "tokPerFire", dir: -1 } });
-  const fireless = new Set(["typedonly", "cold", "edited", "plainzero", "style-rule"]);
+  const fireless = new Set(["typedonly", "cold", "edited", "plainzero", "style-rule", "AGENTS.md"]);
   const tailNames = (list) => list.slice(-5).map((i) => i.name);
   check(
     "zero-fire and n/a rows sort last ascending, untracked n/a very last",
@@ -306,6 +308,185 @@ check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k
   );
 }
 
+// --- dead-weight amber shares the header's age gate (#13/#16) ----------------
+{
+  check(
+    "exactly one cost cell earns the dead-weight amber — the age-gated one",
+    (html.match(/c-cost dw/g) ?? []).length === 1,
+    `dw cells: ${(html.match(/c-cost dw/g) ?? []).length}`
+  );
+  const coldOnly = R.renderApp({ ...payload, items: [byName("cold")] }, R.defaultState());
+  check(
+    "amber on: installed before the window start, ≥25% cost, zero fires",
+    /c-cost dw/.test(coldOnly) && coldOnly.includes("Dead weight:"),
+    "age-gated amber missing"
+  );
+  const editedOnly = R.renderApp({ ...payload, items: [byName("edited")] }, R.defaultState());
+  check(
+    "amber suppressed on an item installed after the window start (too new to judge)",
+    !/c-cost dw/.test(editedOnly) && !editedOnly.includes("Dead weight:"),
+    "too-new item still ambered"
+  );
+}
+
+// --- never-auto-fired table badge (#18) --------------------------------------
+{
+  check(
+    "a 100%-typed row carries the never-auto-fired badge in the table — once",
+    (html.match(/never auto-fired<\/span>/g) ?? []).length === 1,
+    `badges: ${(html.match(/never auto-fired<\/span>/g) ?? []).length}`
+  );
+  check(
+    "the table badge is tonal and names the trackedSince qualifier",
+    /badge fact" title="every recorded fire was user-typed since tracking began 2026-03-01[^"]*">never auto-fired/.test(html),
+    "badge qualifier missing"
+  );
+  const shadowedTyped = R.renderApp(
+    { ...payload, items: [{ ...byName("typedonly"), enabled: false, twinPath: "/x" }] },
+    R.defaultState()
+  );
+  check(
+    "a shadowed row gets no never-auto-fired badge",
+    !shadowedTyped.includes("never auto-fired"),
+    "shadowed row badged"
+  );
+}
+
+// --- sessions-coverage denominator (#19) -------------------------------------
+{
+  const d = drawerFor("hot");
+  check(
+    "the drawer breadth states its denominator: N of M sessions (P%)",
+    d.includes("across <b>3</b> of <b>87</b> sessions (3%)"),
+    "denominator missing"
+  );
+  check(
+    "renderApp threads the transcript total into the drawer",
+    R.renderApp(payload, { ...R.defaultState(), selected: "id-hot" }).includes("of <b>87</b> sessions"),
+    "renderApp lost the denominator"
+  );
+  const bare = R.renderDrawerBody(byName("hot"), R.defaultState(), win);
+  check(
+    "no denominator is claimed when no transcript total was threaded through",
+    bare.includes("across <b>3</b> sessions") && !bare.includes("of <b>87</b>"),
+    "fabricated denominator"
+  );
+  const skew = R.renderDrawerBody(byName("hot"), R.defaultState(), win, 1);
+  check(
+    "a lagging transcript total is skew-guarded — never over 100%",
+    skew.includes("across <b>3</b> of <b>3</b> sessions (100%)"),
+    "skew guard failed"
+  );
+}
+
+// --- interrupted fires stated in full (#29) ----------------------------------
+{
+  check(
+    "the drawer interrupted line carries count, wasted tokens and share",
+    drawerFor("hot").includes("interrupted 1× (~1,000 tok, 17% of fires)"),
+    "full interrupted fact missing"
+  );
+  check(
+    "the interrupted table badge appears only where interrupts exist",
+    html.includes("1 interrupted (~1,000 tok, 17% of fires)</span>") &&
+      (html.match(/ interrupted \(~/g) ?? []).length === 1,
+    `table badges: ${(html.match(/ interrupted \(~/g) ?? []).length}`
+  );
+}
+
+// --- backfilled drill-down rows labeled (#17) --------------------------------
+{
+  const d = drawerFor("typedonly");
+  check(
+    "a backfilled row is chip-labeled and opens history.jsonl honestly",
+    /data-open-event="ev-typed-0"[^>]*title="open history.jsonl at this imported entry"/.test(d) &&
+      /data-open-event="ev-typed-0"[\s\S]*?<span class="evmark">backfilled<\/span>/.test(d),
+    "backfill labeling missing"
+  );
+  const observed = d.slice(d.indexOf("ev-typed-1"), d.indexOf("ev-typed-0"));
+  check(
+    "an observed row keeps its transcript title and gains no chip",
+    observed.includes("open the transcript at this invocation") && !observed.includes("backfilled"),
+    "observed row mislabeled"
+  );
+  check(
+    "the caption hedges to source record only when imports are listed",
+    d.includes("each row opens its source record at the line") &&
+      drawerFor("hot").includes("each row opens its transcript at the line"),
+    "caption hedge wrong"
+  );
+}
+
+// --- quiet-onset budget annotation (#20) -------------------------------------
+{
+  check(
+    "a quiet row near the crossing carries the annotation in its trend note",
+    html.includes("last fired 90d ago — around when your skill listing went over budget (2026-05-10)"),
+    "table annotation missing"
+  );
+  const d = drawerFor("typedonly");
+  check(
+    "the drawer states the annotation and ticks the crossing week",
+    d.includes("around when your skill listing went over budget") &&
+      /class="wk b3 crossed" title="week of 2026-05-04 — 7 fires · skill listing went over budget 2026-05-10"/.test(d) &&
+      d.includes("outlined cell = skill listing went over budget"),
+    "drawer annotation or tick missing"
+  );
+  const far = {
+    ...payload,
+    header: {
+      ...payload.header,
+      listing: { ...payload.header.listing, crossedAt: "2026-07-30T00:00:00Z" },
+    },
+  };
+  check(
+    "no annotation when the crossing sits far from the quiet onset",
+    !R.renderApp(far, R.defaultState()).includes("around when your skill listing"),
+    "annotation overclaims proximity"
+  );
+  const noCross = {
+    ...payload,
+    header: { ...payload.header, listing: { ...payload.header.listing } },
+  };
+  delete noCross.header.listing.crossedAt;
+  check(
+    "no annotation and no tick without a recorded crossing",
+    !R.renderApp(noCross, R.defaultState()).includes("around when your skill listing") &&
+      !R.renderDrawerBody(byName("typedonly"), R.defaultState(), R.usageWindow(noCross), 87).includes("crossed"),
+    "annotation fabricated from nothing"
+  );
+}
+
+// --- readBy line (#7) --------------------------------------------------------
+{
+  check(
+    "readBy renders in the drawer even for a fire-less item",
+    drawerFor("AGENTS.md").includes("read by codex"),
+    "readBy line missing"
+  );
+  check(
+    "no readBy line without the field",
+    !drawerFor("hot").includes("read by "),
+    "readBy fabricated"
+  );
+}
+
+// --- per-project chips (#6) --------------------------------------------------
+{
+  const d = drawerFor("hot");
+  check(
+    "per-project chips list display names and counts, descending",
+    /<span class="pchip">context-audit <b>30<\/b><\/span> <span class="pchip">tools <b>12<\/b><\/span>/.test(d) &&
+      d.includes("lifetime fires per project"),
+    "project chips missing"
+  );
+  check(
+    "no project line without byProject",
+    !drawerFor("steady").includes("pchip"),
+    "fabricated project line"
+  );
+}
+
 // --- escaping ----------------------------------------------------------------
 {
   const hostile = {
@@ -315,6 +496,7 @@ check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k
     collision: { paths: ['</ul><script>alert(1)</script>'] },
     fires: {
       ...byName("hot").fires,
+      byProject: [{ name: "<img src=x onerror=alert(1)>", count: 1 }],
       events: [{ id: "ev-x", ts: "2026-08-01T09:00:00Z", project: "<img src=x onerror=alert(1)>", channel: "auto" }],
     },
   };

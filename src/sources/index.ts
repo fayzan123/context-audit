@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { contentFacts } from "../content.js";
-import { openLedger } from "../ledger.js";
+import { openLedger, type Ledger } from "../ledger.js";
 import { securityScan } from "../security.js";
 import type { SourceAudit } from "../types.js";
 import type { SourceAdapter, SourceContext } from "./types.js";
@@ -34,7 +34,7 @@ export function scanLedgerHome(ctx: AuditContext): string {
 export async function auditSource(
   adapter: SourceAdapter,
   ctx: AuditContext,
-  opts: { history: boolean; strict: boolean }
+  opts: { history: boolean; strict: boolean; ledger?: Ledger }
 ): Promise<SourceAudit> {
   const assets = adapter.discover(ctx);
   const audit: SourceAudit = {
@@ -52,7 +52,23 @@ export async function auditSource(
       // ledger degrades to the transcript-only figures the audit always had —
       // and says so — rather than failing the scan.
       try {
-        openLedger(scanLedgerHome(ctx)).appendEvents(events);
+        // The caller's ledger when it opened one (one parse per CLI run,
+        // not one per adapter); otherwise open here as before.
+        const ledger = opts.ledger ?? openLedger(scanLedgerHome(ctx));
+        // A session whose typed commands the hooks already captured belongs
+        // to the hook: the scan's copies of those events carry a different
+        // clock in their ids, so banking them would double-count every typed
+        // command — the session-level exclusion mirrors the backfill rule.
+        const hookTypedSessions = new Set(
+          ledger.readEvents()
+            .filter((e) => e.hook === true && e.channel === "typed")
+            .map((e) => e.sessionId)
+        );
+        ledger.appendEvents(
+          events.filter(
+            (e) => !(e.provider === "claude" && e.channel === "typed" && !e.hook && hookTypedSessions.has(e.sessionId))
+          )
+        );
       } catch (err) {
         const why = String((err as Error)?.message ?? err).slice(0, 120);
         caveats.push(

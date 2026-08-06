@@ -136,6 +136,9 @@ console.log("LOG-EVENT (hook target — exits 0 no matter what):");
   const stored = ledgerEvents(home);
   check("event banked with the transcript-convergent id", stored.includes('"id":"cs1:tu1"') && stored.includes('"name":"greet"'), stored);
   check("args never reach the ledger", !stored.includes("SECRET"));
+  // Append mode: the hook path must not establish the tracking horizon from
+  // its own wall clock — meta.json is left for a full open to write.
+  check("log-event never writes meta.json", !existsSync(join(home, ".context-audit", "usage", "meta.json")));
 
   const before = ledgerEvents(home);
   check("malformed stdin exits 0", run(["log-event", "--claude-hook", "PostToolUse"], home, { input: "not { json" }).code === 0);
@@ -210,19 +213,25 @@ console.log("AUDIT (lifetime block from the durable ledger):");
   const lt = src.lifetime;
   check("trackedSince comes from the seeded meta", lt?.trackedSince === "2026-03-01T00:00:00.000Z", JSON.stringify(lt));
   const g = lt.fired[0];
+  // 4 events: two seeded auto fires, one banked window fire, and one seeded
+  // typed event mis-kinded "command" — greet is installed only as a skill, so
+  // the join must heal the stored guess onto the skill row.
   check(
-    "lifetime merges seeded + banked window events",
-    lt.fired.length === 1 && g.name === "greet" && g.kind === "skill" && g.invocations === 3 && g.sessions === 3,
+    "lifetime merges seeded + banked + kind-healed events",
+    lt.fired.length === 1 && g.name === "greet" && g.kind === "skill" && g.invocations === 4 && g.sessions === 4,
     JSON.stringify(lt.fired)
   );
   check("first/last fired span both windows", g.firstFired.startsWith("2026-03-05") && g.lastFired.startsWith("2026-07-01"));
+  // Raw events exist to be banked; --json stays additive (report.ts contract)
+  // and must never carry session ids, cwds or transcript paths.
+  check("--json strips the raw events array after banking", src.history.events === undefined && !JSON.stringify(j).includes('"events":'), Object.keys(src.history).join(","));
   check("idle is never-fired in BOTH windows", lt.neverFired.length === 1 && lt.neverFired[0] === "idle");
   check("dead-weight estimate is the idle listing entry", lt.deadWeightEstChars === 28, String(lt.deadWeightEstChars));
   check("no typedSince without backfilled events", lt.typedSince === undefined);
 
   // Idempotency: a second run rescans the same transcripts and must not grow counts.
   const j2 = JSON.parse(run(["--json"], home).out);
-  check("re-scan does not double-count lifetime", j2.sources[0].lifetime.fired[0].invocations === 3);
+  check("re-scan does not double-count lifetime", j2.sources[0].lifetime.fired[0].invocations === 4);
   const snaps = readFileSync(join(home, ".context-audit", "usage", "snapshots.jsonl"), "utf8").trim().split("\n");
   check("one snapshot line per CLI run", snaps.length === 2, `${snaps.length} lines`);
   const snap = JSON.parse(snaps[0]);
@@ -231,10 +240,11 @@ console.log("AUDIT (lifetime block from the durable ledger):");
     snap.items === 2 && snap.enabled === 2 && snap.byProvider.claude === 2 && snap.injectedChars === src.content.alwaysInjectedChars,
     snaps[0]
   );
+  check("snapshot records the budgeted listing figure", typeof snap.listingChars === "number" && snap.listingChars > 0, snaps[0]);
 
   const rep = run([], home).out;
   check("report names the ledger horizon", rep.includes("durable ledger: tracking since 2026-03-01"), rep);
-  check("window line carries the lifetime tail", rep.includes("greet × 1 in 1 session(s), last 2026-07-01 · 3 since 2026-03-01"), rep);
+  check("window line carries the lifetime tail", rep.includes("greet × 1 in 1 session(s), last 2026-07-01 · 4 since 2026-03-01"), rep);
   check("dead-weight line is qualified and estimated", rep.includes("never fired since tracking began 2026-03-01") && rep.includes("~28 chars") && rep.includes("chars/4 estimate"), rep);
 
   const agent = JSON.parse(run(["--agent"], home).out);

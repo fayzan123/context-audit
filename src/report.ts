@@ -104,9 +104,34 @@ export function buildLifetime(
   events: LedgerEvent[],
   trackedSince: string
 ): LifetimeBySource {
+  // Join-time kind authority, mirroring buildUiPayload's rule: hook writers
+  // hard-code provisional kinds and older banked events carry guesses, so
+  // claude dispatch events are re-keyed through the audited assets' kinds
+  // before joining — the channel is the evidence, and a name installed under
+  // exactly one kind takes all of its fires.
+  const claudeKinds = new Map<string, Set<AssetKind>>();
+  for (const s of sources) {
+    if (s.source !== "claude" && s.source !== "custom") continue;
+    for (const a of s.assets) {
+      if (a.kind !== "skill" && a.kind !== "command") continue;
+      const set = claudeKinds.get(a.name);
+      if (set) set.add(a.kind);
+      else claudeKinds.set(a.name, new Set([a.kind]));
+    }
+  }
+  const rekeyedKind = (e: LedgerEvent): AssetKind => {
+    if (e.provider !== "claude" || e.channel === "load") return e.kind;
+    if (e.kind !== "skill" && e.kind !== "command") return e.kind;
+    const channelKind: AssetKind = e.channel === "typed" ? "command" : "skill";
+    const set = claudeKinds.get(e.name);
+    if (!set) return e.kind;
+    if (set.has(channelKind)) return channelKind;
+    return set.size === 1 ? [...set][0] : channelKind;
+  };
+
   const byKey = new Map<string, LedgerEvent[]>();
   for (const e of events) {
-    const k = `${e.provider}\0${e.kind}\0${e.name}`;
+    const k = `${e.provider}\0${rekeyedKind(e)}\0${e.name}`;
     const list = byKey.get(k);
     if (list) list.push(e);
     else byKey.set(k, [e]);

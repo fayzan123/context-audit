@@ -2,6 +2,7 @@
 // bearing constraint, not a style choice: the frontend smoke test imports this
 // module into Node and renders fixture payloads without a browser rig.
 import type {
+  ListingBudget,
   Provenance,
   ProvenanceSource,
   SecurityFinding,
@@ -173,16 +174,30 @@ export interface Window {
   none: string;
   /** The payload's scan stamp — the deterministic "now" behind every age figure. */
   asOf?: string;
+  /**
+   * The window's start ISO stamp. The dead-weight age gate compares install
+   * dates against it — the same predicate the header rent figure uses, so the
+   * two surfaces can never disagree about what is too new to judge.
+   */
+  start?: string;
+  /**
+   * When the snapshot history recorded the skill listing crossing its budget,
+   * if ever — the anchor for the quiet-onset annotation. Rides the Window so
+   * every surface that renders a quiet verdict can reach it.
+   */
+  listingCrossedAt?: string;
 }
 
 export function usageWindow(payload: UiPayload): Window {
   const h = payload.history;
+  const listingCrossedAt = payload.header.listing?.crossedAt;
   if (!h?.windowStart || !h?.windowEnd) {
     return {
       span: "",
       note: "no local transcripts were scanned, so no usage can be counted",
       none: "no data",
       asOf: payload.generatedAt,
+      listingCrossedAt,
     };
   }
   const days = Math.max(
@@ -199,6 +214,8 @@ export function usageWindow(payload: UiPayload): Window {
       `before ${fmtDay(h.windowStart)} shows zero fires here. This is "not used lately", not "never used".`,
     none: `none in ${span}`,
     asOf: payload.generatedAt,
+    start: h.windowStart,
+    listingCrossedAt,
   };
 }
 
@@ -278,6 +295,33 @@ export function trendOf(
   if (recent === 0) return { trend: "quiet", recent, prior };
   if (oldest > t - 28 * DAY) return { trend: "new", recent, prior };
   return { trend: recent > prior ? "rising" : "flat", recent, prior };
+}
+
+/**
+ * The quiet-onset budget annotation: when a claude-listed skill went quiet
+ * AROUND the time the skill listing crossed its budget, the two dated facts
+ * are stated side by side. Correlation offered, never asserted — an over-
+ * budget listing drops least-fired descriptions, which stops auto-triggering,
+ * so the timing is worth checking; it is not proof. "Around" is a hard
+ * 28-day proximity between the last fire and the crossing — the same span
+ * the quiet verdict itself is measured over. Empty string when any link of
+ * that chain is missing: no crossing recorded, not listed, not quiet.
+ */
+function quietBudgetNote(item: UiItem, f: UiFires, win: Window): string {
+  if (!win.listingCrossedAt || !item.enabled || item.kind !== "skill") return "";
+  if (item.source !== "claude" && item.source !== "custom") return "";
+  const t = trendOf(f.weeklyBins, win.asOf);
+  if (!t || t.trend !== "quiet") return "";
+  const lastFired = f.lifetime?.lastFired ?? f.lastFired;
+  if (!lastFired) return "";
+  const fired = Date.parse(lastFired);
+  const crossed = Date.parse(win.listingCrossedAt);
+  if (Number.isNaN(fired) || Number.isNaN(crossed) || Math.abs(crossed - fired) > 28 * DAY) return "";
+  const age = daysAgo(lastFired, win.asOf);
+  return (
+    `last fired ${age !== undefined ? `${fmtInt(age)}d ago` : fmtDay(lastFired)} — around when your skill listing went over budget (${fmtDay(win.listingCrossedAt)}). ` +
+    `Over budget, Claude Code drops the least-fired skills' descriptions, which stops auto-triggering — a timing worth checking, not a verdict.`
+  );
 }
 
 /**
@@ -827,8 +871,13 @@ function costCell(item: UiItem, maxInjected: number, win: Window): string {
   // an expensive busy one are both fine. No window, no claim: a scan that
   // found zero transcripts sets fires=null on every tracked row, and "zero
   // fires" without a window is exactly the unsupported absolute this page
-  // promises never to print.
-  const deadWeight = item.enabled && item.fires === null && pct >= 25 && !!win.span;
+  // promises never to print. The age gate is the header rent's, verbatim:
+  // provenance must date the install BEFORE the window start — an item
+  // younger than the window is "too new to judge" and shows the install fact
+  // in its fires cell instead of an amber verdict here.
+  const preDatesWindow =
+    item.provenance !== undefined && !!win.start && item.provenance.installedAt < win.start;
+  const deadWeight = item.enabled && item.fires === null && pct >= 25 && !!win.span && preDatesWindow;
   const note = item.enabled
     ? `This item costs ${fmtInt(tok)} tokens in every session — loaded into the model's context before you type anything, whether or not it is used. The bar compares that cost against the most expensive item in your inventory.` +
       (deadWeight ? `\n\nDead weight: that cost is being paid with zero fires in the ${win.span} window.` : "")
@@ -914,13 +963,13 @@ function nameCell(item: UiItem): string {
 }
 
 /** The fires cell's trend glyph — the verdict and the numbers it rests on, on hover. */
-function trendGlyph(f: UiFires, win: Window): string {
+function trendGlyph(f: UiFires, win: Window, budgetNote = ""): string {
   const t = trendOf(f.weeklyBins, win.asOf);
   if (!t) return "";
   const lastFired = f.lifetime?.lastFired ?? f.lastFired;
   const note =
     t.trend === "quiet"
-      ? `quiet — 0 fires in the last 4 ISO weeks, measured back from the scan stamp${lastFired ? ` · last fired ${fmtDay(lastFired)}` : ""}`
+      ? `quiet — 0 fires in the last 4 ISO weeks, measured back from the scan stamp${lastFired ? ` · last fired ${fmtDay(lastFired)}` : ""}${budgetNote ? ` · ${budgetNote}` : ""}`
       : t.trend === "new"
         ? `new — every recorded fire falls inside the last 4 ISO weeks before the scan stamp`
         : `${t.trend} — ${fmtInt(t.recent)} fire${t.recent === 1 ? "" : "s"} in the last 4 ISO weeks vs ${fmtInt(t.prior)} in the 4 before, measured back from the scan stamp`;
@@ -963,6 +1012,18 @@ function row(
       ? `<td class="c-num zero" title="${esc(`${provVerb(p)} ${fmtDay(p.installedAt)} (date from ${PROVENANCE_LABEL[p.source]}) — no recorded fires.\n\n${win.note}`)}">never · ${provVerb(p)} ${fmtInt(age)}d</td>`
       : `<td class="c-num zero" title="${esc(win.note)}">0</td>`;
   };
+  // Table-level dispatch and waste facts: "never auto-fired" only at 100%
+  // typed, the interrupted badge only when interrupts exist — a badge appears
+  // when its fact does, never as empty chrome. Tonal, not amber: these are
+  // measurements, not states. Shadowed rows carry no fires surface at all.
+  const typedOnlyBadge =
+    !shadowed && f && f.byChannel && f.byChannel.auto === 0 && f.byChannel.typed > 0
+      ? ` <span class="badge fact" title="${esc(`every recorded fire was user-typed${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""} — the model has not reached for this on its own`)}">never auto-fired</span>`
+      : "";
+  const interruptedBadge =
+    !shadowed && f && f.interruptedAfter > 0
+      ? ` <span class="badge fact" title="${esc(`${fmtInt(f.interruptedAfter)} of ${fmtInt(f.invocations)} fires in the ${win.span || "scanned"} window were interrupted mid-run — the body tokens had already loaded when the run stopped`)}">${fmtInt(f.interruptedAfter)} interrupted (~${fmtInt(tokens(item.bodyChars * f.interruptedAfter))} tok${f.invocations > 0 ? `, ${Math.round((f.interruptedAfter / f.invocations) * 100)}% of fires` : ""})</span>`
+      : "";
   const firesCell = shadowed
     ? `<td class="c-num na" title="${esc(shadowNote)}">—</td>`
     : f === undefined
@@ -975,7 +1036,7 @@ function row(
                 ? `${fmtInt(f.lifetime.invocations)} <span class="winpart">· ${fmtInt(f.invocations)} in ${win.span}</span>`
                 : fmtInt(f.lifetime.invocations)
               : fmtInt(f.invocations)
-          }${trendGlyph(f, win)}</td>`;
+          }${trendGlyph(f, win, quietBudgetNote(item, f, win))}${typedOnlyBadge}${interruptedBadge}</td>`;
   // tok/fire: a ratio when the window has fires to divide by; what was paid,
   // stated as a fact, when it does not. Never Infinity, never NaN.
   const ratio = tokPerFire(item, sessions);
@@ -1129,7 +1190,7 @@ const INJECTION_NOTE: Record<UiItem["injection"], string> = {
  * through the scan week, missing weeks rendered as explicit empty cells — a
  * gap is a fact, not an absence of markup. Countable on purpose; not a line.
  */
-function weekStrip(f: UiFires, w: Window): string {
+function weekStrip(f: UiFires, w: Window, crossedAt?: string): string {
   const bins = f.weeklyBins;
   if (!bins || bins.length === 0) return "";
   const byWeek = new Map<string, number>();
@@ -1143,19 +1204,26 @@ function weekStrip(f: UiFires, w: Window): string {
     // Extend to the scan week so trailing quiet weeks are visible cells.
     if (!Number.isNaN(t)) end = Math.max(end, t);
   }
+  // The budget-crossing tick: the week the snapshot history recorded the
+  // skill listing going over budget, outlined so a quiet spell can be read
+  // against the event that may explain it. A dated fact, not a verdict.
+  const crossed = crossedAt !== undefined ? Date.parse(crossedAt) : NaN;
   const cells: string[] = [];
   for (let t0 = first; t0 <= end; t0 += 7 * DAY) {
     const key = new Date(t0).toISOString().slice(0, 10);
     const n = byWeek.get(key) ?? 0;
     const bucket = n === 0 ? "" : n <= 2 ? " b1" : n <= 5 ? " b2" : " b3";
+    const hasTick = !Number.isNaN(crossed) && crossed >= t0 && crossed < t0 + 7 * DAY;
     cells.push(
-      `<i class="wk${bucket}" title="${esc(`week of ${key} — ${fmtInt(n)} fire${n === 1 ? "" : "s"}`)}"></i>`
+      `<i class="wk${bucket}${hasTick ? " crossed" : ""}" title="${esc(`week of ${key} — ${fmtInt(n)} fire${n === 1 ? "" : "s"}${hasTick ? ` · skill listing went over budget ${fmtDay(crossedAt)}` : ""}`)}"></i>`
     );
   }
   const shown = cells.length > 104 ? cells.slice(cells.length - 104) : cells;
   const earlier = cells.length - shown.length;
+  // The legend names the tick only when the ticked cell is actually visible.
+  const ticked = shown.some((c) => c.includes(" crossed"));
   return `<div class="wkstrip" role="img" aria-label="fires per ISO week">${shown.join("")}</div>
-    <p class="kv-note">one cell per ISO week, oldest to the scan week${earlier > 0 ? ` · ${fmtInt(earlier)} earlier weeks not shown` : ""} · darker = more fires (1–2, 3–5, 6+)</p>`;
+    <p class="kv-note">one cell per ISO week, oldest to the scan week${earlier > 0 ? ` · ${fmtInt(earlier)} earlier weeks not shown` : ""} · darker = more fires (1–2, 3–5, 6+)${ticked ? ` · outlined cell = skill listing went over budget` : ""}</p>`;
 }
 
 /**
@@ -1164,10 +1232,25 @@ function weekStrip(f: UiFires, w: Window): string {
  * that is replaced wholesale arrives already-open with nothing to transition
  * from. main.ts keeps one `<aside>` and swaps only what is inside it.
  */
-export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?: Window): string {
+export function renderDrawerBody(
+  item: UiItem | undefined,
+  state: AppState,
+  win?: Window,
+  totalSessions = 0
+): string {
   if (!item) return "";
   const f = item.fires;
   const w = win ?? { span: "", note: "", none: "no data" };
+  // Breadth carries its denominator: "across 3 of 87 sessions (3%)" — the
+  // share-of-work fact, both figures from the same transcript window. The
+  // denominator is skew-guarded the way tokPerFire's is, and absent (falling
+  // back to the bare count) when no transcript total was threaded through.
+  const breadthOf = (u: UiFires): string => {
+    const denom = totalSessions > 0 ? Math.max(totalSessions, u.sessions) : 0;
+    return denom > 0
+      ? `across <b>${fmtInt(u.sessions)}</b> of <b>${fmtInt(denom)}</b> session${denom === 1 ? "" : "s"} (${Math.round((u.sessions / denom) * 100)}%)`
+      : `across <b>${fmtInt(u.sessions)}</b> session${u.sessions === 1 ? "" : "s"}`;
+  };
   const fireLine =
     item.twinPath && !item.enabled
       ? `<span class="na">shadowed — fires are recorded by dispatch name, and the enabled copy of this name carries the history</span>`
@@ -1175,10 +1258,17 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
       ? `<span class="na">n/a — this kind leaves no dispatch record, so its use cannot be counted either way</span>`
       : f === null
         ? `<span class="zero">no fires in the scanned window</span>`
-        : `<b>${fmtInt(f.invocations)}</b> invocation${f.invocations === 1 ? "" : "s"} across <b>${fmtInt(f.sessions)}</b> session${f.sessions === 1 ? "" : "s"}` +
+        : `<b>${fmtInt(f.invocations)}</b> invocation${f.invocations === 1 ? "" : "s"} ${breadthOf(f)}` +
           `${f.firstFired ? `<br>first ${fmtDay(f.firstFired)}` : ""}` +
           `${f.lastFired ? ` · last ${fmtDay(f.lastFired)}` : ""}` +
-          `${f.interruptedAfter > 0 ? ` · interrupted ${fmtInt(f.interruptedAfter)}×` : ""}`;
+          // The interrupted fact in full: count, the body tokens loaded for
+          // runs that did not finish, and the share of fires — window figures
+          // on both sides of the division, percentage only when there is one.
+          `${
+            f.interruptedAfter > 0
+              ? ` · interrupted ${fmtInt(f.interruptedAfter)}× (~${fmtInt(tokens(item.bodyChars * f.interruptedAfter))} tok${f.invocations > 0 ? `, ${Math.round((f.interruptedAfter / f.invocations) * 100)}% of fires` : ""})`
+              : ""
+          }`;
   // Stated in full, every time, next to the number it qualifies — the window
   // is a transcript-retention limit and the number means nothing without it.
   const fireCaveat =
@@ -1187,6 +1277,12 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
   // Ledger-backed extras: absent until the ledger join runs, and withheld from
   // a shadowed twin — the enabled copy's row carries the history.
   const fx = item.twinPath && !item.enabled ? undefined : f ?? undefined;
+
+  // Only claude-listed skills are subject to the listing budget, so only they
+  // carry its crossing tick and the quiet-onset annotation.
+  const listed =
+    item.enabled && item.kind === "skill" && (item.source === "claude" || item.source === "custom");
+  const budgetNote = fx ? quietBudgetNote(item, fx, w) : "";
 
   const prov = item.provenance;
   const provAge = prov ? daysAgo(prov.installedAt, w.asOf) : undefined;
@@ -1226,11 +1322,26 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
         })()
       : "";
 
+  // Which projects — chips under the breadth count, display names with
+  // lifetime counts. The payload already reduced paths to basenames; the
+  // qualifier says which window the counts are from.
+  const projLine =
+    fx?.byProject && fx.byProject.length > 0
+      ? `<p class="projline">${fx.byProject.map((p) => `<span class="pchip">${esc(p.name)} <b>${fmtInt(p.count)}</b></span>`).join(" ")} <span class="dim">lifetime fires per project</span></p>`
+      : "";
+
   const provEntries = fx?.byProvider
     ? Object.entries(fx.byProvider)
         .filter((e): e is [string, number] => typeof e[1] === "number")
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     : [];
+  // Which providers READ this file — a different fact from who fired it, and
+  // stated even (especially) for items with no fires at all: an AGENTS.md is
+  // read, not fired, and silence about its readers would hide its one fact.
+  const readByLine =
+    item.readBy && item.readBy.length > 0
+      ? `<p class="provline">read by ${item.readBy.map(esc).join(" · ")}</p>`
+      : "";
   const providerLines =
     provEntries.length > 1
       ? `<p class="provline">${provEntries.map(([s, n]) => `${esc(s)} <b>${fmtInt(n)}</b>`).join(" · ")} <span class="dim">lifetime fires per provider</span></p>`
@@ -1264,17 +1375,30 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
               const marks =
                 (ev.outcome === "error" ? `<span class="evmark">error</span>` : "") +
                 (ev.outcome === "rejected" ? `<span class="evmark">rejected</span>` : "") +
-                (ev.interrupted ? `<span class="evmark">interrupted</span>` : "");
-              return `<button class="evrow" data-open-event="${esc(ev.id)}" data-event-item="${item.id}"${purged ? " disabled" : ""} title="${esc(purged ? "transcript deleted (event retained)" : "open the transcript at this invocation")}">
+                (ev.interrupted ? `<span class="evmark">interrupted</span>` : "") +
+                // An imported row names its method inline: no transcript ever
+                // sat behind it, and its open affordance says what it opens.
+                (ev.backfill ? `<span class="evmark">backfilled</span>` : "");
+              const openTitle = purged
+                ? "transcript deleted (event retained)"
+                : ev.backfill
+                  ? "open history.jsonl at this imported entry"
+                  : "open the transcript at this invocation";
+              return `<button class="evrow" data-open-event="${esc(ev.id)}" data-event-item="${item.id}"${purged ? " disabled" : ""} title="${esc(openTitle)}">
                 <span class="evts">${esc(fmtDay(ev.ts))}</span>
                 <span class="evproj">${esc(ev.project)}</span>
                 <span class="evch">${esc(ev.channel)}</span>${marks}${purged ? `<span class="evgone">transcript deleted (event retained)</span>` : ""}
               </button>`;
             })
             .join("");
+          // With imported rows in the list the caption hedges to "source
+          // record" — a backfilled row opens history.jsonl, not a transcript.
+          const opens = evs.some((ev) => ev.backfill)
+            ? "each row opens its source record at the line"
+            : "each row opens its transcript at the line";
           return `<section>
             <span class="engr">invocations</span>
-            <p class="evcap dim">${cap} · newest first${fx.trackedSince ? ` · tracked since ${fmtDay(fx.trackedSince)}` : ""} · each row opens its transcript at the line</p>
+            <p class="evcap dim">${cap} · newest first${fx.trackedSince ? ` · tracked since ${fmtDay(fx.trackedSince)}` : ""} · ${opens}</p>
             <div class="evlist">${rows}</div>
           </section>`;
         })()
@@ -1355,10 +1479,13 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
         <span class="engr">fires</span>
         <p>${fireLine}</p>
         ${lifetimeLine}
+        ${projLine}
         ${channelBlock}
+        ${readByLine}
         ${providerLines}
         ${outcomeLine}
-        ${fx ? weekStrip(fx, w) : ""}
+        ${fx ? weekStrip(fx, w, listed ? w.listingCrossedAt : undefined) : ""}
+        ${budgetNote ? `<p class="kv-note">${esc(budgetNote)}</p>` : ""}
         ${collisionBlock}
         ${fireCaveat}
       </section>
@@ -1373,9 +1500,14 @@ export function renderDrawerBody(item: UiItem | undefined, state: AppState, win?
 }
 
 /** The drawer as a standalone element — used by renderApp and static export. */
-export function renderDrawer(item: UiItem | undefined, state: AppState, win?: Window): string {
+export function renderDrawer(
+  item: UiItem | undefined,
+  state: AppState,
+  win?: Window,
+  totalSessions = 0
+): string {
   if (!item) return `<aside class="drawer" aria-hidden="true"></aside>`;
-  return `<aside class="drawer open" role="dialog" aria-label="${esc(item.name)}" tabindex="-1">${renderDrawerBody(item, state, win)}</aside>`;
+  return `<aside class="drawer open" role="dialog" aria-label="${esc(item.name)}" tabindex="-1">${renderDrawerBody(item, state, win, totalSessions)}</aside>`;
 }
 
 // --- page ------------------------------------------------------------------
@@ -1460,6 +1592,6 @@ export function renderResults(payload: UiPayload, state: AppState): string {
 export function renderApp(payload: UiPayload, state: AppState): string {
   const selected = payload.items.find((i) => i.id === state.selected);
   return `${renderPage(payload, state)}
-  ${renderDrawer(selected, state, usageWindow(payload))}
+  ${renderDrawer(selected, state, usageWindow(payload), payload.history?.transcriptFiles ?? 0)}
   ${selected ? `<div class="catch" data-close></div>` : ""}`;
 }

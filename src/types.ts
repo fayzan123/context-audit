@@ -151,6 +151,13 @@ export interface SkillUsage {
   firstFired?: string;
   lastFired?: string;
   interruptedAfter: number;
+  /**
+   * The asset kind this row's fires resolved to, decided per dispatch channel
+   * (a Skill tool_use is evidence for "skill", a typed command for "command").
+   * Lets a name installed as both a skill and a command keep two honest rows
+   * instead of one kind silently absorbing the other's fires.
+   */
+  kind?: AssetKind;
 }
 
 // --- usage ledger ---------------------------------------------------------
@@ -196,6 +203,8 @@ export interface LedgerEvent {
   src?: { file: string; line: number };
   /** Imported from history.jsonl rather than observed in a transcript — typed channel only. */
   backfill?: boolean;
+  /** Written by a real-time hook rather than derived from a transcript scan. */
+  hook?: boolean;
 }
 
 /** Which rung of the install-date fallback chain produced the date. */
@@ -280,6 +289,11 @@ export interface UiFireEvent {
    * affordance is disabled up front instead of after a dead round-trip.
    */
   purged?: boolean;
+  /**
+   * Imported from history.jsonl — no transcript ever existed behind this row,
+   * so it is labeled as an import and carries no open affordance.
+   */
+  backfill?: boolean;
 }
 
 /** Fire history for one item. `null` on an item means "tracked, never fired". */
@@ -300,6 +314,8 @@ export interface UiFires {
   byChannel?: { auto: number; typed: number };
   /** Lifetime fires per provider, for assets read by more than one harness. */
   byProvider?: Partial<Record<SourceId, number>>;
+  /** Lifetime fires per project display name, descending — never the path. */
+  byProject?: { name: string; count: number }[];
   /** Lifetime fires split by recorded launch result. */
   outcomes?: { ok: number; error: number; rejected: number };
   /** Fires bucketed by ISO week start — the trend strip's data. */
@@ -391,6 +407,13 @@ export interface ListingBudget {
   pct: number;
   /** Decided on raw characters, never on the rounded percentage. */
   over: boolean;
+  /**
+   * When snapshots record the listing crossing from under to over budget,
+   * the ts of the first over-budget snapshot after the latest under-budget
+   * one — the onset a quiet skill's trend can be read against. Absent when
+   * no crossing is recorded.
+   */
+  crossedAt?: string;
 }
 
 /** The pitch in five numbers, plus the denominators that keep them honest. */

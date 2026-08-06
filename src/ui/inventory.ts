@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { injectedChars, listingBudget, listingChars } from "../content.js";
+import { LISTING_BUDGET_CHARS, injectedChars, listingBudget, listingChars } from "../content.js";
 import { historyFacts } from "../history.js";
-import { openLedger, type Ledger } from "../ledger.js";
+import { openLedger, type Ledger, type LedgerSnapshot } from "../ledger.js";
 import { resolveProvenance } from "../provenance.js";
 import { securityScan } from "../security.js";
 import { discoverSkills, isSkillMd, parseFrontmatter } from "../skills.js";
 import { ADAPTERS, scanLedgerHome, type AuditContext } from "../sources/index.js";
 import { codexAdapter } from "../sources/codex.js";
 import type {
+  AssetKind,
   LedgerEvent,
   SecurityFinding,
   Skill,
@@ -28,6 +29,13 @@ export interface UiBuildOptions {
   /** Explicit-directory mode: audit one claude-format skills directory. */
   dir?: string;
   sources?: SourceId[];
+  /**
+   * Server-side hand-off: called once per build with the scan's open ledger
+   * (undefined when unavailable), so request handlers reuse the parsed
+   * instance instead of re-reading the whole store per click. Never part of
+   * the payload — the browser gets JSON only.
+   */
+  onLedger?: (ledger: Ledger | undefined) => void;
 }
 
 /**
@@ -38,6 +46,17 @@ export interface UiBuildOptions {
  */
 export function itemId(source: string, kind: string, path: string): string {
   return createHash("sha256").update(`${source}\0${kind}\0${path}`).digest("hex").slice(0, 16);
+}
+
+/**
+ * Browser-facing event identity: a digest of the durable ledger id. Raw ids
+ * embed session ids — and load-event ids embed absolute directories — so the
+ * verbatim id in a payload would leak exactly what the projection's other
+ * fields redact. The server resolves a digest back to its event from its own
+ * ledger, the same trust model as item ids.
+ */
+export function eventDigest(id: string): string {
+  return createHash("sha256").update(id).digest("hex").slice(0, 16);
 }
 
 /** One discovered asset plus everything the payload needs that Skill lacks. */
@@ -242,7 +261,27 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
   const rawEvents: LedgerEvent[] = [];
   const joinKey = (provider: string, kind: string, name: string): string =>
     `${provider}\u0000${kind}\u0000${name}`;
+  // The dispatch token's kind(s) per the CURRENT inventory. Ledger events are
+  // re-keyed through this at join time (below): hook writers hard-code a
+  // provisional kind, and older banked events carry last-wins guesses — the
+  // inventory, not the writer, decides which row a claude dispatch name
+  // belongs to.
+  const claudeKinds = new Map<string, Set<AssetKind>>();
+  for (const r of rows) {
+    if (!(r.source === "claude" || r.source === "custom") || !r.tracked) continue;
+    const k = r.skill.kind ?? "skill";
+    const set = claudeKinds.get(r.skill.dirName);
+    if (set) set.add(k);
+    else claudeKinds.set(r.skill.dirName, new Set([k]));
+  }
+
   let history: UiPayload["history"];
+  // Per-provider window starts, captured BEFORE the merge below: the
+  // dead-weight age gate and the load in-window count must compare against
+  // the window of the provider that produced the evidence, and the merged
+  // minimum is not that.
+  let claudeWindowStart: string | undefined;
+  let codexWindowStart: string | undefined;
   if (opts.history) {
     // Claude-format assets — user, project, plugin, and explicit-directory
     // audits alike — all dispatch by name into ~/.claude/projects transcripts.
@@ -254,16 +293,18 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
         ctx.transcripts ?? join(ctx.home, ".claude", "projects"),
         claudeDispatchable.map((r) => r.skill)
       );
-      // The transcript records the dispatch token; the inventory decides that
-      // token's kind (exactly as history.ts does for its events), so typed
-      // and auto fires of one asset land under one key.
+      // Usage rows carry the kind the dispatch channel resolved (history.ts);
+      // the name map is only a fallback for rows without one. A last-wins
+      // overwrite here handed a shared dispatch name's fires to whichever
+      // kind was discovered last, zeroing the other row.
       const kindOf = new Map(claudeDispatchable.map((r) => [r.skill.dirName, r.skill.kind ?? "skill"]));
       for (const u of h.usage) {
-        const kind = kindOf.get(u.skill) ?? "skill";
+        const kind = u.kind ?? kindOf.get(u.skill) ?? "skill";
         usageByKey.set(joinKey("claude", kind, u.skill), toFires(u));
         usageByKey.set(joinKey("custom", kind, u.skill), toFires(u));
       }
       if (h.events) rawEvents.push(...h.events);
+      claudeWindowStart = h.windowStart;
       history = { transcriptFiles: h.transcriptFiles, windowStart: h.windowStart, windowEnd: h.windowEnd };
     }
     // Codex history runs whenever the tool is present and wanted, not only
@@ -274,11 +315,18 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
       const h = await codexAdapter.usage(ctx, codexPrompts);
       for (const u of h.usage) usageByKey.set(joinKey("codex", "prompt", u.skill), toFires(u));
       if (h.events) rawEvents.push(...h.events);
-      history = {
-        transcriptFiles: (history?.transcriptFiles ?? 0) + h.transcriptFiles,
-        windowStart: [history?.windowStart, h.windowStart].filter(Boolean).sort()[0],
-        windowEnd: [history?.windowEnd, h.windowEnd].filter(Boolean).sort().pop(),
-      };
+      codexWindowStart = h.windowStart;
+      // The merged window and file count describe TRACKED rows. On a machine
+      // with rollouts but no prompts, folding the rollout horizon in rebased
+      // the claude-only window — "none in 180d" against 30 days of transcripts
+      // is an overclaim. The events and loads above are kept either way.
+      if (codexPrompts.length > 0) {
+        history = {
+          transcriptFiles: (history?.transcriptFiles ?? 0) + h.transcriptFiles,
+          windowStart: [history?.windowStart, h.windowStart].filter(Boolean).sort()[0],
+          windowEnd: [history?.windowEnd, h.windowEnd].filter(Boolean).sort().pop(),
+        };
+      }
     }
   }
 
@@ -293,7 +341,20 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
   if (opts.history) {
     try {
       const l = openLedger(scanLedgerHome(ctx));
-      l.appendEvents(rawEvents);
+      // A session whose typed commands the hooks already captured belongs to
+      // the hook: its transcript-derived typed events are dropped, not banked.
+      // The two writers stamp different clocks into the id, so appending both
+      // copies would double-count every typed command for hooks users.
+      const hookTypedSessions = new Set(
+        l.readEvents()
+          .filter((e) => e.hook === true && e.channel === "typed")
+          .map((e) => e.sessionId)
+      );
+      l.appendEvents(
+        rawEvents.filter(
+          (e) => !(e.provider === "claude" && e.channel === "typed" && !e.hook && hookTypedSessions.has(e.sessionId))
+        )
+      );
       ledgerEvents = l.readEvents();
       metaTrackedSince = l.meta().trackedSince;
       ledger = l;
@@ -306,6 +367,7 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
         `dead-weight are omitted; usage figures reflect the current transcript window only`;
     }
   }
+  opts.onLedger?.(ledger);
   // The backfill horizon: the typed channel reaches back to the oldest
   // imported history.jsonl entry, further than any surviving transcript. The
   // spec's label ("typed-channel history extends to <date> (backfilled)")
@@ -322,26 +384,47 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
     if (list) list.push(e);
     else m.set(k, [e]);
   };
+  // Join-time kind authority. For claude dispatch events the CHANNEL is the
+  // evidence — a typed fire belongs to the command row when a command owns the
+  // name, an auto fire to the skill row — and a name installed under exactly
+  // one kind takes all of its fires. The stored kind never decides a join
+  // alone (hooks hard-code provisional kinds; older events carry last-wins
+  // guesses), so already-banked mis-kinded events heal here, at read time.
+  const rekeyedKind = (e: LedgerEvent): AssetKind => {
+    if (e.provider !== "claude" || e.channel === "load") return e.kind;
+    if (e.kind !== "skill" && e.kind !== "command") return e.kind;
+    const channelKind: AssetKind = e.channel === "typed" ? "command" : "skill";
+    const set = claudeKinds.get(e.name);
+    if (!set) return e.kind;
+    if (set.has(channelKind)) return channelKind;
+    return set.size === 1 ? [...set][0] : channelKind;
+  };
   for (const e of ledgerEvents) {
-    put(eventsByKey, joinKey(e.provider, e.kind, e.name), e);
+    put(eventsByKey, joinKey(e.provider, rekeyedKind(e), e.name), e);
     // Passive loads name the loaded DIRECTORY; the item join below resolves
     // them back to the AGENTS.md asset living there.
     if (e.kind === "instructions" && e.channel === "load") put(loadsByDir, e.name, e);
   }
 
-  /** Monday of the event's ISO week, UTC — the trend strip's bucket key. */
-  const isoWeekStart = (ts: string): string => {
+  /** Monday of the event's ISO week, UTC — undefined for an unparseable ts. */
+  const isoWeekStart = (ts: string): string | undefined => {
     const d = new Date(ts);
+    // isLedgerEvent gates ts at the durable boundary; this is the sink's own
+    // belt — one bad stored line must never brick the whole payload build.
+    if (Number.isNaN(d.getTime())) return undefined;
     d.setUTCHours(0, 0, 0, 0);
     d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return d.toISOString().slice(0, 10);
   };
 
-  /** Browser-bound projection: ids and display names only, never the src path. */
+  /** Browser-bound projection: digested ids and display names only, never the src path. */
   const toFireEvent = (e: LedgerEvent): UiFireEvent => {
-    const fe: UiFireEvent = { id: e.id, ts: e.ts, project: e.project ? basename(e.project) : "", channel: e.channel };
+    const fe: UiFireEvent = { id: eventDigest(e.id), ts: e.ts, project: e.project ? basename(e.project) : "", channel: e.channel };
     if (e.outcome) fe.outcome = e.outcome;
     if (e.interrupted) fe.interrupted = true;
+    // Imported from history.jsonl, not observed in a transcript — labeled so
+    // the row never promises a transcript it does not have.
+    if (e.backfill) fe.backfill = true;
     // The harness already purged this event's transcript: the drill-down row
     // renders disabled up front instead of after a dead open round-trip.
     if (e.src && !existsSync(e.src.file)) fe.purged = true;
@@ -372,13 +455,23 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
       const byProvider: Partial<Record<SourceId, number>> = {};
       for (const e of evts) byProvider[e.provider] = (byProvider[e.provider] ?? 0) + 1;
       f.byProvider = byProvider;
+      // Lifetime fires per project — the S1 "which projects?" answer. Display
+      // basenames only: browser-bound rows carry no filesystem paths.
+      const byProject = new Map<string, number>();
+      for (const e of evts) {
+        const p = e.project ? basename(e.project) : "(unknown)";
+        byProject.set(p, (byProject.get(p) ?? 0) + 1);
+      }
+      f.byProject = [...byProject.entries()]
+        .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+        .map(([name, count]) => ({ name, count }));
       const outcomes = { ok: 0, error: 0, rejected: 0 };
       for (const e of evts) if (e.outcome) outcomes[e.outcome]++;
       f.outcomes = outcomes;
       const bins = new Map<string, number>();
       for (const e of evts) {
         const w = isoWeekStart(e.ts);
-        bins.set(w, (bins.get(w) ?? 0) + 1);
+        if (w) bins.set(w, (bins.get(w) ?? 0) + 1);
       }
       f.weeklyBins = [...bins.entries()]
         .sort((a, b) => (a[0] < b[0] ? -1 : 1))
@@ -407,6 +500,33 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
       if (group.length === 2 && group[0].twinPath === group[1].skill.dir) continue;
       for (const row of group) {
         collisionByRow.set(row, group.filter((r) => r !== row).map((r) => r.skill.dir));
+      }
+    }
+  }
+  // The same dispatch name installed as BOTH a skill and a command in one
+  // source: the channel evidence splits typed from auto fires between the two
+  // rows, but nothing can prove a typed fire meant the command rather than
+  // the skill — every copy carries the cannot-split warning instead of one
+  // row silently reading zero.
+  {
+    const byName = new Map<string, Row[]>();
+    for (const row of rows) {
+      if (!row.tracked) continue;
+      const kind = row.skill.kind ?? "skill";
+      if (kind !== "skill" && kind !== "command") continue;
+      const k = `${row.source}\u0000${row.skill.dirName}`;
+      const group = byName.get(k);
+      if (group) group.push(row);
+      else byName.set(k, [row]);
+    }
+    for (const group of byName.values()) {
+      if (new Set(group.map((r) => r.skill.kind ?? "skill")).size < 2) continue;
+      for (const row of group) {
+        const others = group
+          .filter((r) => r !== row && (r.skill.kind ?? "skill") !== (row.skill.kind ?? "skill"))
+          .map((r) => r.skill.dir);
+        const prior = collisionByRow.get(row) ?? [];
+        collisionByRow.set(row, [...prior, ...others.filter((p) => !prior.includes(p))]);
       }
     }
   }
@@ -471,7 +591,9 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
         const loads = loadsByDir.get(dirname(s.dir)) ?? [];
         if (loads.length > 0) {
           item.readBy = [...new Set(loads.map((e) => e.provider))].sort();
-          const winStart = history?.windowStart;
+          // Loads come from codex rollouts, so "in window" means CODEX's own
+          // window — the merged one may describe claude transcripts only.
+          const winStart = codexWindowStart;
           const inWindow = winStart ? loads.filter((e) => e.ts >= winStart) : loads;
           item.fires = withLedger(
             {
@@ -557,19 +679,23 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
   // Dead weight: enabled, tracked, zero fires in BOTH windows, and installed
   // before the transcript window began — present for the whole observed
   // window yet silent. That last clause is the empirical age gate: a younger
-  // item is "too new to judge", not dead weight.
+  // item is "too new to judge", not dead weight. Each item is judged against
+  // ITS provider's window — an old codex rollout must never stretch the
+  // horizon a claude skill is measured by.
   let deadWeightChars: number | undefined;
-  const windowStart = history?.windowStart;
-  if (ledger && windowStart) {
+  if (ledger && (claudeWindowStart !== undefined || codexWindowStart !== undefined)) {
     deadWeightChars = items
-      .filter(
-        (i) =>
+      .filter((i) => {
+        const gate = i.source === "codex" ? codexWindowStart : claudeWindowStart;
+        return (
           i.enabled &&
           i.fires !== undefined &&
           (i.fires === null || (i.fires.lifetime?.invocations ?? i.fires.invocations) === 0) &&
           i.provenance !== undefined &&
-          i.provenance.installedAt < windowStart
-      )
+          gate !== undefined &&
+          i.provenance.installedAt < gate
+        );
+      })
       .reduce((sum, i) => sum + i.injectedChars, 0);
   }
 
@@ -578,15 +704,40 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
     const byProvider: Record<string, number> = {};
     for (const i of items) byProvider[i.source] = (byProvider[i.source] ?? 0) + 1;
     try {
-      ledger.appendSnapshot({
+      // listingChars rides along so the budget-crossing date stays derivable
+      // later — injectedChars is a different figure (instruction bodies
+      // included) and cannot stand in for the budgeted slice.
+      const snap: LedgerSnapshot = {
         ts: new Date().toISOString(),
         items: items.length,
         enabled: enabledItems.length,
         injectedChars: injected,
         byProvider,
-      });
+        listingChars: listedChars,
+      };
+      ledger.appendSnapshot(snap);
     } catch {
       // Snapshots power deltas, not this payload; a failed append changes nothing here.
+    }
+  }
+
+  // The latest under→over budget crossing in the snapshot history (this run's
+  // line included) — the anchor for "went quiet around when the listing went
+  // over budget". Snapshots from before listingChars was recorded are
+  // unknown, not "under", so they never fabricate a crossing.
+  if (ledger && listing) {
+    try {
+      let prev: number | undefined;
+      let crossedAt: string | undefined;
+      for (const s of [...ledger.readSnapshots()].sort((a, b) => (a.ts < b.ts ? -1 : 1))) {
+        const lc = s.listingChars;
+        if (typeof lc !== "number") continue;
+        if (prev !== undefined && prev <= LISTING_BUDGET_CHARS && lc > LISTING_BUDGET_CHARS) crossedAt = s.ts;
+        prev = lc;
+      }
+      if (crossedAt) listing.crossedAt = crossedAt;
+    } catch {
+      // The crossing date annotates rows; its absence never blocks the payload.
     }
   }
 

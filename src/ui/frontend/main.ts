@@ -142,7 +142,12 @@ function render(): void {
   page.innerHTML = renderPage(payload, state);
 
   if (selected) {
-    drawer.innerHTML = renderDrawerBody(selected, state, usageWindow(payload));
+    drawer.innerHTML = renderDrawerBody(
+      selected,
+      state,
+      usageWindow(payload),
+      payload.history?.transcriptFiles ?? 0
+    );
     drawer.setAttribute("aria-label", selected.name);
   }
   // Closing keeps the last contents in place so the 260ms slide-out has

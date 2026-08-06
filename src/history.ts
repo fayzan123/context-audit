@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { basename, join, sep } from "node:path";
-import { LEDGER_SCHEMA_VERSION } from "./ledger.js";
+import { LEDGER_SCHEMA_VERSION, NAME_RE } from "./ledger.js";
 import type { AssetKind, HistoryFacts, LedgerChannel, LedgerEvent, Skill, SkillUsage } from "./types.js";
 
 interface Invocation {
@@ -69,10 +69,23 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
   let windowEnd: string | undefined;
 
   // The transcript records the dispatch token, not what it resolved to; the
-  // inventory says whether that token is a skill or a command, so auto and
-  // typed fires of the same asset land under one (kind, name) key.
-  const kindByName = new Map<string, AssetKind>();
-  for (const s of skills) kindByName.set(s.dirName, s.kind ?? "skill");
+  // inventory says which kinds that token is installed as. The dispatch
+  // channel is evidence: a Skill tool_use firing a name installed as both a
+  // skill and a command belongs to the skill row, a typed command to the
+  // command row — a name is never handed to one kind because it was
+  // discovered last.
+  const kindsByName = new Map<string, Set<AssetKind>>();
+  for (const s of skills) {
+    const k = s.kind ?? "skill";
+    const set = kindsByName.get(s.dirName);
+    if (set) set.add(k);
+    else kindsByName.set(s.dirName, new Set([k]));
+  }
+  const resolveKind = (name: string, channelKind: AssetKind): AssetKind => {
+    const set = kindsByName.get(name);
+    if (!set || set.has(channelKind)) return channelKind;
+    return set.size === 1 ? [...set][0] : channelKind;
+  };
 
   for (const file of files) {
     const rl = createInterface({ input: createReadStream(file, "utf8"), crlfDelay: Infinity });
@@ -164,21 +177,27 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
 
       if (wantsTool && Array.isArray(content)) {
         for (const b of content) {
-          if (b?.type !== "tool_use" || typeof b?.id !== "string") continue;
+          if (b?.type !== "tool_use") continue;
           let name: string;
           let kind: AssetKind;
           if (b.name === "Skill" && typeof b.input?.skill === "string") {
             // Verbatim dispatch token — plugin:skill namespacing kept.
             name = b.input.skill;
-            kind = kindByName.get(name) ?? "skill";
+            kind = resolveKind(name, "skill");
           } else if ((b.name === "Agent" || b.name === "Task") && typeof b.input?.subagent_type === "string") {
             name = b.input.subagent_type;
             kind = "agent";
           } else {
             continue;
           }
+          // Dispatch tokens only — anything shaped like args or prose is
+          // refused, the same gate the hooks writer applies. Both writers of
+          // the event stream must agree on what a name is.
+          if (!NAME_RE.test(name)) continue;
           const inv: Invocation = { name, kind, sessionId, file, lineNo, timestamp: lineTs };
-          if (lineTs) {
+          // The id exists only to be the ledger dedupe key: a block without
+          // one still counts as an invocation — it just cannot yield an event.
+          if (lineTs && typeof b.id === "string") {
             const ev = buildEvent(obj, `${sessionId}:${b.id}`, lineTs, kind, name, "auto", sessionId, b.caller);
             inv.event = ev;
             pending.set(b.id, ev);
@@ -189,13 +208,29 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
         }
       }
 
-      const cmd = COMMAND_RE.exec(line);
+      // A typed command is a USER turn whose own prompt text carries the
+      // marker. Assistant text or tool output QUOTING the literal marker is
+      // not a fire — third-party content must never forge one. The raw line
+      // is matched only as the fallback for unparseable lines: those still
+      // count (the regex saw them) but cannot yield a ledger event.
+      let cmdText: string | undefined;
+      if (obj === undefined) {
+        cmdText = line;
+      } else if (obj.type === "user" && !("toolUseResult" in obj)) {
+        const mc = obj.message?.content;
+        if (typeof mc === "string") cmdText = mc;
+        else if (Array.isArray(mc)) {
+          cmdText = mc
+            .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+            .map((b: any) => b.text)
+            .join("\n");
+        }
+      }
+      const cmd = cmdText === undefined ? null : COMMAND_RE.exec(cmdText);
       if (cmd) {
         const name = cmd[1];
-        const kind = kindByName.get(name) ?? "command";
+        const kind = resolveKind(name, "command");
         const inv: Invocation = { name, kind, sessionId, file, lineNo, timestamp: lineTs };
-        // A typed command on an unparseable line still counts (the regex saw
-        // it) — it just cannot yield a ledger event.
         if (lineTs && obj) {
           const ev = buildEvent(obj, `${sessionId}:${lineTs}:${name}`, lineTs, kind, name, "typed", sessionId);
           inv.event = ev;
@@ -219,20 +254,25 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
 
   // Agent launches ride the ledger only: the aggregation below feeds the
   // skill/command usage table, and subagent types in `external` would read as
-  // uninstalled skills.
-  const bySkill = new Map<string, Invocation[]>();
+  // uninstalled skills. Keyed (kind, name): a skill and a command sharing a
+  // dispatch name keep separate rows, so neither absorbs the other's fires.
+  const byAsset = new Map<string, { name: string; kind: AssetKind; invs: Invocation[] }>();
   for (const inv of invocations) {
     if (inv.kind === "agent") continue;
-    bySkill.set(inv.name, [...(bySkill.get(inv.name) ?? []), inv]);
+    const key = `${inv.kind}\0${inv.name}`;
+    const g = byAsset.get(key);
+    if (g) g.invs.push(inv);
+    else byAsset.set(key, { name: inv.name, kind: inv.kind, invs: [inv] });
   }
 
-  const toUsage = (name: string, invs: Invocation[]): SkillUsage => {
+  const toUsage = (name: string, kind: AssetKind, invs: Invocation[]): SkillUsage & { kind: AssetKind } => {
     const stamps = invs
       .map((i) => i.timestamp)
       .filter((t): t is string => !!t)
       .sort();
     return {
       skill: name,
+      kind,
       invocations: invs.length,
       // By sessionId, not file: a fire in a subagent transcript belongs to the
       // session that launched the agent, not to a session of its own.
@@ -246,8 +286,8 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
   const installed = new Set(skills.map((s) => s.dirName));
   const usage: SkillUsage[] = [];
   const external: SkillUsage[] = [];
-  for (const [name, invs] of bySkill) {
-    (installed.has(name) ? usage : external).push(toUsage(name, invs));
+  for (const { name, kind, invs } of byAsset.values()) {
+    (installed.has(name) ? usage : external).push(toUsage(name, kind, invs));
   }
   usage.sort((a, b) => b.invocations - a.invocations);
   external.sort((a, b) => b.invocations - a.invocations);
@@ -257,7 +297,10 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
     windowStart,
     windowEnd,
     usage,
-    neverFired: skills.map((s) => s.dirName).filter((n) => !bySkill.has(n)).sort(),
+    neverFired: skills
+      .filter((s) => !byAsset.has(`${s.kind ?? "skill"}\0${s.dirName}`))
+      .map((s) => s.dirName)
+      .sort(),
     external,
     events,
   };

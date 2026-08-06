@@ -1879,6 +1879,10 @@ console.log("UI FRONTEND tier (fixture render):");
     bodyChars: 4000,
     fires: null,
     findings: [],
+    // Predates the window: dead-weight amber requires the install date to
+    // beat windowStart (the spec's age gate), so the fired/disabled rows
+    // below stay excluded by their own conditions, not by missing provenance.
+    provenance: { installedAt: "2026-05-01T00:00:00Z", source: "birthtime" },
     ...over,
   });
   const items = [

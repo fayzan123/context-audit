@@ -1,1 +1,2 @@
 {"v":1,"id":"old1","ts":"2026-03-01T12:00:00.000Z","provider":"claude","kind":"skill","name":"impeccable","channel":"auto","outcome":"ok","sessionId":"old-sess","project":"/old/proj","src":{"file":"/purged/transcript.jsonl","line":3}}
+{"v":1,"id":"miskey1","ts":"2026-03-02T12:00:00.000Z","provider":"claude","kind":"command","name":"ship-it","channel":"typed","sessionId":"old-sess-2","project":"/old/acme"}

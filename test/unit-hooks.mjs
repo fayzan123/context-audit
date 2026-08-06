@@ -4,12 +4,25 @@
 //   - install twice adds each entry once; uninstall restores byte-identically
 //   - merge preserves pre-existing unrelated hooks and unknown keys
 //   - corrupt settings.json refuses the edit, never clobbers
+//   - a symlinked settings.json keeps its link; edits land in the real target
 //   - log-event maps valid payloads, dedupes, and NEVER stores args/prompts
+//   - every hook-written event is stamped hook:true, durably
 // Fixture homes are COPIED into mkdtemp dirs before editing and every ledger
 // gets an injected base — the real $HOME is never read.
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -134,6 +147,38 @@ console.log("CORRUPT SETTINGS (corrupt-home fixture):");
   check("uninstall on empty home is a clean no-op", !un.changed && !un.written && !existsSync(settingsPath(home)));
 }
 
+// --- symlinked settings.json (finding #15) ----------------------------------
+// A settings.json symlinked into a dotfiles repo must keep its link: the
+// atomic rename targets the resolved real file, never the symlink entry.
+if (process.platform !== "win32") {
+  console.log("SYMLINKED SETTINGS:");
+  const home = freshHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const target = join(home, "dotfiles-settings.json");
+  writeFileSync(target, "{}\n");
+  symlinkSync(target, settingsPath(home));
+
+  const inst = hooksInstall(home, { confirm: true });
+  check("install through a symlink writes", inst.changed && inst.written && !inst.error);
+  check("settings.json is still a symlink after install", lstatSync(settingsPath(home)).isSymbolicLink());
+  check("the link target received the edit", readFileSync(target, "utf8") === inst.after);
+
+  const un = hooksUninstall(home, { confirm: true });
+  check("settings.json is still a symlink after uninstall", un.written && lstatSync(settingsPath(home)).isSymbolicLink());
+  check("uninstall restored the target byte-identically", readFileSync(target, "utf8") === "{}\n");
+
+  // Dangling symlink: nothing to resolve, so the literal path is written —
+  // the link is replaced by a regular file, same as before the fix.
+  const home2 = freshHome();
+  mkdirSync(join(home2, ".claude"), { recursive: true });
+  symlinkSync(join(home2, "missing-target.json"), settingsPath(home2));
+  const inst2 = hooksInstall(home2, { confirm: true });
+  check(
+    "dangling symlink: install writes a regular file at the literal path",
+    inst2.written && !lstatSync(settingsPath(home2)).isSymbolicLink() && existsSync(settingsPath(home2))
+  );
+}
+
 // --- log-event: valid payloads ----------------------------------------------
 console.log("LOG-EVENT (valid payloads):");
 {
@@ -148,6 +193,7 @@ console.log("LOG-EVENT (valid payloads):");
     skill?.id === "sess-1:toolu_abc123" && skill.provider === "claude" && skill.channel === "auto"
   );
   check("skill event records name and project only", skill.name === "impeccable" && skill.project === "/Users/someone/proj");
+  check("skill event is stamped hook:true", skill.hook === true);
 
   const r2 = logEvent(payload("skill.json"), ledger, "PostToolUse");
   check("duplicate tool_use_id is skipped", r2.appended === 0 && r2.skipped === 1, JSON.stringify(r2));
@@ -158,12 +204,18 @@ console.log("LOG-EVENT (valid payloads):");
     "agent payload maps subagent_type",
     r3.appended === 1 && agent?.name === "code-reviewer" && agent.id === "sess-1:toolu_def456"
   );
+  check("agent event is stamped hook:true", agent.hook === true);
 
   const r4 = logEvent(payload("prompt.json"), ledger, "UserPromptExpansion");
   const cmd = ledger.readEvents({ kind: "command" })[0];
   check("prompt expansion appends a typed command", r4.appended === 1 && cmd?.channel === "typed");
   check("slash stripped, first token only", cmd.name === "impeccable");
   check("typed id follows sessionId:ts:name", /^sess-2:\d{4}-\d{2}-\d{2}T.*:impeccable$/.test(cmd.id), cmd.id);
+  check("typed event is stamped hook:true", cmd.hook === true);
+  check(
+    "hook marker survives reopen (durable, not in-memory)",
+    openLedger(base).readEvents().every((e) => e.hook === true)
+  );
 
   // --- no content ever stored ----------------------------------------------
   console.log("LOG-EVENT (content never stored):");

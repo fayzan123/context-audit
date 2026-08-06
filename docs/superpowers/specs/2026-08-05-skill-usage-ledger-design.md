@@ -81,7 +81,7 @@ Each adapter's existing `usage()` pass emits raw events; a new ingest step appen
 
 `~/.claude/history.jsonl` survives the 30-day purge — verified: 5,038 entries spanning 2026-02-26 → 2026-08-05 (~5.3 months vs ~6 weeks of transcripts), each `{display, pastedContents, timestamp(epoch-ms), project, sessionId}`. It recovers the **typed channel only**. The importer's cleaning rules (all verified against real data):
 
-1. Per entry, split `display` on newlines, take the first token of the first line; accept only `^\/[A-Za-z][A-Za-z0-9_-]*$` (rejects pasted absolute paths and anchor fragments — both observed).
+1. Per entry, split `display` on newlines, take the first token of the first line; accept only `^\/[A-Za-z][A-Za-z0-9:_-]*$` (rejects pasted absolute paths and anchor fragments — both observed; `:` is admitted so rule 4's plugin dispatch names like `/superpowers:brainstorming` remain matchable).
 2. Classify against a built-ins allowlist (`/usage /status /model /exit /clear /compact /effort /login /config /context /resume /continue /mcp /doctor /permissions /plugins /plugin /voice /rate-limit-options`) — built-ins are recorded with `kind: "command"` only if the user opts in; by default they are dropped (3,043 of 3,179 slash entries here are built-ins).
 3. Drop sessions whose entries are 100% built-ins — this kills automation pollution (a ~10.8-minute-cadence `/usage` poller accounts for 2,594 entries and 2,918 of 3,147 sessions on this machine).
 4. Remaining tokens match against installed skills/commands/plugin dispatch names; unmatched tokens (typos, renamed, deleted — 8 distinct here) are kept as `name` with no inventory join, surfacing in the existing external-fires bucket.

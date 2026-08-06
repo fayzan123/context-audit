@@ -4,8 +4,15 @@
   "tookMs": 640,
   "root": "/fixture",
   "header": {
-    "items": 10,
+    "items": 11,
     "providers": 2,
+    "listing": {
+      "chars": 9040,
+      "budgetChars": 8000,
+      "pct": 113,
+      "over": true,
+      "crossedAt": "2026-05-10T00:00:00.000Z"
+    },
     "injectedChars": 2820,
     "injectedTokens": 705,
     "neverFired": 3,
@@ -17,7 +24,8 @@
   "history": {
     "transcriptFiles": 87,
     "windowStart": "2026-06-24T00:00:00Z",
-    "windowEnd": "2026-08-04T00:00:00Z"
+    "windowEnd": "2026-08-04T00:00:00Z",
+    "backfilledSince": "2026-04-10T09:00:00Z"
   },
   "items": [
     {
@@ -52,6 +60,10 @@
         "trackedSince": "2026-03-01T00:00:00Z",
         "byChannel": { "auto": 39, "typed": 3 },
         "byProvider": { "claude": 40, "codex": 2 },
+        "byProject": [
+          { "name": "context-audit", "count": 30 },
+          { "name": "tools", "count": 12 }
+        ],
         "outcomes": { "ok": 40, "error": 1, "rejected": 1 },
         "weeklyBins": [
           { "weekStart": "2026-06-22", "count": 1 },
@@ -108,7 +120,8 @@
           { "weekStart": "2026-05-04", "count": 7 }
         ],
         "events": [
-          { "id": "ev-typed-1", "ts": "2026-05-06T10:00:00Z", "project": "blog", "channel": "typed" }
+          { "id": "ev-typed-1", "ts": "2026-05-06T10:00:00Z", "project": "blog", "channel": "typed" },
+          { "id": "ev-typed-0", "ts": "2026-04-10T09:00:00Z", "project": "blog", "channel": "typed", "backfill": true }
         ]
       },
       "findings": []
@@ -280,6 +293,22 @@
       "injection": "body",
       "injectedChars": 350,
       "bodyChars": 350,
+      "findings": []
+    },
+    {
+      "id": "id-agents",
+      "name": "AGENTS.md",
+      "source": "codex",
+      "kind": "instructions",
+      "path": "/home/u/.codex/AGENTS.md",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "body",
+      "injectedChars": 600,
+      "bodyChars": 600,
+      "readBy": ["codex"],
       "findings": []
     }
   ]

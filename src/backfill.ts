@@ -19,8 +19,9 @@ interface HistoryEntry {
 
 // First token of the first display line must look like a dispatch. Rejects
 // pasted absolute paths (second "/") and anchor fragments ("#") — both
-// observed in real history data.
-const TOKEN_RE = /^\/[A-Za-z][A-Za-z0-9_-]*$/;
+// observed in real history data. ":" is in the class because plugin and
+// subdirectory dispatches fire as /pack:name.
+const TOKEN_RE = /^\/[A-Za-z][A-Za-z0-9:_-]*$/;
 
 // Claude Code's own commands. They say nothing about installed assets, so
 // they are dropped unless the caller opts in — 3,043 of 3,179 slash entries
@@ -92,6 +93,10 @@ export function runBackfill(
       entry.sessionId.length === 0
     )
       continue;
+    // Number.isFinite admits epochs outside Date's representable ±8.64e15 ms,
+    // where toISOString() throws — one torn write must not abort the import.
+    const when = new Date(entry.timestamp);
+    if (Number.isNaN(when.getTime())) continue;
     if (captured.has(entry.sessionId)) continue;
 
     let s = sessions.get(entry.sessionId);
@@ -103,7 +108,7 @@ export function runBackfill(
     const name = token.slice(1);
     const builtin = BUILTINS.has(name);
     if (builtin) s.builtinEntries++;
-    s.tokens.push({ name, builtin, ts: new Date(entry.timestamp).toISOString(), project: entry.project, line: i + 1 });
+    s.tokens.push({ name, builtin, ts: when.toISOString(), project: entry.project, line: i + 1 });
   }
 
   const unresolved = new Set<string>();

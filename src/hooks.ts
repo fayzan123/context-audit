@@ -3,9 +3,9 @@
 // payload to a ledger event. Install never writes without explicit confirm —
 // the caller prints the diff and decides. log-event never throws: a broken
 // hook must never break the user's session.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { LEDGER_SCHEMA_VERSION } from "./ledger.js";
+import { LEDGER_SCHEMA_VERSION, NAME_RE } from "./ledger.js";
 import type { Ledger } from "./ledger.js";
 import type { AssetKind, LedgerEvent } from "./types.js";
 
@@ -96,9 +96,13 @@ function finishEdit(loaded: LoadedSettings, settings: JsonObject, modified: bool
   if (opts.confirm) {
     mkdirSync(dirname(loaded.path), { recursive: true });
     // Same rename dance as the ledger: a crash mid-write must not tear settings.json.
-    const tmp = loaded.path + ".tmp";
+    // The rename targets the REAL file so a symlinked settings.json (dotfiles
+    // repo) keeps its link; a dangling symlink falls back to the literal path,
+    // matching the create-new-file behavior.
+    const dest = existsSync(loaded.path) ? realpathSync(loaded.path) : loaded.path;
+    const tmp = dest + ".tmp";
     writeFileSync(tmp, after);
-    renameSync(tmp, loaded.path);
+    renameSync(tmp, dest);
     written = true;
   }
   return { path: loaded.path, before: loaded.before, after, diff, changed: true, written };
@@ -194,9 +198,6 @@ export interface LogEventResult {
   skipped: number;
 }
 
-/** Dispatch tokens only — anything shaped like args or prose is refused. */
-const NAME_RE = /^[A-Za-z0-9:_-]+$/;
-
 function hookToEvent(payload: unknown, eventName: string): LedgerEvent | undefined {
   if (!isObject(payload)) return undefined;
   const sessionId = payload.session_id;
@@ -211,6 +212,9 @@ function hookToEvent(payload: unknown, eventName: string): LedgerEvent | undefin
     let kind: AssetKind;
     let name: unknown;
     if (payload.tool_name === "Skill") {
+      // Provisional hint: the payload names the tool, not the asset — the
+      // Skill tool also dispatches command assets. The read-side join re-keys
+      // hook events against the inventory; the stored kind never decides alone.
       kind = "skill";
       name = input.skill;
     } else if (payload.tool_name === "Agent" || payload.tool_name === "Task") {
@@ -232,6 +236,7 @@ function hookToEvent(payload: unknown, eventName: string): LedgerEvent | undefin
       channel: "auto",
       sessionId,
       project,
+      hook: true,
     };
   }
 
@@ -246,11 +251,14 @@ function hookToEvent(payload: unknown, eventName: string): LedgerEvent | undefin
       id: `${sessionId}:${ts}:${name}`,
       ts,
       provider: "claude",
+      // Provisional hint: a typed token may name a skill; the read-side join
+      // re-keys against the inventory the way transcript ingestion does.
       kind: "command",
       name,
       channel: "typed",
       sessionId,
       project,
+      hook: true,
     };
   }
 
