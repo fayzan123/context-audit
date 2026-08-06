@@ -1048,17 +1048,25 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
 // --- payload caveats: degraded reads state themselves ------------------------
 {
   check(
-    "payload caveats are counted in the rail and read in full on hover",
-    app2.includes(">2 caveats on these figures<") &&
+    "payload caveats are counted and read in full on hover",
+    app2.includes(">2 caveats<") &&
       app2.includes("Cursor&#39;s local conversation store could not be opened (SQLITE_CANTOPEN)") &&
       app2.includes("3 ledger lines were unreadable and were skipped."),
     "caveat strip wrong"
+  );
+  // They qualify the SCAN, not the current filter, so they sit in the masthead
+  // plate beside the scan stamp and window rather than in the filter rail.
+  check(
+    "caveats sit in the masthead plate, beside the scan facts they qualify",
+    /<div class="plate">[\s\S]*?>2 caveats<[\s\S]*?<\/div>/.test(app2) &&
+      !/<div class="rail">[\s\S]*?>2 caveats<[\s\S]*?<\/div>/.test(app2),
+    "caveats not in the plate"
   );
   const one = clone(p2);
   one.caveats = ["one thing went wrong"];
   check(
     "one caveat is singular",
-    R.renderApp(one, R.defaultState()).includes(">1 caveat on these figures<"),
+    R.renderApp(one, R.defaultState()).includes(">1 caveat<"),
     "plural wrong"
   );
   const none = clone(p2);

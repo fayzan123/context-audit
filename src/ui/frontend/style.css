@@ -95,7 +95,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  padding: 22px 28px 10px;
+  padding: 13px 28px 8px;
 }
 .brand {
   font-family: var(--font-engr);
@@ -139,6 +139,10 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .btn:disabled { color: var(--ink-faint); border-color: var(--rule); cursor: default; }
 .btn.rescan { margin-left: 6px; }
 
+/* In the plate the caveats sit inline with the scan facts they qualify — the
+   rail's right-push would shove them away from the stamp they belong to. */
+.plate .caveat { margin-left: 0; }
+
 /* --- graticule + sweep --------------------------------------------------- */
 
 .gratbox { position: relative; overflow: hidden; border-bottom: 1px solid var(--rule-strong); }
@@ -175,7 +179,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .readouts {
   display: flex;
   align-items: stretch;
-  padding: 18px 28px 16px;
+  padding: 11px 28px 10px;
   border-bottom: 1px solid var(--rule);
 }
 .readout {
@@ -190,7 +194,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .readout:last-child { border-right: none; }
 .readout .num {
   font-family: var(--font-num);
-  font-size: 40px;
+  font-size: 33px;
   font-weight: 300;
   line-height: 1.05;
   font-variant-numeric: tabular-nums;
@@ -232,8 +236,8 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 10px 28px;
+  gap: 8px 10px;
+  padding: 7px 28px;
   border-bottom: 1px solid var(--rule);
 }
 /* Each filter group is a labeled bank, so `agent` reads as a KIND and
@@ -294,7 +298,10 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   border: none;
   border-bottom: 1px solid var(--rule-strong);
   padding: 3px 2px 2px;
-  width: 30ch;
+  /* 30ch pushed the rail's tail onto a second line, which cost the table
+     more height than the extra field width was worth; the placeholder still
+     fits and the field grows nothing it needs. */
+  width: 21ch;
   outline: none;
 }
 .find input::placeholder { color: var(--ink-faint); }
@@ -949,14 +956,19 @@ pre.ev {
    hairline. Figures lead, the sentence that makes them readable follows, and
    the denominator rides underneath in the engraved footnote voice. */
 
+/* One row, always. Wrapping produced a second band of stats whose border-left
+   hung off a neighbour that was no longer beside it, and cost ~100px of the
+   table's height; a narrow viewport scrolls this strip instead of stacking it. */
 .rollup {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
-  row-gap: 11px;
-  padding: 10px 28px 11px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 7px 28px 8px;
   border-bottom: 1px solid var(--rule);
 }
+.rollup::-webkit-scrollbar { display: none; }
 /* Stretched, so its hairline runs the height of the strip however the stats
    below it wrap. */
 .rollup-lab {
@@ -993,12 +1005,14 @@ pre.ev {
   margin-left: 6px;
   letter-spacing: 0.06em;
 }
+/* Inline and unwrapped: the label sits beside its figure on one line, and the
+   method that used to occupy two more lines is on the stat's tooltip. */
 .rtxt {
-  display: block;
+  display: inline;
   font-size: 11.5px;
   line-height: 1.4;
   color: var(--ink-dim);
-  max-width: 44ch;
+  white-space: nowrap;
 }
 /* The denominator, always attached to the figure it qualifies. */
 em.rnote {
@@ -1052,25 +1066,27 @@ em.rnote {
    like .modes does, and the live one carries the amber the sorted column
    header uses. */
 
+/* A bank inside the filter rail, sharing its row — not a band of its own.
+   Same grammar as the provider/kind/lens banks beside it: an engraved label,
+   then the set. */
 .panelbank {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex: none;
-  padding: 9px 28px 8px;
-  border-bottom: 1px solid var(--rule);
 }
 .panelbank > .engr { flex: none; }
 .panelset { display: flex; flex-wrap: wrap; }
+/* Rail metrics, not band metrics. As its own full-width band this could afford
+   engraved caps and 13px of side padding; inside the rail that made the bank
+   444px wide and pushed the whole row onto a second line, which cost the table
+   more height than the band it replaced. It now matches the chips beside it. */
 .panel-btn {
-  font-family: var(--font-engr);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-family: var(--font-num);
+  font-size: 11px;
   color: var(--ink-dim);
-  border: 1px solid var(--rule-strong);
-  padding: 4px 13px 3px;
+  border: 1px solid var(--rule);
+  padding: 3px 9px 2px;
   white-space: nowrap;
 }
 .panel-btn + .panel-btn { border-left: none; }

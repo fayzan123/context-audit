@@ -997,8 +997,16 @@ function portfolioStrip(payload: UiPayload, state: AppState): string {
   const since = trackedSince(payload);
   const stats: string[] = [];
 
+  // One line per stat, and the METHOD note rides the tooltip rather than a
+  // second and third rendered line. Five stats each three lines tall wrapped
+  // the strip onto two rows and pushed the table under 36% of the viewport —
+  // the header is meant to be an instrument panel, not the page. What stays
+  // inline is the denominator ("33 of 119", "84% of every recorded fire"),
+  // because a share is unreadable without it; what moves is the explanation of
+  // how it was measured, which is exactly what every readout above already
+  // keeps in `data-tip`.
   const stat = (fig: string, unit: string, txt: string, note: string, cls = ""): string =>
-    `<span class="rstat${cls ? ` ${cls}` : ""}"><span class="rfig">${fig}${unit ? `<i>${esc(unit)}</i>` : ""}</span><span class="rtxt">${esc(txt)}${note ? `<em class="rnote">${esc(note)}</em>` : ""}</span></span>`;
+    `<span class="rstat${cls ? ` ${cls}` : ""}"${note ? ` data-tip="${esc(note)}"` : ""}><span class="rfig">${fig}${unit ? `<i>${esc(unit)}</i>` : ""}</span><span class="rtxt">${esc(txt)}</span></span>`;
   const statLink = (
     focus: string,
     fig: string,
@@ -1008,7 +1016,7 @@ function portfolioStrip(payload: UiPayload, state: AppState): string {
     tip: string,
     cls = ""
   ): string =>
-    `<button class="rstat rlinked${cls ? ` ${cls}` : ""}" data-focus="${esc(focus)}" data-tip="${esc(tip)}"><span class="rfig">${fig}${unit ? `<i>${esc(unit)}</i>` : ""}</span><span class="rtxt">${esc(txt)}${note ? `<em class="rnote">${esc(note)}</em>` : ""}</span></button>`;
+    `<button class="rstat rlinked${cls ? ` ${cls}` : ""}" data-focus="${esc(focus)}" data-tip="${esc(note ? `${note}\n\n${tip}` : tip)}"><span class="rfig">${fig}${unit ? `<i>${esc(unit)}</i>` : ""}</span><span class="rtxt">${esc(txt)}</span></button>`;
 
   if (p && p.sessions > 0) {
     // The denominator is the sessions the LEDGER has seen, which is not every
@@ -1077,10 +1085,9 @@ function portfolioStrip(payload: UiPayload, state: AppState): string {
       .join("");
     stats.push(
       `<span class="rstat rspend">
-        <span class="rtxt">
-          <button class="rlab" data-focus="spend" data-tip="${esc(`${method} Click to pin these rows in the table.`)}">top window spend</button>
-          <em class="rnote">${esc("chars × that provider's observed sessions — a window total, not the header's per-session figure")}</em>
-        </span>
+        <button class="rlab" data-focus="spend" data-tip="${esc(
+          `chars × that provider's observed sessions — a window total, not the header's per-session figure.\n\n${method} Click to pin these rows in the table.`
+        )}">top window spend</button>
         <span class="rlinks">${links}</span>
       </span>`
     );
@@ -1131,9 +1138,9 @@ function portfolioStrip(payload: UiPayload, state: AppState): string {
       (shownUps.length > 0 ? ` · ${shownUps.join(" · ")}` : "") +
       (restUps > 0 ? ` · +${fmtInt(restUps)} more` : "");
     stats.push(
-      `<span class="rstat rdelta" data-tip="${esc(tip)}">
+      `<span class="rstat rdelta" data-tip="${esc(`${note}\n\n${tip}`)}">
         <span class="rfig">${quiet ? "—" : esc(signed(d.items))}<i>${esc(quiet ? "no change" : "items")}</i></span>
-        <span class="rtxt">since the previous scan<em class="rnote">${esc(note)}</em></span>
+        <span class="rtxt">since the previous scan</span>
       </span>`
     );
   }
@@ -1300,29 +1307,6 @@ function filterRail(payload: UiPayload, state: AppState): string {
   // is how a search box eats the second character you type.
   const clear = `<button class="clear${isFiltered(state) ? "" : " gone"}" data-clear title="show all ${fmtInt(base.length)} items (esc)">clear</button>`;
 
-  const caveat =
-    payload.pluginResolution === "newest-fallback"
-      ? `<span class="caveat tip-r" data-tip="installed_plugins.json was missing or unreadable">plugin versions: newest-cached fallback</span>`
-      : "";
-
-  // A broken ledger must degrade loudly: lifetime, provenance and dead-weight
-  // are absent from this payload, and the page says so instead of quietly
-  // rendering window-only figures as if they were the whole story.
-  const ledgerCaveat = payload.ledgerCaveat
-    ? `<span class="caveat tip-r" data-tip="${esc(payload.ledgerCaveat)}">usage ledger unavailable — window figures only</span>`
-    : "";
-
-  // Every other qualifier the payload states about its own figures: a
-  // provider store that would not open, unreadable ledger lines, a snapshot
-  // append that failed, provenance that could not be resolved. They are
-  // counted here and read in full on hover rather than printed as a wall of
-  // amber prose — but a degraded read is never left silent on the page while
-  // the payload is carrying the sentence that says so.
-  const cav = payload.caveats ?? [];
-  const payloadCaveats =
-    cav.length > 0
-      ? `<span class="caveat tip-r" data-tip="${esc(cav.join("\n\n"))}">${fmtInt(cav.length)} caveat${plural(cav.length)} on these figures</span>`
-      : "";
 
   return `<div class="rail">
     ${modes}
@@ -1335,12 +1319,50 @@ function filterRail(payload: UiPayload, state: AppState): string {
     ${kindBank}
     ${lensBank}
     ${focusBank}
+    ${panelBank(payload, state)}
     ${clear}
     ${flaggedElsewhere}
-    ${caveat}
-    ${ledgerCaveat}
-    ${payloadCaveats}
   </div>`;
+}
+
+/**
+ * Qualifiers on the whole page's figures, shown in the masthead plate beside
+ * the scan stamp and the window.
+ *
+ * They sit there rather than in the filter rail for two reasons. They describe
+ * the SCAN, not the current filter — the same class of fact as "390
+ * transcripts" and the window range already printed next to them. And in the
+ * rail they were the widest tail element, pushing the row onto a second line
+ * that carried nothing else, which cost the inventory more height than the
+ * chips occupy.
+ */
+function caveatChips(payload: UiPayload): string {
+  const out: string[] = [];
+  if (payload.pluginResolution === "newest-fallback") {
+    out.push(
+      `<span class="caveat tip-r" data-tip="installed_plugins.json was missing or unreadable">plugin versions: newest-cached fallback</span>`
+    );
+  }
+  // A broken ledger must degrade loudly: lifetime, provenance and dead-weight
+  // are absent from this payload, and the page says so instead of quietly
+  // rendering window-only figures as if they were the whole story.
+  if (payload.ledgerCaveat) {
+    out.push(
+      `<span class="caveat tip-r" data-tip="${esc(payload.ledgerCaveat)}">usage ledger unavailable — window figures only</span>`
+    );
+  }
+  // Every other qualifier the payload states about its own figures: a provider
+  // store that would not open, unreadable ledger lines, a snapshot append that
+  // failed, provenance that could not be resolved. Counted here and read in
+  // full on hover rather than printed as a wall of amber prose — but a
+  // degraded read is never left silent while the payload carries the sentence.
+  const cav = payload.caveats ?? [];
+  if (cav.length > 0) {
+    out.push(
+      `<span class="caveat tip-r" data-tip="${esc(`Qualifiers on the figures on this page:\n\n${cav.join("\n\n")}`)}">${fmtInt(cav.length)} caveat${plural(cav.length)}</span>`
+    );
+  }
+  return out.join("");
 }
 
 const COLS: { key: SortKey; label: string; cls?: string; note?: string }[] = [
@@ -1840,10 +1862,15 @@ function table(payload: UiPayload, state: AppState): string {
     const where = isTail
       ? `every listed row below this line is dropped, in the order you are sorted by (${esc(sorting)})`
       : `the first dropped row in this sort (${esc(sorting)}) — the model ranks most-fired first, so others sit above the line here; each carries its own tag`;
-    return `<tr class="cutrow"><td colspan="${span}">
+    // One line. The placement rule and the modelling caveat are on the row's
+    // tooltip rather than wrapped across two lines of prose inside the table —
+    // as rendered text they cost the inventory another ~30px of height on
+    // every scroll, for a caveat you read once.
+    return `<tr class="cutrow" data-tip="${esc(
+      `${where}. Modelled from this ledger's own fire counts, standing in for the invocation counters Claude Code keeps to itself.`
+    )}"><td colspan="${span}">
       <span class="engr">listing cut</span>
       <span class="cutfig"><b class="dgr">${fmtInt(cut.dropped)}</b> of ${fmtInt(cut.listed)} description${plural(cut.listed)} fall past the ~${fmtInt(cut.budget)}-char budget${cut.headroom > 0 ? ` · free ${fmtInt(cut.headroom)} chars and every one loads` : ""}</span>
-      <span class="dim">${where} · modelled from this ledger's own fire counts, standing in for counters Claude Code keeps to itself.</span>
       <button class="inlineclear" data-panel-to="budget">open the budget panel</button>
     </td></tr>`;
   };
@@ -2714,6 +2741,7 @@ export function renderPage(payload: UiPayload, state: AppState): string {
       <span>rev ${esc(payload.version)}</span>
       <span>scan ${esc(fmtStamp(payload.generatedAt))} · ${fmtInt(payload.tookMs)} ms</span>
       <span>${esc(hist)}</span>
+      ${caveatChips(payload)}
       <button class="btn rescan" data-rescan${state.busy ? " disabled" : ""}>${state.busy ? "scanning…" : "rescan"}</button>
     </div>
   </div>
@@ -2799,8 +2827,10 @@ export function renderResults(payload: UiPayload, state: AppState): string {
   // An empty inventory has nothing to read four ways: the onboarding empty
   // state is the whole answer, and a panel bank over it would be five doors
   // onto the same blank room.
+  // The bank itself lives in the filter rail, not here: as its own full-width
+  // band it cost the table another 42px on top of the portfolio strip, and
+  // three stacked control bands left the inventory under a third of the page.
   const key = payload.items.length === 0 ? "inventory" : panelKey(payload, state);
-  const bank = payload.items.length === 0 ? "" : panelBank(payload, state);
   const body =
     key === "inventory"
       ? `<div class="tablebox">${table(payload, state)}</div>`
@@ -2808,8 +2838,7 @@ export function renderResults(payload: UiPayload, state: AppState): string {
       // column with the retention horizon that column was measured over — one
       // shared date would claim a window two of the three providers never had.
       : renderPanel(key, payload, state, payload.providerWindows);
-  return `${bank}
-  ${body}
+  return `${body}
   ${logPanel(state)}
   <div class="foot">
     <span class="live"><i></i>127.0.0.1 — local only, nothing leaves the machine</span>
