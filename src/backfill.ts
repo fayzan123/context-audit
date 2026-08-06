@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { TYPED_TOKEN_RE } from "./ledger.js";
 import type { Ledger } from "./ledger.js";
+import { BUILTIN_COMMANDS } from "./types.js";
 import type { LedgerEvent } from "./types.js";
 
 /**
@@ -17,21 +19,6 @@ interface HistoryEntry {
   sessionId: string;
 }
 
-// First token of the first display line must look like a dispatch. Rejects
-// pasted absolute paths (second "/") and anchor fragments ("#") — both
-// observed in real history data. ":" is in the class because plugin and
-// subdirectory dispatches fire as /pack:name.
-const TOKEN_RE = /^\/[A-Za-z][A-Za-z0-9:_-]*$/;
-
-// Claude Code's own commands. They say nothing about installed assets, so
-// they are dropped unless the caller opts in — 3,043 of 3,179 slash entries
-// on the reference machine were built-ins.
-const BUILTINS = new Set([
-  "usage", "status", "model", "exit", "clear", "compact", "effort", "login",
-  "config", "context", "resume", "continue", "mcp", "doctor", "permissions",
-  "plugins", "plugin", "voice", "rate-limit-options",
-]);
-
 export interface BackfillInventory {
   /** Skill dispatch names, no leading slash — matches import as kind "skill". */
   skills: ReadonlySet<string>;
@@ -40,13 +27,19 @@ export interface BackfillInventory {
 }
 
 export interface BackfillOptions {
-  /** Also import built-in commands (as kind "command"). Off by default. */
+  /**
+   * Set the ledger's DURABLE built-ins preference before importing (leaving it
+   * alone when absent). The import itself no longer decides: a flag on this one
+   * command could never reach a hook firing inside someone else's session, so
+   * the answer is stored and every typed-channel writer reads it back.
+   */
   includeBuiltins?: boolean;
 }
 
 export interface BackfillResult {
   /** Events actually appended — a re-run reports 0, not the batch size. */
   imported: number;
+  /** Refused by the ledger's built-ins preference — see BackfillOptions. */
   droppedBuiltins: number;
   droppedPollerSessions: number;
   /** Distinct names matching nothing in the inventory — imported anyway, with no join. */
@@ -66,6 +59,9 @@ export function runBackfill(
   opts?: BackfillOptions
 ): BackfillResult {
   const result: BackfillResult = { imported: 0, droppedBuiltins: 0, droppedPollerSessions: 0, unresolved: [] };
+  // Recorded before the import so this run is governed by the answer it just
+  // stored, not by the previous one.
+  if (opts?.includeBuiltins !== undefined) ledger.setIncludeBuiltins(opts.includeBuiltins);
   const file = join(home, ".claude", "history.jsonl");
   if (!existsSync(file)) return result;
 
@@ -103,10 +99,12 @@ export function runBackfill(
     if (!s) sessions.set(entry.sessionId, (s = { tokens: [], entries: 0, builtinEntries: 0 }));
     s.entries++;
 
+    // First token of the first display line only — the rest of the entry is
+    // prose and pasted content, and none of it is ever read.
     const token = entry.display.split("\n", 1)[0].trim().split(/\s+/, 1)[0];
-    if (!TOKEN_RE.test(token)) continue;
+    if (!TYPED_TOKEN_RE.test(token)) continue;
     const name = token.slice(1);
-    const builtin = BUILTINS.has(name);
+    const builtin = BUILTIN_COMMANDS.has(name);
     if (builtin) s.builtinEntries++;
     s.tokens.push({ name, builtin, ts: when.toISOString(), project: entry.project, line: i + 1 });
   }
@@ -114,17 +112,18 @@ export function runBackfill(
   const unresolved = new Set<string>();
   const events: LedgerEvent[] = [];
   for (const [sessionId, s] of sessions) {
-    // A session that is 100% built-ins is automation, not use (the observed
-    // ~10.8-minute /usage poller) — dropped even when built-ins are imported.
+    // A rule about session SHAPE, not about the token, which is why it lives
+    // here and not in the ledger's gate: a session that is 100% built-ins is
+    // automation, not use (the observed ~10.8-minute /usage poller) — dropped
+    // even when built-ins are being imported.
     if (s.builtinEntries === s.entries) {
       result.droppedPollerSessions++;
       continue;
     }
     for (const t of s.tokens) {
-      if (t.builtin && !opts?.includeBuiltins) {
-        result.droppedBuiltins++;
-        continue;
-      }
+      // Built-in tokens are emitted and let the ledger's durable preference
+      // decide, so this importer and the other two typed-channel writers can
+      // never disagree about the same fire.
       const isSkill = !t.builtin && inventoryNames.skills.has(t.name);
       if (!t.builtin && !isSkill && !inventoryNames.commands.has(t.name)) unresolved.add(t.name);
       events.push({
@@ -145,7 +144,9 @@ export function runBackfill(
     }
   }
 
-  result.imported = ledger.appendEvents(events).appended;
+  const r = ledger.appendEvents(events);
+  result.imported = r.appended;
+  result.droppedBuiltins = r.droppedBuiltins;
   result.unresolved = [...unresolved].sort();
   return result;
 }

@@ -207,6 +207,21 @@ export interface LedgerEvent {
   hook?: boolean;
 }
 
+/**
+ * Claude Code's own slash commands. They say nothing about the user's
+ * instruction inventory — they can never join to a row — and one of them (a
+ * `/usage` poller) accounted for 2,594 of 3,179 observed typed entries on the
+ * reference machine. Held here rather than in any one writer because all THREE
+ * typed-channel writers (transcript ingestion, hooks, backfill) must agree:
+ * a token dropped by one writer and banked by another is the same fire
+ * counted differently depending on which channel saw it first.
+ */
+export const BUILTIN_COMMANDS: ReadonlySet<string> = new Set([
+  "usage", "status", "model", "exit", "clear", "compact", "effort", "login",
+  "config", "context", "resume", "continue", "mcp", "doctor", "permissions",
+  "plugins", "plugin", "voice", "rate-limit-options",
+]);
+
 /** Which rung of the install-date fallback chain produced the date. */
 export type ProvenanceSource = "plugin-manifest" | "birthtime" | "git" | "mtime" | "first-seen";
 
@@ -235,6 +250,21 @@ export interface HistoryFacts {
    * the durable store. Absent until the adapter's usage() pass emits them.
    */
   events?: LedgerEvent[];
+  /**
+   * Read tool_use paths observed inside a tracked asset's own directory —
+   * "does this skill's bundled reference actually get read when it runs?".
+   * `dir` is the asset root the path fell under; sessions are the sessions the
+   * read happened in, so the join can express it as a share of that asset's
+   * fires rather than a bare count.
+   */
+  fileReads?: { dir: string; relPath: string; sessions: string[] }[];
+  /**
+   * Total tokens observed in each dedicated `subagents/agent-<id>.jsonl`
+   * transcript. Per-AGENT run cost is near-exact because the agent's work
+   * lives in a file of its own — the confound that keeps per-skill cost out
+   * of this tool does not apply here.
+   */
+  agentRuns?: { agentId: string; tokens: number }[];
 }
 
 export interface AuditResult {
@@ -322,6 +352,40 @@ export interface UiFires {
   weeklyBins?: { weekStart: string; count: number }[];
   /** Reverse-chron drill-down, capped server-side ("show all N" pages further). */
   events?: UiFireEvent[];
+  /**
+   * Interactive (`entrypoint: "cli"`) vs automated (`sdk-cli` and friends).
+   * `unknown` is its own bucket, never folded into either: most banked events
+   * carry no entrypoint at all, and calling those "interactive" would invent
+   * the very split this answers.
+   */
+  byEntrypoint?: { interactive: number; automated: number; unknown: number };
+  /** Fires in the main agent vs inside a subagent sidechain. */
+  byAgent?: { main: number; sidechain: number };
+  /** Lifetime fires per dispatching model, descending. Absent when unrecorded. */
+  byModel?: { model: string; count: number }[];
+  /**
+   * The current silence measured against THIS item's own rhythm — a 34-day
+   * gap means nothing until you know its longest previous gap was 12. Absent
+   * for items with fewer than two fires, where no gap exists to compare to.
+   */
+  quiet?: { days: number; longestPriorGapDays?: number; gapsCounted: number };
+  /**
+   * Staple or one-burst: distinct weeks with a fire, weeks since the first
+   * fire, and the flag for "every fire landed inside one 7-day span".
+   */
+  spread?: { activeWeeks: number; weeksSinceFirst: number; spanDays: number; oneBurst: boolean };
+  /**
+   * Fires either side of the plugin update boundary over SYMMETRIC windows —
+   * "since update (12d): 0 · prior 12d: 9". Asymmetric windows would compare a
+   * fortnight against a lifetime and call the difference a change.
+   */
+  sinceUpdate?: { at: string; days: number; since: number; prior: number };
+  /**
+   * Days from the provenance install date to the first recorded fire. Present
+   * only when the install date falls INSIDE observable history — otherwise the
+   * first fire on record is just the horizon, not the first fire that happened.
+   */
+  installToFirstFire?: number;
 }
 
 export interface UiPluginMeta {
@@ -336,6 +400,27 @@ export interface UiPluginMeta {
    * not the same claim as "up to date".
    */
   latest?: string;
+  /** Manifest `installedAt` — when this plugin first arrived. */
+  installedAt?: string;
+  /**
+   * Manifest `lastUpdated` — "current version since", NOT an install date. The
+   * boundary a skill's fires are compared across.
+   */
+  lastUpdated?: string;
+}
+
+/**
+ * A plugin version still on disk that nothing resolves to any more. Reported
+ * with its paths and never deleted: this tool measures, it does not clean up.
+ */
+export interface UiSuperseded {
+  plugin: string;
+  marketplace?: string;
+  /** The version actually live — the one these are superseded BY. */
+  active: string;
+  versions: string[];
+  bytes: number;
+  paths: string[];
 }
 
 export interface UiItem {
@@ -395,6 +480,84 @@ export interface UiItem {
    * split fires between them, so counts on both rows carry this warning.
    */
   collision?: { paths: string[] };
+  /**
+   * Latest edit across the asset's files, and the fires recorded after it.
+   * Reads in both directions from the same two inputs: "edited 5d ago — 2
+   * fires since" and "unchanged 187d · 41 fires in that span".
+   */
+  freshness?: { editedAt: string; days: number; firesSince: number; source: "git" | "mtime" };
+  /**
+   * Paths the entry file names that do not resolve, and scripts it points at
+   * that carry no exec bit. Line numbers are SKILL.md's, so the reader can go
+   * look. `checked` is the denominator — 0 missing of 0 checked is not a
+   * clean bill of health.
+   */
+  refs?: {
+    checked: number;
+    missing: { path: string; line: number }[];
+    notExecutable: { path: string; line: number }[];
+  };
+  /**
+   * The same dispatch name present under ANOTHER provider — a Claude skill
+   * that also exists as a Codex one. `identical` is a body hash comparison,
+   * not a guess. Cross-linked by item id; the browser never gets a path it
+   * did not already have.
+   */
+  crossProvider?: { itemId: string; source: SourceId; name: string; identical: boolean }[];
+  /**
+   * Items whose description is byte-identical to this one after whitespace
+   * folding — the dispatch-confusion set, now carrying each member's fire
+   * count so "which twin is winning" is a fact rather than a suspicion.
+   */
+  confusable?: { itemId: string; name: string; fires: number }[];
+  /** Sessions in which this item AND one of its confusable twins both fired. */
+  coFiredSessions?: number;
+  /**
+   * Dispatch names that fired but match nothing installed, and that look like
+   * typos of THIS item's name (edit distance ≤ 2, or a shared prefix).
+   */
+  nearMiss?: { name: string; count: number }[];
+  /**
+   * Scope mismatch facts: a user-scoped item every one of whose fires landed
+   * in a single project, and/or the same name present at the other scope.
+   */
+  scopeNote?: { allFiresIn?: string; alsoAtScope?: "user" | "project" };
+  /**
+   * Files bundled beside the entry file and how many of this item's fires
+   * read them (Read tool_use paths under the asset's directory, in the same
+   * sessions). `ofFires` is the denominator the share is taken over.
+   */
+  bundledFiles?: { relPath: string; readInFires: number; ofFires: number }[];
+  /**
+   * Whether a newer CACHED plugin version would change this item's files at
+   * all — a byte comparison across version directories, not a version-number
+   * inference. Absent when no other version is on disk to compare against.
+   */
+  updateRelevance?: { version: string; identical: boolean; changedFiles?: number };
+  /**
+   * Was disabling safe? Attempted invocations of this dispatch name since it
+   * was disabled, and the other assets whose bodies name it.
+   *
+   * `disabledAtSource` names the evidence, because there is no disable log:
+   * moving a skill into `skills-disabled/` is a rename, which leaves mtime
+   * alone but bumps ctime — so ctime is an UPPER BOUND that anything else
+   * touching the directory's metadata moves too. An unlabeled "disabled 122d
+   * ago" would present that bound as a record (invariant 6).
+   */
+  disabledSafety?: {
+    disabledAt?: string;
+    disabledAtSource?: "ctime";
+    days?: number;
+    attemptsSince: number;
+    referencedBy: string[];
+  };
+  /**
+   * Per-agent run cost, summed from the agent's OWN dedicated
+   * `subagents/agent-<id>.jsonl` transcripts — near-exact, unlike per-skill
+   * cost, because the agent's work lives in a file of its own. Labeled with
+   * that method wherever it renders.
+   */
+  agentCost?: { runs: number; totalTokens: number; medianTokens: number };
 }
 
 /**
@@ -416,6 +579,77 @@ export interface ListingBudget {
   crossedAt?: string;
 }
 
+/**
+ * Does the whole system earn its rent? Portfolio facts computed in one ledger
+ * pass, each carrying the denominator that keeps it honest.
+ */
+export interface UiPortfolio {
+  /** Sessions with at least one recorded fire of any tracked item. */
+  sessionsWithFires: number;
+  /** The denominator: sessions the ledger has seen at all. */
+  sessions: number;
+  /**
+   * The fewest items whose fires make up ≥80% of all recorded fires — the
+   * "3 skills account for 84% of fires" fact, with the ids behind it so the
+   * stat can open its own proof view.
+   */
+  concentration?: { items: number; pct: number; ids: string[] };
+  /** Top items by window spend: always-in-context chars × sessions. */
+  topSpend: { id: string; name: string; chars: number }[];
+  /**
+   * Flagged items ordered by activity, fired partition first — a flag on
+   * something that runs daily outranks a flag on a dormant file.
+   */
+  flaggedByActivity: { id: string; name: string; fires: number; lastFired?: string; projects: number }[];
+}
+
+/** What changed since the previous scan — a snapshots.jsonl diff, not a guess. */
+export interface UiDelta {
+  /** The snapshot this delta is measured against. */
+  since: string;
+  items: number;
+  injectedChars: number;
+  /**
+   * Plugins whose resolved version moved between the two snapshots.
+   *
+   * `from` is OPTIONAL because nothing on disk records it: snapshots carry no
+   * plugin versions, and the cache cannot prove which of its superseded
+   * directories was the live one. Absent means "it updated, and the previous
+   * version was not recorded" — which the UI must say in those words rather
+   * than printing a sentinel that reads like a version.
+   */
+  pluginsUpdated: { name: string; from?: string; to: string }[];
+}
+
+/**
+ * The modeled listing cut line. Claude Code drops descriptions starting with
+ * the least-invoked skills, so this replays that documented drop order over
+ * the real listing and names which rows fall off the end.
+ */
+export interface UiBudgetCut {
+  budgetChars: number;
+  listingChars: number;
+  /**
+   * Every listed skill in KEEP order (most-fired first): the ones that fit
+   * come first, the dropped tail last. `cumChars` is the running total the
+   * cut is decided on.
+   */
+  order: { id: string; name: string; chars: number; fires: number; cumChars: number; dropped: boolean }[];
+  /** Characters that must go for the whole listing to fit. 0 when under budget. */
+  headroomChars: number;
+}
+
+/**
+ * Is the pile outgrowing its use? Two series over ISO weeks, each captioned
+ * with the source it came from — owned counts are snapshot observations
+ * (absent before tracking began), fired counts are ledger events.
+ */
+export interface UiGrowth {
+  weeks: { weekStart: string; owned?: number; firedItems: number }[];
+  /** Names the method behind `owned`, rendered as the series caption. */
+  ownedSource: string;
+}
+
 /** The pitch in five numbers, plus the denominators that keep them honest. */
 export interface UiHeader {
   items: number;
@@ -433,8 +667,11 @@ export interface UiHeader {
   /** How many items have fire tracking at all — the neverFired denominator. */
   tracked: number;
   /**
-   * Dead-weight rent: Σ injectedChars × sessions over enabled never-fired
-   * items. Absent until the ledger join computes it.
+   * Dead-weight rent: Σ injectedChars over enabled, age-gated, never-fired
+   * items — a PER-SESSION figure, which is how the header renders it ("~Nk
+   * tok/session on silent items"). Multiplying by a session count would state
+   * a window total, a different unit that must never sit unlabeled beside
+   * this one. Absent until the ledger join computes it.
    */
   deadWeightChars?: number;
   flagged: number;
@@ -472,4 +709,30 @@ export interface UiPayload {
    * as a caveat, never silently.
    */
   ledgerCaveat?: string;
+  /**
+   * Qualifiers on this payload's figures that are not tied to one item — a
+   * provider whose local store could not be read, an undocumented schema that
+   * changed shape. Rendered in the rail beside the ledger caveat; degraded is
+   * always stated, never silent.
+   */
+  caveats?: string[];
+  /**
+   * Each provider's OWN observation window, held apart from the merged
+   * `history` window above. Retention differs per harness — Claude Code purges
+   * transcripts on a ~30-day cycle while Codex rollouts reach back months and
+   * the Cursor store is dated per conversation — so a single window date
+   * cannot honestly caption a cross-provider comparison. The overlap matrix
+   * puts these in its column heads for exactly that reason.
+   */
+  providerWindows?: Partial<Record<SourceId, { start?: string; end?: string }>>;
+  /** Portfolio rollup — absent when no ledger backs it. */
+  portfolio?: UiPortfolio;
+  /** Since-last-scan delta — absent on the first scan, which has no baseline. */
+  delta?: UiDelta;
+  /** The listing budget's modeled drop order — absent where no listing applies. */
+  budgetCut?: UiBudgetCut;
+  /** Owned-vs-used over time — absent until snapshots or fires exist to plot. */
+  growth?: UiGrowth;
+  /** Plugin versions still on disk that nothing resolves to. */
+  superseded?: UiSuperseded[];
 }

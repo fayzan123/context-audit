@@ -8,6 +8,10 @@
 //     month-prefixed junk timestamps and args-shaped names
 //   - append mode: no historical parse at open, per-month id dedupe,
 //     meta horizon never reset by a hook fire
+//   - the built-ins gate: the ONE place all three typed-channel writers agree
+//     about Claude Code's own slash commands — dropped by default, counted
+//     apart from `skipped`, flipped by a DURABLE preference, and scoped to
+//     (channel "typed", provider "claude") and nothing else
 //   - owner-only store permissions (0700 dir / 0600 files) + retrofit chmod
 //   - provenance write-once per id
 //   - meta trackedSince stability across opens, incl. corrupt-meta recovery
@@ -16,7 +20,7 @@
 // never read.
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -24,6 +28,8 @@ const fixtures = join(root, "test", "fixtures", "ledger");
 const { openLedger, LEDGER_SCHEMA_VERSION, isLedgerEvent, NAME_RE } = await import(
   pathToFileURL(join(root, "dist", "ledger.js")).href
 );
+// The gate reads the SHARED set — one list, not one per writer.
+const { BUILTIN_COMMANDS } = await import(pathToFileURL(join(root, "dist", "types.js")).href);
 
 let failures = 0;
 const ok = (n) => console.log(`  ok: ${n}`);
@@ -214,6 +220,160 @@ console.log("APPEND MODE:");
     openLedger(fresh).meta().trackedSince === "2025-02-01T08:00:00.000Z",
     openLedger(fresh).meta().trackedSince
   );
+}
+
+// --- built-ins gate ---------------------------------------------------------
+// Scan ingestion, hooks and backfill each used to decide for themselves whether
+// a typed `/usage` was a fire, so the SAME dispatch was banked or dropped
+// depending on which channel happened to see it. The gate now lives here, at
+// the one place all three writers pass through, and the opt-in is durable
+// because a CLI flag can never reach a hook firing inside someone else's
+// session. Every scoping rule below is a rule about not silently dropping
+// something real.
+console.log("BUILT-INS GATE:");
+const typed = (id, name, extra = {}) =>
+  ev(id, "2025-05-01T09:00:00.000Z", { kind: "command", name, channel: "typed", ...extra });
+{
+  const base = freshBase();
+  const led = openLedger(base);
+
+  const r1 = led.appendEvents([typed("b1", "compact")]);
+  check("a typed claude built-in is dropped", r1.appended === 0 && r1.droppedBuiltins === 1, JSON.stringify(r1));
+  // `skipped` means "already banked, or malformed". Folding drops into it would
+  // report a refused fire back to the user as one already recorded.
+  check("...and counted apart from skipped/enriched", r1.skipped === 0 && r1.enriched === 0, JSON.stringify(r1));
+  check("the dropped built-in is not stored", led.readEvents().length === 0);
+  check("a batch of only built-ins writes no file at all", !existsSync(join(base, "usage", "events-2025-05.jsonl")));
+  // Absent is not false: nobody has answered the question yet, and the meta
+  // says so rather than claiming the user opted out.
+  check("the preference is absent by default", led.meta().includeBuiltins === undefined, JSON.stringify(led.meta()));
+
+  const every = [...BUILTIN_COMMANDS].map((n, i) => typed(`bset-${i}`, n));
+  const rAll = led.appendEvents(every);
+  check(
+    "every member of the shared BUILTIN_COMMANDS set is refused",
+    rAll.droppedBuiltins === BUILTIN_COMMANDS.size && rAll.appended === 0,
+    JSON.stringify(rAll)
+  );
+  check("a typed name that is not a built-in still lands", led.appendEvents([typed("b2", "impeccable")]).appended === 1);
+  // The kind hint is never trusted anywhere in this system (invariant 3): the
+  // gate keys on the name and the channel, so a writer's guess cannot buy a
+  // built-in its way in.
+  check(
+    "the kind hint does not exempt a typed built-in",
+    led.appendEvents([typed("b3", "config", { kind: "skill" })]).droppedBuiltins === 1
+  );
+
+  // --- scoping: channel -----------------------------------------------------
+  const rAuto = led.appendEvents([ev("b4", "2025-05-02T09:00:00.000Z", { name: "compact" })]);
+  check("an auto-channel event named compact is a skill fire, not a slash command — it lands", rAuto.appended === 1 && rAuto.droppedBuiltins === 0);
+  const rLoad = led.appendEvents([
+    ev("b5", "2025-05-02T10:00:00.000Z", { provider: "codex", kind: "instructions", name: "/Users/fx/context", channel: "load" }),
+  ]);
+  check("a load-channel event is never gated", rLoad.appended === 1 && rLoad.droppedBuiltins === 0);
+
+  // --- scoping: provider ----------------------------------------------------
+  // The list is Claude Code's. A Codex prompt named `status` is a real asset in
+  // the user's inventory that joins to a real row, and dropping it would be a
+  // silent undercount of something that exists.
+  const rCodex = led.appendEvents([
+    ev("b6", "2025-05-03T09:00:00.000Z", { provider: "codex", kind: "prompt", name: "status", channel: "typed" }),
+  ]);
+  check("a codex typed prompt named status is never dropped", rCodex.appended === 1 && rCodex.droppedBuiltins === 0, JSON.stringify(rCodex));
+
+  // --- four independent counters -------------------------------------------
+  const rMix = led.appendEvents([
+    typed("b7", "plan-review"),
+    typed("b2", "impeccable"),
+    { not: "an event" },
+    typed("b8", "usage"),
+  ]);
+  check(
+    "appended / skipped / droppedBuiltins / enriched never borrow from each other",
+    rMix.appended === 1 && rMix.skipped === 2 && rMix.droppedBuiltins === 1 && rMix.enriched === 0,
+    JSON.stringify(rMix)
+  );
+
+  // --- the durable opt-in ---------------------------------------------------
+  console.log("BUILT-INS PREFERENCE (durable):");
+  led.setIncludeBuiltins(true);
+  check("meta records the preference", led.meta().includeBuiltins === true);
+  const rOn = led.appendEvents([typed("b9", "usage")]);
+  check("with the preference on, a built-in lands", rOn.appended === 1 && rOn.droppedBuiltins === 0, JSON.stringify(rOn));
+  const stored = JSON.parse(readFileSync(join(base, "usage", "meta.json"), "utf8"));
+  check("it is persisted to meta.json", stored.includeBuiltins === true, JSON.stringify(stored));
+  check("persisting it never moves the tracked-since horizon", stored.trackedSince === led.meta().trackedSince);
+
+  const reopened = openLedger(base);
+  check("the preference survives a reopen", reopened.meta().includeBuiltins === true);
+  // This is what makes the rule symmetric: a ledger opened by a hook inside
+  // someone else's session reads the same answer off disk.
+  check("a ledger that never saw the flag honours it", reopened.appendEvents([typed("b10", "status")]).appended === 1);
+
+  const off = openLedger(base);
+  off.setIncludeBuiltins(false);
+  check("turning it back off is durable too", openLedger(base).meta().includeBuiltins === false);
+  check("new built-ins are refused again", off.appendEvents([typed("b11", "model")]).droppedBuiltins === 1);
+  // The store is append-only and never rewritten: flipping the preference off
+  // does not retract fires banked while it was on, which would silently change
+  // a lifetime count the user was already shown.
+  check(
+    "built-ins banked while it was on are never retracted",
+    openLedger(base).readEvents().filter((e) => e.name === "usage" && e.channel === "typed").length === 1
+  );
+
+  // --- the gate never breaks enrichment (invariant 1) -----------------------
+  // `b9` was banked while the preference was on; the preference is off now. A
+  // later same-id sighting must still fill the survivor's gaps — otherwise
+  // turning built-ins off would silently strip fields off events already stored.
+  const rEnrich = off.appendEvents([typed("b9", "usage", { outcome: "ok", src: { file: "/tmp/history.jsonl", line: 3 } })]);
+  check(
+    "a duplicate id enriches even when its name is a refused built-in",
+    rEnrich.skipped === 1 && rEnrich.enriched === 1 && rEnrich.droppedBuiltins === 0,
+    JSON.stringify(rEnrich)
+  );
+  const survivor = openLedger(base).readEvents().find((e) => e.id === "b9");
+  check(
+    "and the enrichment is durable",
+    survivor?.outcome === "ok" && survivor?.src?.line === 3,
+    JSON.stringify(survivor)
+  );
+}
+
+// A hand-edited meta must not be able to turn built-in capture on for every
+// writer on the machine by accident.
+console.log("BUILT-INS PREFERENCE (hand-edited meta):");
+{
+  const base = freshBase();
+  openLedger(base);
+  writeFileSync(
+    join(base, "usage", "meta.json"),
+    JSON.stringify({ schemaVersion: LEDGER_SCHEMA_VERSION, trackedSince: "2025-01-01T00:00:00.000Z", includeBuiltins: "yes" }) + "\n"
+  );
+  const led = openLedger(base);
+  check("a non-boolean preference is dropped, not coerced", led.meta().includeBuiltins === undefined, JSON.stringify(led.meta()));
+  check("so a truthy string cannot turn capture on", led.appendEvents([typed("h1", "usage")]).droppedBuiltins === 1);
+  check("the rest of the meta still loads", led.meta().trackedSince === "2025-01-01T00:00:00.000Z");
+}
+
+// The hook path opens in append mode, where meta.json may not exist yet.
+console.log("BUILT-INS PREFERENCE (append mode):");
+{
+  const base = freshBase();
+  const am = openLedger(base, { mode: "append" });
+  am.setIncludeBuiltins(true);
+  // Persisting here would write out this ledger's FABRICATED trackedSince (its
+  // own wall clock) and reset every lifetime figure to the moment a hook fired.
+  check("no meta.json means the preference stays in this process", !existsSync(join(base, "usage", "meta.json")));
+  check("...and still governs this process's appends", am.appendEvents([typed("k1", "usage")]).appended === 1);
+  check("a later full open does not inherit it", openLedger(base).meta().includeBuiltins === undefined);
+
+  const trackedSince = openLedger(base).meta().trackedSince;
+  const am2 = openLedger(base, { mode: "append" });
+  am2.setIncludeBuiltins(true);
+  const meta = JSON.parse(readFileSync(join(base, "usage", "meta.json"), "utf8"));
+  check("once a horizon exists, an append-mode writer persists the preference", meta.includeBuiltins === true, JSON.stringify(meta));
+  check("...without moving trackedSince", meta.trackedSince === trackedSince, `${meta.trackedSince} vs ${trackedSince}`);
 }
 
 // --- store permissions ------------------------------------------------------

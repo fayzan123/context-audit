@@ -508,6 +508,856 @@ check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k
   );
 }
 
+// ============================================================================
+// S2 / S3 surfaces — second fixture.
+//
+// payload-s2.json carries everything the S1 fixture has no field for: the
+// portfolio strip, the since-last-scan delta, the four analysis panels, and
+// the drawer's content-health / relationships / plugin / since-disabling
+// sections. It is a SEPARATE file on purpose — the assertions above count
+// badges and amber cells across the whole S1 payload, and growing that fixture
+// would move those counts without any of the new code being wrong.
+//
+// Everything below is an HONESTY assertion: each one names a claim the tool
+// must never make, and the test fails if the markup makes it. Absence, a
+// window, or a stated method — never a fabricated zero.
+// ============================================================================
+const p2 = JSON.parse(
+  readFileSync(join(root, "test", "fixtures", "render", "payload-s2.json"), "utf8")
+);
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const win2 = R.usageWindow(p2);
+const drawer2 = (id, payload = p2, state = R.defaultState()) =>
+  R.renderDrawerBody(
+    payload.items.find((i) => i.id === id),
+    state,
+    R.usageWindow(payload),
+    payload.history.transcriptFiles
+  );
+const app2 = R.renderApp(p2, R.defaultState());
+/** One table row's markup, by item id — badge counts are per-row facts. */
+const rowOf = (html, id) => {
+  const t = html.slice(html.indexOf(`<table class="inv"`));
+  const i = t.indexOf(`data-id="${id}"`);
+  return i < 0 ? "" : t.slice(i, t.indexOf("</tr>", i));
+};
+/** One engraved drawer section, by its label. */
+const sectionOf = (html, label) => {
+  const i = html.indexOf(`<span class="engr">${label}</span>`);
+  return i < 0 ? "" : html.slice(i, html.indexOf("</section>", i));
+};
+/** A panel rendered through the real results path, exactly as the page does. */
+const panelOf = (payload, key, extra = {}) =>
+  R.renderResults(payload, { ...R.defaultState(), panel: key, ...extra });
+/** Just the panel's own box, so "no axis" assertions can't be fooled by chrome. */
+const panelBox = (html) => {
+  const i = html.indexOf(`<section class="panelbox`);
+  return i < 0 ? "" : html.slice(i, html.indexOf("</section>", i) + 10);
+};
+const countOf = (html, re) => (html.match(re) ?? []).length;
+
+console.log("\nRENDER unit (S2/S3 surfaces):");
+
+check("second fixture measures the same 41d window", win2.span === "41d", win2.span);
+
+// --- entrypoint: absent is not zero (#S2 dispatch) ---------------------------
+{
+  const d = drawer2("id-blind");
+  check(
+    "an all-unknown byEntrypoint says the entrypoint was not recorded, with the count",
+    d.includes("Entrypoint not recorded — not one of this item's 9 recorded fires carries one"),
+    "absence not stated"
+  );
+  check(
+    "it names the failure it is refusing: a gap in the record, not 0% automated",
+    d.includes("A gap in the record, not 0% automated."),
+    "disclaimer missing"
+  );
+  check(
+    "no split is drawn from nothing — neither bucket renders a 0",
+    !/interactive <b>0<\/b>/.test(d) && !/automated <b>0<\/b>/.test(d),
+    "invented split"
+  );
+  const split = clone(p2);
+  split.items.find((i) => i.id === "id-blind").fires.byEntrypoint = {
+    interactive: 6,
+    automated: 2,
+    unknown: 1,
+  };
+  const ds = drawer2("id-blind", split);
+  check(
+    "a recorded split renders both buckets and keeps unknown out of them",
+    ds.includes("interactive <b>6</b> · automated <b>2</b> · not recorded <b>1</b>") &&
+      !ds.includes("Entrypoint not recorded"),
+    "split line wrong"
+  );
+}
+
+// --- bundled files: a zero denominator is not a 0% (#S3) ---------------------
+{
+  const d = drawer2("id-blind");
+  const health = sectionOf(d, "content health");
+  // By its own line, not by a path index: both bundled paths also appear in the
+  // refs list above, so slicing on the path name would slice the wrong block.
+  const bfLines = [...health.matchAll(/<p class="factline bfline"[\s\S]*?<\/p>/g)].map((m) => m[0]);
+  const zeroLine = bfLines.find((l) => l.includes("reference/typography.md")) ?? "";
+  check(
+    "{readInFires:0, ofFires:0} renders in words: read, but never during a fire",
+    zeroLine.includes("read, but never during a fire"),
+    "zero-denominator wording missing"
+  );
+  check(
+    "that line draws no share bar and states no percentage",
+    !zeroLine.includes(`class="share"`) && !/\d%/.test(zeroLine),
+    "a share was drawn over an absent denominator"
+  );
+  check(
+    "its method says why there is no share to take",
+    health.includes("There is no share to take."),
+    "method line missing"
+  );
+  check(
+    "a measured file states both sides of the share and draws its bar",
+    health.includes("<b>3</b> of 4 fire sessions") && health.includes(`<i style="width:75%">`),
+    "measured bundled line wrong"
+  );
+  check(
+    "both sides of that share are named as window figures, not lifetime",
+    health.includes("Both sides of that share come from the transcript window, not the ledger's lifetime."),
+    "share window qualifier missing"
+  );
+}
+
+// --- update relevance: absent is UNKNOWN, never "unchanged" (#S3) ------------
+{
+  const d = drawer2("id-plug");
+  check(
+    "a newer listed version with nothing cached to compare renders as unknown",
+    d.includes("Would updating change this item? Unknown — 7.0.0 is listed by the local marketplace but is not cached on this machine"),
+    "unknown line missing"
+  );
+  check(
+    "and says outright that unknown is not unchanged",
+    d.includes("Unknown is not &quot;unchanged&quot;."),
+    "the distinction is not stated"
+  );
+  check(
+    "no comparison verdict is rendered without a comparison",
+    !d.includes("byte-identical") && !d.includes("up to date") && !d.includes("would leave this item"),
+    "a verdict was invented"
+  );
+  const same = clone(p2);
+  same.items.find((i) => i.id === "id-plug").updateRelevance = {
+    version: "7.0.0",
+    identical: true,
+  };
+  const diff = clone(p2);
+  diff.items.find((i) => i.id === "id-plug").updateRelevance = {
+    version: "7.0.0",
+    identical: false,
+    changedFiles: 3,
+  };
+  check(
+    "a real byte comparison renders its verdict either way",
+    drawer2("id-plug", same).includes("updating to the cached <b>7.0.0</b> would leave this item byte-identical") &&
+      drawer2("id-plug", diff).includes("the cached <b>7.0.0</b> differs in <b>3</b> files of this item"),
+    "updateRelevance verdicts wrong"
+  );
+  check(
+    "the comparison names its method — file contents, not version numbers",
+    drawer2("id-plug", diff).includes("A byte comparison against the newest version of this plugin still in the local cache — file contents, not version numbers."),
+    "method missing"
+  );
+}
+
+// --- per-agent run cost: method and denominator, always (#S2 carve-out) ------
+{
+  const priced = drawer2("id-agent-priced");
+  check(
+    "run cost renders total and median",
+    priced.includes(`<b>184,320</b> tok total · median <b>88,000</b> tok`),
+    "run cost figures missing"
+  );
+  check(
+    "the figure never appears without the method that produced it",
+    priced.includes("Total tokens processed (input + output + cache creation + cache read), summed from each run&#39;s own subagents/agent-&lt;id&gt;.jsonl") &&
+      priced.includes("a token count, not a bill"),
+    "method string missing"
+  );
+  check(
+    "and never without its denominator",
+    priced.includes("Priced 2 of 5 recorded launches") &&
+      priced.includes("a launch whose subagent transcript is gone is left unpriced rather than counted as a zero-token run"),
+    "denominator missing"
+  );
+  const bare = drawer2("id-agent-bare");
+  check(
+    "an agent whose runs were purged says unpriced — never a 0",
+    bare.includes("Run cost unpriced — none of the 3 recorded launches still has its own") &&
+      bare.includes("Unmeasured, which is not the same as zero.") &&
+      !bare.includes(">run cost<") &&
+      !/<b>0<\/b> tok total/.test(bare),
+    "unpriced agent rendered a zero"
+  );
+  const noCount = clone(p2);
+  const nc = noCount.items.find((i) => i.id === "id-agent-priced");
+  delete nc.fires;
+  check(
+    "with no launch count to divide by, the denominator is refused rather than faked",
+    drawer2("id-agent-priced", noCount).includes("Priced 2 runs — one per surviving subagent transcript. This payload states no launch count to price them against."),
+    "fake denominator"
+  );
+  check(
+    "a non-agent row is never given an unpriced-run note",
+    !drawer2("id-blind").includes("Run cost unpriced"),
+    "run-cost note leaked onto a skill"
+  );
+}
+
+// --- delta: an unrecorded previous version is said in words (#S2) ------------
+{
+  check(
+    "a pluginsUpdated entry with no `from` states that the previous version was not recorded",
+    app2.includes("superpowers updated to 6.2.0 (previous version not recorded)"),
+    "no-from wording missing"
+  );
+  check(
+    "no sentinel is printed where a version would go",
+    !/unknown\s*→/i.test(app2) && !/undefined/.test(app2) && !/\?\s*→\s*6\.2\.0/.test(app2),
+    "a sentinel reads as a version"
+  );
+  check(
+    "an entry that HAS a from still renders the real transition",
+    app2.includes("impeccable 1.2.0 → 1.3.0"),
+    "from → to missing"
+  );
+  check(
+    "the delta names the snapshot it was measured against and why `from` can be absent",
+    app2.includes("snapshots record no plugin versions, which is why a previous version can be unrecorded"),
+    "delta method missing"
+  );
+}
+
+// --- portfolio: concentration counts dispatch names, not rows ----------------
+{
+  check(
+    "concentration prints the dispatch-name count",
+    app2.includes(`<span class="rfig">2<i>names</i></span>`) &&
+      app2.includes("account for 84% of every recorded fire"),
+    "name count missing"
+  );
+  check(
+    "it never prints ids.length as the count",
+    !/<span class="rfig">3<i>names?<\/i>/.test(app2),
+    "row count printed as a name count"
+  );
+  check(
+    "the row count is stated separately, with the reason the two differ",
+    app2.includes("opens 3 rows — one name is installed at two scopes"),
+    "row-count note missing"
+  );
+  const f = R.focusSet(p2, "concentration");
+  check(
+    "the proof view's label carries the name count and its set carries every row",
+    f?.label === "top 2 by fires" && f.ids.length === 3,
+    JSON.stringify(f)
+  );
+  check(
+    "a top-spend entry whose row is not in this payload renders as text, not a dead button",
+    app2.includes(`<span class="rlink">ghost `) && !app2.includes(`data-id="id-ghost"`),
+    "unresolvable stat offered a click"
+  );
+  check(
+    "the two rent figures are held apart by unit — window total vs per-session",
+    app2.includes("a WINDOW TOTAL over the observed history") &&
+      app2.includes("The header&#39;s silent-item rent is a PER-SESSION figure"),
+    "spend/rent units conflated"
+  );
+}
+
+// --- growth: a week with no owned observation is a GAP, never a join ---------
+{
+  const g = panelBox(panelOf(p2, "growth"));
+  const paths = [...g.matchAll(/<path class="gw-step" d="([^"]+)"/g)].map((m) => m[1]);
+  check(
+    "the owned line is drawn as one path per contiguous run of observations",
+    paths.length === 2,
+    `paths: ${paths.length}`
+  );
+  // Geometry-independent: the gap tick marks the unobserved week, and a path
+  // that interpolated across it would have to carry x coordinates on both
+  // sides of that tick.
+  const gapX = Number(/<line class="gw-gap" x1="([\d.]+)"/.exec(g)?.[1]);
+  const xsOf = (d) => [...d.matchAll(/[MH]\s(-?[\d.]+)/g)].map((m) => Number(m[1]));
+  check(
+    "no path spans the unobserved week — the gap is a break, not an interpolation",
+    Number.isFinite(gapX) &&
+      !paths.some((d) => xsOf(d).some((x) => x < gapX) && xsOf(d).some((x) => x > gapX)),
+    paths.join(" | ")
+  );
+  check(
+    "the gap week is ticked on the axis so missing data reads as missing",
+    countOf(g, /class="gw-gap"/g) === 1,
+    `ticks: ${countOf(g, /class="gw-gap"/g)}`
+  );
+  check(
+    "observation dots appear only on weeks that carry one",
+    countOf(g, /class="gw-obs"/g) === 4,
+    `dots: ${countOf(g, /class="gw-obs"/g)}`
+  );
+  check(
+    "the gap week's own readout states the absence",
+    g.includes("no owned observation this week"),
+    "gap tooltip missing"
+  );
+  check(
+    "the caption refuses interpolation in words",
+    g.includes("breaks over the <b>1</b> week with none — ticked on the axis") &&
+      g.includes("Nothing is interpolated across a gap: joining them would draw a history the snapshots never recorded."),
+    "caption missing"
+  );
+  check(
+    "each series names the method it came from, beside the series",
+    g.includes("owned<i>scan snapshots, from the first recorded run forward</i>") &&
+      g.includes("distinct items with at least one recorded fire that week — durable ledger events"),
+    "series captions missing"
+  );
+}
+
+// --- overlap: each column carries its OWN window; empty is not zero ----------
+{
+  const o = panelBox(panelOf(p2, "overlap"));
+  check(
+    "every provider column head carries that provider's own readable history",
+    o.includes(`<span class="ovl-prov">claude</span>\n        <span class="ovl-win">2026-06-24 → 2026-08-04</span>`) &&
+      o.includes(`<span class="ovl-prov">codex</span>\n        <span class="ovl-win">2026-03-03 → 2026-08-04</span>`) &&
+      o.includes(`<span class="ovl-prov">cursor</span>\n        <span class="ovl-win">2026-05-12 → 2026-08-03</span>`),
+    "per-provider window heads missing"
+  );
+  check(
+    "and the caption says why the columns are not like-for-like",
+    o.includes("Each column states its own provider's window, because the stores keep different amounts of history and the counts are not like-for-like."),
+    "window caption missing"
+  );
+  check(
+    "a provider with no record of an asset gets an empty cell, never a 0",
+    countOf(o, /class="ovl-cell void"/g) === 1 &&
+      o.includes(`<span class="sr">no record</span>`) &&
+      o.includes("An empty cell is an absent observation, not a zero."),
+    "void cell wrong"
+  );
+  // A harness holding its own COPY of the asset is not "no record" — the cell
+  // that used to render "·" there was denying the very duplication this panel
+  // is for. It reports the copy's own fires, taken from the copy's own row.
+  check(
+    "a harness holding a separate copy reports the copy, not an empty cell",
+    countOf(o, /class="ovl-cell copy"/g) === 1 &&
+      o.includes("A separate copy of") &&
+      o.includes("Each harness loads and pays for its own copy."),
+    "copy cell wrong"
+  );
+  check(
+    "no cell in the matrix prints a zero at all",
+    !/ovl-cell[^>]*>(<b>)?0/.test(o),
+    "a zero reached the matrix"
+  );
+  check(
+    "a reader that dispatches nothing says read, and says why that is expected",
+    o.includes(`class="ovl-cell read"`) &&
+      o.includes("an instruction file is read, not dispatched, so that is expected rather than a silence worth acting on"),
+    "read cell wrong"
+  );
+  check(
+    "a cross-provider twin is marked with its body comparison",
+    o.includes(`class="ovl-twin"`) && o.includes("AGENTS.md also exists under cursor — byte-identical body"),
+    "twin marker missing"
+  );
+  const noWin = clone(p2);
+  delete noWin.providerWindows;
+  const o2 = panelBox(panelOf(noWin, "overlap"));
+  check(
+    "without per-provider windows every column is labelled with the one shared window",
+    countOf(o2, /class="ovl-win shared">since 2026-03-01/g) === 3 &&
+      o2.includes("Every column shares one window (since 2026-03-01): this payload carries no per-provider retention dates, so the columns are not like-for-like and are not labelled as if they were."),
+    "shared-window fallback wrong"
+  );
+  check(
+    "the fallback never dresses one merged window up as three measured ones",
+    !o2.includes(`<span class="ovl-win">`),
+    "merged window rendered as per-provider"
+  );
+}
+
+// --- refs: a fact to check, not a defect to alarm about ----------------------
+{
+  const d = drawer2("id-blind");
+  const health = sectionOf(d, "content health");
+  check(
+    "refs state the denominator, the misses and the exec-bit count",
+    health.includes("<b>5</b> referenced paths checked · <b>1</b> did not resolve · <b>1</b> without an exec bit"),
+    "refs line wrong"
+  );
+  check(
+    "each unresolved path carries the SKILL.md line to go look at",
+    health.includes(`<span class="refpath">reference/missing-guide.md</span> <span class="dim">SKILL.md:12</span>`),
+    "ref location missing"
+  );
+  check(
+    "the method admits a missing file and an example path are indistinguishable",
+    health.includes("a path an example tells you to create reads exactly the same way as one that should already be there. Something to check at the line, not a defect."),
+    "refs method missing"
+  );
+  check(
+    "refs render tonal — no severity class anywhere in content health",
+    !/\bdgr\b|\bsig\b|badge|danger|warn/.test(health),
+    "refs carry a severity signal"
+  );
+  check(
+    "and no ref fact ever reaches the table as a badge",
+    !app2.includes("did not resolve") && !app2.includes("refpath"),
+    "refs badged the table"
+  );
+}
+
+// --- table facts: one burst, and the scope it all landed in ------------------
+{
+  check(
+    "a one-burst item that is no longer new carries the tried & dropped badge — once",
+    countOf(app2, /tried &amp; dropped/g) === 1 &&
+      rowOf(app2, "id-burst-old").includes("tried &amp; dropped"),
+    `badges: ${countOf(app2, /tried &amp; dropped/g)}`
+  );
+  check(
+    "the badge's title states the span, the silence and the record it was measured over",
+    /all 4 recorded fires landed within one 3-day span \(2026-05-05 → 2026-05-08\), and nothing since — 88d ago\. Measured over the ledger&#39;s record since 2026-03-01\./.test(app2),
+    "burst title incomplete"
+  );
+  check(
+    "a one-burst item whose burst is still recent is called new, never dropped",
+    rowOf(app2, "id-burst-new").includes("∗") &&
+      !rowOf(app2, "id-burst-new").includes("tried &amp; dropped"),
+    "a fresh item was called dropped"
+  );
+  check(
+    "the drawer states the burst span either way",
+    drawer2("id-burst-new").includes("one burst — every fire inside <b>2d</b>, active in <b>1</b> of 1 week since its first fire"),
+    "spread line missing on the new item"
+  );
+  check(
+    "a multi-week item's spread reads as a span, not a burst",
+    !drawer2("id-plug").includes("one burst"),
+    "burst wording on a staple"
+  );
+  check(
+    "the quiet line compares the silence against this item's own longest gap",
+    drawer2("id-burst-old").includes("quiet <b>88d</b> · longest prior gap <b>2d</b> <span class=\"dim\">over 3 gaps</span>"),
+    "quiet line wrong"
+  );
+  check(
+    "the scope badge names the one project every fire landed in — once",
+    countOf(app2, /only in context-audit/g) === 1 &&
+      rowOf(app2, "id-scoped").includes(`>only in context-audit</span>`),
+    `scope badges: ${countOf(app2, /only in context-audit/g)}`
+  );
+  check(
+    "its title states the asymmetry: paid everywhere, used in one place",
+    app2.includes("Its always-in-context cost is paid in every session in every project; its recorded use is in that one."),
+    "scope asymmetry not stated"
+  );
+  check(
+    "the drawer repeats the scope fact and the same-name-at-another-scope fact",
+    drawer2("id-scoped").includes("every recorded fire landed in one project") &&
+      drawer2("id-scoped").includes("the same dispatch name also exists at <b>project</b> scope"),
+    "scope block wrong"
+  );
+  check(
+    "a near-miss is a count of names that resolved to nothing, never folded into fires",
+    drawer2("id-scoped").includes(`<span class="pchip">/scopedone <b>2</b></span>`) &&
+      drawer2("id-scoped").includes("fired, matched nothing installed"),
+    "near-miss block wrong"
+  );
+  check(
+    "a confusable twin states its own fire count and whether they ever co-fired",
+    drawer2("id-scoped").includes(`<span class="pchip">blindspot <b>9</b></span>`) &&
+      drawer2("id-scoped").includes("No recorded session fired this one and a twin together."),
+    "confusable block wrong"
+  );
+}
+
+// --- since disabling: an upper bound, labelled as one ------------------------
+{
+  const d = drawer2("id-off");
+  check(
+    "the disable date is stated as a bound, not a record",
+    d.includes(`off since <b>2026-06-15</b> or earlier <span class="dim">· at least 50d</span>`),
+    "disable date wording wrong"
+  );
+  check(
+    "the ctime source is named, with what else moves it",
+    d.includes("That date is the directory&#39;s ctime: moving a skill into skills-disabled is a rename, which leaves mtime alone but bumps ctime") &&
+      d.includes("Treat it as an upper bound on the date"),
+    "ctime caveat missing"
+  );
+  check(
+    "attempts since are counted, and what an attempt means is stated",
+    d.includes("<b>2</b> attempted invocations of this name since") &&
+      d.includes("an attempt is something that went looking and found it gone"),
+    "attempts line wrong"
+  );
+  check(
+    "the other assets that still name it are listed, not just counted",
+    d.includes("named in the body of <b>2</b> other items") &&
+      d.includes("<li>superpowers:brainstorming</li>") &&
+      d.includes("Disabling it does not update them."),
+    "referenced-by list missing"
+  );
+  const undated = clone(p2);
+  const u = undated.items.find((i) => i.id === "id-off");
+  delete u.disabledSafety.disabledAt;
+  delete u.disabledSafety.disabledAtSource;
+  delete u.disabledSafety.days;
+  const du = drawer2("id-off", undated);
+  check(
+    "with no disable date the section still counts attempts and invents no date",
+    du.includes("attempted invocations of this name since") && !du.includes("off since"),
+    "a date was fabricated"
+  );
+}
+
+// --- plugin group: superseded versions reported, never deleted ---------------
+{
+  check(
+    "the group row states how many superseded versions sit on disk, which, and how big",
+    app2.includes("2 superseded on disk · 5.1.0, 6.1.1 · 3.8 MB"),
+    "superseded line missing"
+  );
+  check(
+    "its title names the live version, prints the paths, and disclaims deleting them",
+    app2.includes("6.2.0 is the live one. Reported, never deleted; remove them yourself if you want the space back.") &&
+      app2.includes("/home/u/.claude/plugins/cache/superpowers/5.1.0"),
+    "superseded title wrong"
+  );
+  check(
+    "a newer listed version is a claim about the LOCAL checkout only",
+    app2.includes(`<span class="upd">7.0.0 listed</span>`) &&
+      app2.includes("the local marketplace lists 7.0.0"),
+    "newer-listed wording wrong"
+  );
+}
+
+// --- payload caveats: degraded reads state themselves ------------------------
+{
+  check(
+    "payload caveats are counted in the rail and read in full on hover",
+    app2.includes(">2 caveats on these figures<") &&
+      app2.includes("Cursor&#39;s local conversation store could not be opened (SQLITE_CANTOPEN)") &&
+      app2.includes("3 ledger lines were unreadable and were skipped."),
+    "caveat strip wrong"
+  );
+  const one = clone(p2);
+  one.caveats = ["one thing went wrong"];
+  check(
+    "one caveat is singular",
+    R.renderApp(one, R.defaultState()).includes(">1 caveat on these figures<"),
+    "plural wrong"
+  );
+  const none = clone(p2);
+  delete none.caveats;
+  check(
+    "no caveat strip when the payload states none — absent, not a zero",
+    !R.renderApp(none, R.defaultState()).includes("caveat on these figures") &&
+      !R.renderApp(none, R.defaultState()).includes("caveats on these figures"),
+    "empty caveat chrome"
+  );
+}
+
+// --- panel empty states: teaching, never an empty axis -----------------------
+{
+  const teaches = (name, html, phrases) => {
+    const box = panelBox(html);
+    check(
+      name,
+      box.includes("panel-void") &&
+        box.includes("panel-empty") &&
+        phrases.every((p) => box.includes(p)) &&
+        !box.includes(`<svg class="chart`) &&
+        !box.includes(`class="grid"`) &&
+        !box.includes(`class="ax-line"`),
+      box.slice(0, 240)
+    );
+  };
+
+  teaches(
+    "prune: nothing in view says so and offers the way back",
+    panelOf(p2, "prune", { query: "zzzz" }),
+    ["nothing to plot in this scope", "the filters on the rail are hiding all of them", "data-clear"]
+  );
+
+  const noFires = clone(p2);
+  noFires.items = noFires.items.map((i) => ({ ...i, fires: null }));
+  teaches(
+    "prune: no fires anywhere draws no axis and states the reading instead",
+    panelOf(noFires, "prune"),
+    [
+      "no fires to plot against",
+      "so the horizontal axis has no range — every mark would sit on the same line",
+      "is being paid across them with nothing recorded against it",
+    ]
+  );
+
+  const noCut = clone(p2);
+  delete noCut.budgetCut;
+  teaches(
+    "budget: a listing with no modelled drop order says which fact is missing",
+    panelOf(noCut, "budget"),
+    ["drop order not modelled", "It needs fire counts to rank on; a scan with no readable history cannot produce it."]
+  );
+
+  const noListing = clone(noCut);
+  delete noListing.header.listing;
+  check(
+    "budget: a machine subject to no listing is never offered the panel at all",
+    !panelOf(noListing, "budget").includes(`data-panel-to="budget"`) &&
+      panelOf(noListing, "budget").includes(`<table class="inv"`),
+    "a Claude-only mechanic was offered to a machine without it"
+  );
+
+  teaches(
+    "overlap: shared assets outside the current scope say so and offer the scope",
+    panelOf(p2, "overlap", { mode: "skills" }),
+    ["shared assets sit outside this scope", "An AGENTS.md read by two harnesses is the usual case", `data-mode="all"`]
+  );
+
+  const unshared = clone(p2);
+  unshared.items = unshared.items.map((i) => {
+    const c = { ...i };
+    delete c.readBy;
+    // crossProvider counts as sharing too — the same dispatch name under two
+    // harnesses is the overlap most machines actually have, and it is paid for
+    // once per harness. Leaving it in place here would leave the matrix
+    // populated and never reach the empty state this case is about.
+    delete c.crossProvider;
+    if (c.fires) delete c.fires.byProvider;
+    return c;
+  });
+  teaches(
+    "overlap: nothing shared is a real reading, and says which one",
+    panelOf(unshared, "overlap"),
+    ["nothing is shared", "no dispatch name exists under two harnesses", "not a guarantee that no file is duplicated"]
+  );
+  // The panel must never claim more than its evidence: only two things leave a
+  // cross-provider record anywhere, so "nothing found" is not "nothing exists".
+  check(
+    "the empty matrix does not claim nothing is paid for twice",
+    !panelOf(unshared, "overlap").includes("nothing is being paid for twice"),
+    "empty state still over-claims"
+  );
+
+  const solo = clone(unshared);
+  solo.items = solo.items.filter((i) => i.source === "claude");
+  teaches(
+    "overlap: one provider on the machine explains what would fill the panel",
+    panelOf(solo, "overlap"),
+    ["one provider on this machine", "An overlap matrix compares what two or more harnesses read"]
+  );
+
+  const noGrowth = clone(p2);
+  delete noGrowth.growth;
+  teaches(
+    "growth: no weekly history yet teaches what the panel measures",
+    panelOf(noGrowth, "growth"),
+    ["no weekly history yet", "Rescan over the coming weeks and it fills in from the first observation forward."]
+  );
+
+  const flat = clone(p2);
+  flat.growth.weeks = flat.growth.weeks.map((w) => ({ weekStart: w.weekStart, firedItems: 0 }));
+  teaches(
+    "growth: an all-zero series is stated, never drawn as a measurement of zero",
+    panelOf(flat, "growth"),
+    ["every week reads zero", "An axis drawn over that would look like a measurement of zero rather than the absence of one."]
+  );
+}
+
+// --- panels that DO have data still carry their method -----------------------
+{
+  const pq = panelBox(panelOf(p2, "prune"));
+  check(
+    "the quadrant plot states both exclusions rather than performing them silently",
+    pq.includes("<b>1</b> not plotted — no dispatch record exists for them, which is not a zero") &&
+      pq.includes("<b>1</b> not plotted — disabled, so no cost is being paid"),
+    "exclusions not stated"
+  );
+  check(
+    "both median lines are annotated with the value that placed them",
+    pq.includes(">median 3 fires<") && pq.includes(">median 95 tok/session<"),
+    "median annotation missing"
+  );
+  check(
+    "the plot's dead-weight rule is stated as the same predicate the cost column uses",
+    pq.includes("The same rule the cost column uses: enabled, at least a quarter of the priciest item&#39;s always-in-context cost, no fires recorded in the 41d window, and installed before that window opened."),
+    "dead-weight predicate not stated"
+  );
+  const lb = panelBox(panelOf(p2, "budget"));
+  check(
+    "the budget bar states the modelled order and what a drop actually costs",
+    lb.includes("<b>105%</b> of budget · <b>1</b> description dropped") &&
+      lb.includes("needs <b>420</b> chars freed to fit") &&
+      lb.includes("A dropped skill still exists and can still be typed; it just stops auto-triggering."),
+    "budget panel wrong"
+  );
+  const mismatch = clone(p2);
+  mismatch.header.listing.chars = 8999;
+  check(
+    "a header/model disagreement about the same listing shows BOTH figures",
+    panelOf(mismatch, "budget").includes("header says 8,999 chars") &&
+      panelOf(mismatch, "budget").includes("Both are shown rather than one quietly winning"),
+    "a disagreement was resolved silently"
+  );
+}
+
+// --- hostile payload: every new field, every new surface ---------------------
+{
+  // Three markers, each unmistakable in output: if any survives unescaped the
+  // page is injectable from the files it audits. The ESCAPED form is asserted
+  // too — a field that silently vanished would pass an absence-only test.
+  const XS = "</section><script>alert(1)</script>";
+  const XI = "<img src=x onerror=alert(1)>";
+  const XB = `"><b>esc</b>`;
+
+  const h = clone(p2);
+  h.caveats = [XI, XB];
+  h.growth.ownedSource = XS;
+  h.superseded = [
+    { plugin: XS, marketplace: XI, active: XB, versions: [XI, XB], bytes: 4096, paths: [XS, XI] },
+  ];
+  h.delta.pluginsUpdated = [
+    { name: XS, to: XI },
+    { name: XI, from: XB, to: XS },
+  ];
+  h.portfolio.topSpend = [
+    { id: "id-blind", name: XS, chars: 900 },
+    { id: "id-not-here", name: XI, chars: 400 },
+  ];
+  h.portfolio.flaggedByActivity = [
+    { id: "id-blind", name: XB, fires: 3, lastFired: "2026-08-01T09:00:00Z", projects: 2 },
+  ];
+  h.budgetCut.order = h.budgetCut.order.map((o) => ({ ...o, name: XI }));
+  h.providerWindows = {
+    [XS]: { start: "2026-01-05T00:00:00Z", end: "2026-02-02T00:00:00Z", note: XB },
+    [XI]: { start: "2026-03-02T00:00:00Z", end: "2026-04-06T00:00:00Z" },
+  };
+
+  const blind = h.items.find((i) => i.id === "id-blind");
+  blind.name = XS;
+  blind.description = XI;
+  blind.path = XB;
+  blind.readBy = [XS, XI];
+  blind.refs = {
+    checked: 2,
+    missing: [{ path: XS, line: 3 }],
+    notExecutable: [{ path: XI, line: 9 }],
+  };
+  blind.bundledFiles = [
+    { relPath: XS, readInFires: 0, ofFires: 0 },
+    { relPath: XI, readInFires: 1, ofFires: 2 },
+  ];
+  blind.confusable = [{ itemId: "id-scoped", name: XB, fires: 4 }];
+  blind.nearMiss = [{ name: XS, count: 2 }];
+  blind.crossProvider = [{ itemId: "id-scoped", source: XI, name: XS, identical: false }];
+  blind.scopeNote = { allFiresIn: XS, alsoAtScope: XI };
+  blind.collision = { paths: [XB] };
+  blind.updateRelevance = { version: XI, identical: false, changedFiles: 2 };
+  blind.plugin = {
+    name: XS,
+    marketplace: XI,
+    version: XB,
+    latest: XS,
+    installedAt: "2026-03-24T00:00:00Z",
+    lastUpdated: "2026-07-25T00:00:00Z",
+  };
+  blind.readOnlyReason = XI;
+  blind.fires.byModel = [{ model: XS, count: 4 }];
+  blind.fires.byProject = [{ name: XI, count: 4 }];
+  blind.fires.events = [
+    { id: "ev-h-1", ts: "2026-08-01T09:00:00Z", project: XB, channel: "typed", outcome: "error" },
+  ];
+  // The same providers on a second row, so the overlap matrix actually renders
+  // with hostile column heads instead of falling through to an empty state.
+  h.items.find((i) => i.id === "id-agents").readBy = [XS, XI];
+  const off = h.items.find((i) => i.id === "id-off");
+  off.disabledSafety.referencedBy = [XS, XI, XB];
+  // The superseded row only joins to a group whose plugin name matches.
+  h.superseded[0].plugin = XS;
+  h.superseded[0].marketplace = XI;
+
+  const surfaces = [
+    R.renderApp(h, { ...R.defaultState(), selected: "id-blind" }),
+    R.renderApp(h, { ...R.defaultState(), selected: "id-off" }),
+    panelOf(h, "prune"),
+    panelOf(h, "budget"),
+    panelOf(h, "overlap"),
+    panelOf(h, "growth"),
+  ].join("\n");
+
+  check(
+    "no hostile string escapes into markup on any S2/S3 surface",
+    !surfaces.includes("<script") &&
+      !surfaces.includes("<img") &&
+      !surfaces.includes("<b>esc</b>"),
+    "unescaped interpolation"
+  );
+  {
+    // An escaped payload still CONTAINS the text "onerror=…", so a substring
+    // test proves nothing. Tags delimit cleanly (esc leaves no raw < or > in
+    // any value), so: take every real tag, drop its quoted attribute values,
+    // and look for an event handler in what is left.
+    const tags = surfaces.match(/<[a-z][a-z0-9-]*\b[^<>]*>/gi) ?? [];
+    const live = tags.filter((t) =>
+      /\son(?:error|load|click|mouseover|focus)\s*=/i.test(t.replace(/"[^"]*"/g, '""'))
+    );
+    check(
+      "no event handler attribute exists on any rendered tag",
+      tags.length > 100 && live.length === 0,
+      live.slice(0, 2).join(" | ")
+    );
+  }
+  check(
+    "the hostile values were rendered, escaped — not silently dropped",
+    surfaces.includes("&lt;script&gt;alert(1)&lt;/script&gt;") &&
+      surfaces.includes("&lt;img src=x onerror=alert(1)&gt;") &&
+      surfaces.includes("&quot;&gt;&lt;b&gt;esc&lt;/b&gt;"),
+    "hostile fields vanished instead of escaping"
+  );
+  check(
+    "attribute contexts stay quoted — no marker breaks out of a title or data-tip",
+    !/(?:title|data-tip)="[^"]*<(?:script|img|b)\b/.test(surfaces),
+    "attribute break-out"
+  );
+  check(
+    "the overlap matrix rendered with the hostile provider names as columns",
+    panelOf(h, "overlap").includes(`class="ovl-prov"`) &&
+      !panelOf(h, "overlap").includes("panel-void"),
+    "hostile overlap fell through to an empty state"
+  );
+}
+
+// --- the DOM-free contract --------------------------------------------------
+{
+  const src = readFileSync(modPath, "utf8");
+  check(
+    "the built renderer references no DOM API",
+    !/\bdocument\s*\./.test(src) &&
+      !/\blocalStorage\b/.test(src) &&
+      !/\bwindow\s*\.\s*(?:location|document|addEventListener|setTimeout)\b/.test(src),
+    "a DOM reference reached render.js"
+  );
+  check(
+    "every assertion above ran in a process with no DOM at all",
+    typeof globalThis.document === "undefined" && typeof globalThis.window === "undefined",
+    "the test rig supplied a DOM"
+  );
+}
+
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`);
   process.exit(1);

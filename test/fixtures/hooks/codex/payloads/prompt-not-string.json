@@ -1,0 +1,10 @@
+{
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5-codex",
+  "permission_mode": "on-request",
+  "prompt": 42,
+  "session_id": "cx-sess-4",
+  "transcript_path": "/Users/someone/.codex/sessions/2026/08/06/rollout-cx-sess-4.jsonl",
+  "turn_id": "turn-7"
+}

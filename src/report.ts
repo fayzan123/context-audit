@@ -1,4 +1,12 @@
-import type { AssetKind, LedgerEvent, MultiAuditResult, SecurityFinding, SourceAudit, SourceId } from "./types.js";
+import type {
+  AssetKind,
+  HistoryFacts,
+  LedgerEvent,
+  MultiAuditResult,
+  SecurityFinding,
+  SourceAudit,
+  SourceId,
+} from "./types.js";
 // The listing budget is Claude-specific, so it is only compared for claude
 // sources below. The figure itself and the over/under call live in content.ts,
 // so this report and the dashboard cannot drift apart on the tool's single
@@ -57,6 +65,28 @@ function countsLabel(s: SourceAudit): string {
 /** Which sources Claude's skill-listing budget applies to. */
 const hasListingBudget = (s: SourceAudit): boolean =>
   (s.source === "claude" || s.source === "custom") && s.content.listingChars > 0;
+
+/**
+ * Did the scan actually look through a window? A history that observed NOTHING
+ * is the same claim as no history at all, and must read as one. Cursor made
+ * this visible: its adapter always returns a HistoryFacts (degraded reads still
+ * report their reason), so a machine with no conversation store printed "from 0
+ * local transcript file(s), unknown → unknown" followed by "0 of 0 never fired"
+ * — a window nobody observed, stated as though it had been.
+ *
+ * The transcript window and the durable ledger are separate observations, and
+ * either can be empty while the other says something: a provider whose
+ * transcripts are gone still reports its lifetime figures. Both predicates live
+ * here because the per-source block and the closing summary have to agree about
+ * what was observed — they disagreed, and the summary was the one making a
+ * window claim with no window behind it.
+ */
+const observedWindow = (h?: HistoryFacts): boolean =>
+  !!h && (h.transcriptFiles > 0 || h.windowStart !== undefined || h.usage.length > 0);
+
+/** A ledger with nothing in it yet is not an observation either. */
+const observedLedger = (lt?: SourceLifetime): boolean =>
+  !!lt && (lt.fired.length > 0 || lt.typedSince !== undefined);
 
 // --- lifetime (durable ledger) ---------------------------------------------
 // Window figures come from the transcripts the harness still keeps; lifetime
@@ -263,14 +293,19 @@ function printSource(s: SourceAudit, lt?: SourceLifetime): void {
   // ---- Usage ----
   console.log();
   console.log(bold(cyan("USAGE")));
-  if (!history) {
+  const sawWindow = observedWindow(history);
+  if (!history || (!sawWindow && !observedLedger(lt))) {
     console.log(dim(`  no usage data — ${s.source} keeps no transcripts this tool can read (or the scan was skipped)`));
   } else {
-    console.log(
-      dim(
-        `  from ${history.transcriptFiles} local transcript file(s), ${day(history.windowStart)} → ${day(history.windowEnd)}`
-      )
-    );
+    // Only where a window was actually observed: "0 files, unknown → unknown"
+    // states a window nobody looked through.
+    if (sawWindow) {
+      console.log(
+        dim(
+          `  from ${history.transcriptFiles} local transcript file(s), ${day(history.windowStart)} → ${day(history.windowEnd)}`
+        )
+      );
+    }
     if (lt) {
       const typed =
         lt.typedSince && lt.typedSince < lt.trackedSince
@@ -292,22 +327,38 @@ function printSource(s: SourceAudit, lt?: SourceLifetime): void {
       return dim(` · ${n} since ${day(since)}`);
     };
     const tracked = history.usage.length + history.neverFired.length;
-    console.log(
-      `  ${bold(`${history.neverFired.length} of ${tracked}`)} never fired in this window ${history.usage.length > 0 ? dim(`(${history.usage.length} fired)`) : ""}`
-    );
-    if (history.neverFired.length > 0) {
-      console.log(`        ${dim(history.neverFired.join(", "))}`);
-      // The drop order is by least-invoked, so a never-fired skill is both the
-      // first to lose its description and the least able to earn it back.
-      if (overBudget) {
-        console.log(`  ${yellow("these are first in line")} to lose their descriptions while you are over budget`);
+    // The drop order is by least-invoked, so a never-fired asset is both the
+    // first to lose its description and the least able to earn it back.
+    const firstInLine = `  ${yellow("these are first in line")} to lose their descriptions while you are over budget`;
+    // "in this window" is sayable only where a window was actually observed.
+    // A machine whose transcripts are gone but whose ledger is not returns
+    // transcriptFiles 0, no windowStart, and every tracked asset in
+    // neverFired — a fully populated denominator with no window behind it,
+    // which printed "2 of 2 never fired in this window" against a span nobody
+    // looked through. The count is not suppressed; it is stated below against
+    // the qualifier it actually has (tracking-since), which is the only
+    // observation there is in that case.
+    if (sawWindow) {
+      console.log(
+        `  ${bold(`${history.neverFired.length} of ${tracked}`)} never fired in this window ${history.usage.length > 0 ? dim(`(${history.usage.length} fired)`) : ""}`
+      );
+      if (history.neverFired.length > 0) {
+        console.log(`        ${dim(history.neverFired.join(", "))}`);
+        if (overBudget) console.log(firstInLine);
       }
     }
     if (lt && lt.neverFired.length > 0) {
+      // "of those" points back at the window line; without one it points at
+      // nothing, so the denominator is named outright.
+      const of = sawWindow ? "of those" : `of ${tracked}`;
       console.log(
-        `  dead weight: ${bold(String(lt.neverFired.length))} of those never fired since tracking began ${day(lt.trackedSince)} — ` +
+        `  dead weight: ${bold(String(lt.neverFired.length))} ${of} never fired since tracking began ${day(lt.trackedSince)} — ` +
           `~${lt.deadWeightEstChars.toLocaleString()} chars always in context ${dim(`(~${Math.ceil(lt.deadWeightEstChars / 4).toLocaleString()} tokens, chars/4 estimate)`)}`
       );
+      if (!sawWindow) {
+        console.log(`        ${dim(lt.neverFired.join(", "))}`);
+        if (overBudget) console.log(firstInLine);
+      }
     }
     const top = history.usage.slice(0, 10);
     if (top.length > 0) {
@@ -331,7 +382,12 @@ function printSource(s: SourceAudit, lt?: SourceLifetime): void {
       const windowFired = new Set(history.usage.map((w) => w.skill));
       const quiet = lt.fired.filter((u) => !windowFired.has(u.name));
       if (quiet.length > 0) {
-        console.log(`  fired before this window, 0 in it:`);
+        // Same rule as the never-fired figure above: with no window observed
+        // these are not "before the window" — there is no window for them to
+        // be outside of, and the header says which observation they come from.
+        console.log(
+          sawWindow ? `  fired before this window, 0 in it:` : `  ledger fires (no transcript window to compare):`
+        );
         for (const u of quiet.slice(0, 10)) {
           const since = u.firstFired < lt.trackedSince ? u.firstFired : lt.trackedSince;
           console.log(`        ${bold(u.name)} × ${u.invocations} since ${day(since)}, last ${day(u.lastFired)}`);
@@ -370,8 +426,19 @@ export function printReport(result: MultiAuditResult, lifetime?: LifetimeBySourc
 
   // ---- Cross-source summary ----
   const flags = sources.flatMap((s) => s.security.filter((f) => f.level === "flag"));
-  const neverFired = sources.reduce((n, s) => n + (s.history?.neverFired.length ?? 0), 0);
-  const anyHistory = sources.some((s) => s.history);
+  // Each source contributes the count that has an observation behind it: the
+  // window's never-fired list where a window was observed, the LEDGER's where
+  // only a ledger was. Summing the window list unconditionally printed "2
+  // asset(s) never fired" on a machine with no transcripts at all — counting a
+  // skill the ledger holds fires for, under a window nobody looked through.
+  // With neither observation the clause is dropped: the block above already
+  // said "no usage data", and a headline is the last place to invent one.
+  const neverFired = sources.reduce((n, s) => {
+    if (observedWindow(s.history)) return n + (s.history?.neverFired.length ?? 0);
+    const lt = lifetime?.[s.source];
+    return n + (observedLedger(lt) ? lt!.neverFired.length : 0);
+  }, 0);
+  const anyHistory = sources.some((s) => observedWindow(s.history) || observedLedger(lifetime?.[s.source]));
   const overBudget = sources.some(
     (s) => hasListingBudget(s) && s.content.listingChars > LISTING_BUDGET_CHARS
   );

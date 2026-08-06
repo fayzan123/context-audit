@@ -1,6 +1,7 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { BUILTIN_COMMANDS } from "./types.js";
 import type { AssetKind, LedgerEvent, Provenance, SourceId } from "./types.js";
 
 export const LEDGER_SCHEMA_VERSION = 1;
@@ -15,6 +16,18 @@ const CHANNELS = new Set(["auto", "typed", "load"]);
  * ingestion, backfill) so the privacy gate is one regex, not one per writer.
  */
 export const NAME_RE = /^[A-Za-z0-9:_-]+$/;
+/**
+ * A typed dispatch as the user actually types it — the leading slash is
+ * REQUIRED. Writers that see raw prompt text (history.jsonl entries, Codex's
+ * UserPromptSubmit payload) see every ordinary sentence too, and "please fix
+ * the tests" would otherwise bank a fire named `please`: a junk row in the
+ * external-fires bucket and one English word stored for no reason. Also
+ * rejects pasted absolute paths (a second "/") and anchor fragments, both
+ * observed in real history data. ":" is admitted so plugin dispatches like
+ * /superpowers:brainstorming still match. Strictly narrower than NAME_RE, so
+ * the durable boundary can never be the looser gate.
+ */
+export const TYPED_TOKEN_RE = /^\/[A-Za-z][A-Za-z0-9:_-]*$/;
 /**
  * The durable boundary admits one extra character: codex prompt and skill
  * names legitimately carry "." (release.notes, my.skill). Load-channel events
@@ -47,6 +60,14 @@ export interface LedgerMeta {
   schemaVersion: number;
   /** ISO-8601 — the qualifier every lifetime figure carries. */
   trackedSince: string;
+  /**
+   * Bank Claude Code's own slash commands as typed events (default false).
+   * Durable rather than per-command because the writers do not share a command
+   * line: a hook fires inside someone else's session and can only learn the
+   * user's answer by reading it back off disk. Stored here, one answer governs
+   * all three typed-channel writers.
+   */
+  includeBuiltins?: boolean;
 }
 
 /** One line per audit run — powers since-last-scan deltas. */
@@ -86,11 +107,25 @@ export interface Ledger {
   /**
    * Dedupe is by exact id; a duplicate whose copy carries optional fields the
    * stored event lacks ENRICHES it (counted in `enriched`, and persisted) —
-   * counts stay deduped either way.
+   * counts stay deduped either way. `droppedBuiltins` counts events the
+   * built-ins preference refused; they are not `skipped` (which means "already
+   * banked, or malformed"), because a caller reporting them as skipped would
+   * tell the user their fires were already recorded.
    */
-  appendEvents(events: LedgerEvent[]): { appended: number; skipped: number; enriched: number };
+  appendEvents(events: LedgerEvent[]): {
+    appended: number;
+    skipped: number;
+    enriched: number;
+    droppedBuiltins: number;
+  };
   readEvents(filter?: LedgerFilter): LedgerEvent[];
   meta(): LedgerMeta;
+  /**
+   * Record the durable built-ins preference. Persisted the way provenance is —
+   * whole file, atomic rename — so a half-written meta can never make the
+   * ledger unreadable.
+   */
+  setIncludeBuiltins(on: boolean): void;
   readProvenance(): Record<string, Provenance>;
   writeProvenance(map: Record<string, Provenance>): void;
   appendSnapshot(snap: LedgerSnapshot): void;
@@ -226,7 +261,13 @@ export function openLedger(base?: string, opts?: { mode?: "full" | "append" }): 
     if (!existsSync(metaPath)) return undefined;
     try {
       const m = JSON.parse(readFileSync(metaPath, "utf8")) as LedgerMeta;
-      if (typeof m?.schemaVersion === "number" && typeof m?.trackedSince === "string") return m;
+      if (typeof m?.schemaVersion === "number" && typeof m?.trackedSince === "string") {
+        // A non-boolean preference is dropped rather than coerced: a truthy
+        // string in a hand-edited meta must not silently turn built-in
+        // capture on for every writer on the machine.
+        if (typeof m.includeBuiltins !== "boolean") delete m.includeBuiltins;
+        return m;
+      }
     } catch {}
     bad("meta.json");
     return undefined;
@@ -270,12 +311,28 @@ export function openLedger(base?: string, opts?: { mode?: "full" | "append" }): 
     else bad("snapshots.jsonl");
   }
 
+  /**
+   * The one gate all three typed-channel writers pass through. Scan ingestion,
+   * hooks and backfill each used to decide this for themselves, so the same
+   * `/usage` fire was banked or dropped depending on which channel happened to
+   * see it — the durable store is where they agree.
+   *
+   * Restricted to the TYPED channel: an auto- or load-channel event named
+   * "compact" is a skill, an agent or a loaded file, not Claude Code dispatching
+   * its own slash command. Restricted to provider "claude" for the same reason
+   * one level up — these are Claude Code's built-ins, and a Codex prompt named
+   * `status` is a real asset in the user's inventory that joins to a real row.
+   */
+  const isBuiltinDispatch = (e: LedgerEvent): boolean =>
+    e.channel === "typed" && e.provider === "claude" && BUILTIN_COMMANDS.has(e.name);
+
   return {
     dir,
     appendEvents(batch) {
       let appended = 0;
       let skipped = 0;
       let enriched = 0;
+      let droppedBuiltins = 0;
       const byFile = new Map<string, string>();
       for (const e of batch) {
         // Invalid events land in `skipped` too — a broken hook payload must
@@ -303,6 +360,13 @@ export function openLedger(base?: string, opts?: { mode?: "full" | "append" }): 
           }
           continue;
         }
+        // Checked only after dedupe: an id already in the store keeps taking
+        // its enrichment even once the preference flips off, so turning
+        // built-ins off never strips fields off events banked while it was on.
+        if (!meta.includeBuiltins && isBuiltinDispatch(e)) {
+          droppedBuiltins++;
+          continue;
+        }
         byId.set(e.id, e);
         events.push(e);
         byFile.set(file, (byFile.get(file) ?? "") + JSON.stringify(e) + "\n");
@@ -311,7 +375,7 @@ export function openLedger(base?: string, opts?: { mode?: "full" | "append" }): 
       // One append of complete lines per touched month — concurrent writers
       // interleave whole events, never fragments.
       for (const [file, data] of byFile) appendFileSync(join(dir, file), data, { mode: 0o600 });
-      return { appended, skipped, enriched };
+      return { appended, skipped, enriched, droppedBuiltins };
     },
     readEvents(filter) {
       const hit = events.filter(
@@ -328,6 +392,17 @@ export function openLedger(base?: string, opts?: { mode?: "full" | "append" }): 
     },
     meta() {
       return { ...meta };
+    },
+    setIncludeBuiltins(on) {
+      if (meta.includeBuiltins === on) return;
+      meta.includeBuiltins = on;
+      // An append-mode ledger that found no meta.json is holding a fabricated
+      // trackedSince (its own wall clock). Persisting here would write that
+      // horizon out and reset lifetime figures to the moment a hook fired, so
+      // the preference applies to this process only and the file is left for a
+      // full open to establish — the same rule the open path follows.
+      if (appendOnly && !existsSync(metaPath)) return;
+      writeAtomic(metaPath, JSON.stringify(meta) + "\n");
     },
     readProvenance() {
       // Copy, so the write-once rule can't be bypassed by mutating the map.

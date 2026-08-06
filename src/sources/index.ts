@@ -43,7 +43,10 @@ export async function auditSource(
     content: contentFacts(assets),
     security: securityScan(assets, opts.strict),
   };
-  const caveats = adapter.caveats?.(ctx) ?? [];
+  // Ledger-banking failures are collected here rather than pushed onto the
+  // adapter's own caveats, because caveats() cannot be called until after
+  // usage() has run (see the call site below) and this failure happens first.
+  const banking: string[] = [];
   if (opts.history && adapter.usage && assets.length > 0) {
     audit.history = await adapter.usage(ctx, assets);
     const events = audit.history.events ?? [];
@@ -59,25 +62,43 @@ export async function auditSource(
         // to the hook: the scan's copies of those events carry a different
         // clock in their ids, so banking them would double-count every typed
         // command — the session-level exclusion mirrors the backfill rule.
+        //
+        // The key carries the provider, and the predicate below therefore names
+        // no provider of its own. Ownership is per-provider by construction: a
+        // Claude hook watches a Claude session and says nothing about what a
+        // Codex rollout recorded, and two harnesses hand out session ids of the
+        // same shape, so a bare id both suppresses fires it never observed and
+        // — the failure that matters now that `hooks install --provider codex`
+        // ships — lets a Codex rollout's typed prompt bank NEXT TO the Codex
+        // hook's own event for it, double-counting every Codex prompt.
         const hookTypedSessions = new Set(
           ledger.readEvents()
             .filter((e) => e.hook === true && e.channel === "typed")
-            .map((e) => e.sessionId)
+            .map((e) => `${e.provider}:${e.sessionId}`)
         );
         ledger.appendEvents(
           events.filter(
-            (e) => !(e.provider === "claude" && e.channel === "typed" && !e.hook && hookTypedSessions.has(e.sessionId))
+            (e) => !(e.channel === "typed" && !e.hook && hookTypedSessions.has(`${e.provider}:${e.sessionId}`))
           )
         );
       } catch (err) {
         const why = String((err as Error)?.message ?? err).slice(0, 120);
-        caveats.push(
+        banking.push(
           `usage ledger unavailable (${why}) — this run's events were not banked; ` +
             `usage figures reflect the current transcript window only`
         );
       }
     }
   }
+  // Asked only AFTER usage() has run. The cursor adapter's caveats() reports
+  // the memoized outcome of its own store read — which failure made the store
+  // unreadable, how many records carried no name, how many attachments were
+  // undated — and that read is async, so a synchronous hook can only report it
+  // once it has happened. Asked first, cursor returned its two static labels
+  // and the real read outcome never reached the report at all. The claude and
+  // codex hooks read only the filesystem, so the later call changes nothing
+  // for them.
+  const caveats = [...(adapter.caveats?.(ctx) ?? []), ...banking];
   if (caveats.length > 0) audit.caveats = caveats;
   return audit;
 }

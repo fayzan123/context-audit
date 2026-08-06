@@ -6,7 +6,16 @@ import { discoverSkills, loadSkill } from "./skills.js";
 import { contentFacts } from "./content.js";
 import { securityScan } from "./security.js";
 import { historyFacts } from "./history.js";
-import { hooksInstall, hooksUninstall, logEvent } from "./hooks.js";
+import {
+  codexHooksInstall,
+  codexHooksUninstall,
+  hooksInstall,
+  hooksUninstall,
+  logEvent,
+  type HookProvider,
+  type HooksEdit,
+  type HooksOptions,
+} from "./hooks.js";
 import { openLedger, type Ledger, type LedgerSnapshot } from "./ledger.js";
 import { runBackfill } from "./backfill.js";
 import { buildLifetime, printAgent, printJson, printReport, withLifetime } from "./report.js";
@@ -42,9 +51,13 @@ Usage:
                                  hooks that pipe each skill/command/agent event
                                  to this tool's local usage ledger. Prints the
                                  exact settings.json edit and asks before
-                                 writing (--yes applies without the prompt)
+                                 writing (--yes applies without the prompt).
+                                 --provider codex writes ~/.codex/hooks.json
+                                 instead (typed prompts; Codex reviews and
+                                 trusts it before it runs), --provider all does
+                                 both
   context-audit hooks uninstall  remove exactly what install added (same
-                                 diff-and-confirm flow)
+                                 diff-and-confirm flow, same --provider)
   context-audit backfill         import typed /commands from
                                  ~/.claude/history.jsonl into the usage ledger
                                  — it outlives the transcript purge by months.
@@ -66,7 +79,11 @@ Options:
   --transcripts <dir>   Claude transcript location (default: ~/.claude/projects)
   --yes                 hooks install/uninstall: apply the printed edit without
                         the interactive confirm
-  --include-builtins    backfill: also import built-in commands (/usage, …)
+  --provider <id>       hooks install/uninstall: which harness to wire —
+                        claude (default), codex, or all
+  --include-builtins    backfill: record built-in commands (/usage, …) as a
+                        durable ledger preference, so every capture channel
+                        agrees. --no-include-builtins turns it back off
   --home <dir>          treat <dir> as the user home (default: your real home)
   -h, --help            this help
 
@@ -77,6 +94,8 @@ Everything runs locally. Nothing leaves the machine.`;
 interface Args {
   command: "audit" | "scan" | "ui" | "install-skill" | "hooks" | "log-event" | "backfill";
   hooksAction?: "install" | "uninstall";
+  /** Which harness `hooks` targets. Defaults to claude — what it has always meant. */
+  hooksProvider: HookProvider | "all";
   target?: string;
   output: "report" | "json" | "agent";
   history: boolean;
@@ -85,28 +104,43 @@ interface Args {
   sources?: SourceId[];
   open: boolean;
   yes: boolean;
-  includeBuiltins: boolean;
+  /**
+   * Tri-state on purpose: absent leaves the ledger's stored preference alone,
+   * so `backfill` with no flag never silently rewrites an answer the user gave
+   * on an earlier run.
+   */
+  includeBuiltins?: boolean;
   home?: string;
-  claudeHook?: string;
+  hookEvent?: string;
+  /** Which harness's payload shape `log-event` should parse — both name an event UserPromptSubmit. */
+  hookProvider: HookProvider;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: "audit",
+    hooksProvider: "claude",
     output: "report",
     history: true,
     strict: false,
     open: true,
     yes: false,
-    includeBuiltins: false,
+    hookProvider: "claude",
   };
   // log-event is invoked by harness hooks, not humans: a parse failure here
   // would surface as an error inside someone's session, so it never reaches
   // fail() — a malformed invocation exits 0 doing nothing.
   if (argv[0] === "log-event") {
     args.command = "log-event";
-    const at = argv.indexOf("--claude-hook");
-    if (at !== -1) args.claudeHook = argv[at + 1];
+    const claudeAt = argv.indexOf("--claude-hook");
+    if (claudeAt !== -1) args.hookEvent = argv[claudeAt + 1];
+    const codexAt = argv.indexOf("--codex-hook");
+    // Later flag wins, and only the flag that supplied the event name selects
+    // the mapper — a hook line carrying both is nonsense, not a reason to throw.
+    if (codexAt !== -1 && codexAt > claudeAt) {
+      args.hookEvent = argv[codexAt + 1];
+      args.hookProvider = "codex";
+    }
     return args;
   }
   const positional: string[] = [];
@@ -122,6 +156,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--strict") args.strict = true;
     else if (a === "--yes") args.yes = true;
     else if (a === "--include-builtins") args.includeBuiltins = true;
+    else if (a === "--no-include-builtins") args.includeBuiltins = false;
     else if (a === "--home") {
       const v = argv[++i];
       if (!v) fail("--home requires a directory");
@@ -129,7 +164,17 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "--claude-hook") {
       const v = argv[++i];
       if (!v) fail("--claude-hook requires an event name");
-      args.claudeHook = v;
+      args.hookEvent = v;
+      args.hookProvider = "claude";
+    } else if (a === "--codex-hook") {
+      const v = argv[++i];
+      if (!v) fail("--codex-hook requires an event name");
+      args.hookEvent = v;
+      args.hookProvider = "codex";
+    } else if (a === "--provider") {
+      const v = argv[++i];
+      if (v !== "claude" && v !== "codex" && v !== "all") fail("--provider requires one of: claude, codex, all");
+      args.hooksProvider = v;
     } else if (a === "--transcripts") {
       const v = argv[++i];
       if (!v) fail("--transcripts requires a directory");
@@ -219,7 +264,7 @@ const day = (iso?: string): string => (iso ? iso.slice(0, 10) : "unknown");
  * broken hook must never break it — every path, including an unwritable
  * ledger or absent stdin, exits 0 in silence.
  */
-async function runLogEvent(ctx: SourceContext, eventName?: string): Promise<void> {
+async function runLogEvent(ctx: SourceContext, eventName?: string, provider?: HookProvider): Promise<void> {
   try {
     if (eventName && !process.stdin.isTTY) {
       let stdin = "";
@@ -227,65 +272,150 @@ async function runLogEvent(ctx: SourceContext, eventName?: string): Promise<void
       for await (const chunk of process.stdin) stdin += chunk;
       // Append mode: this runs per tool call INSIDE the user's session, and a
       // full open re-parses the entire lifetime store to bank one line.
-      logEvent(stdin, openLedger(scanLedgerHome(ctx), { mode: "append" }), eventName);
+      logEvent(stdin, openLedger(scanLedgerHome(ctx), { mode: "append" }), eventName, provider);
     }
   } catch {}
   process.exitCode = 0;
 }
 
+/** Which writer each provider's install/uninstall goes through. */
+const hookWriter = (
+  provider: HookProvider,
+  action: "install" | "uninstall"
+): ((home: string, opts?: HooksOptions) => HooksEdit) =>
+  provider === "claude"
+    ? action === "install"
+      ? hooksInstall
+      : hooksUninstall
+    : action === "install"
+      ? codexHooksInstall
+      : codexHooksUninstall;
+
 /**
- * Diff-and-confirm flow for the opt-in hooks channel. The edit is always
- * printed before anything is written; writing takes an explicit --yes or an
- * interactive y/N on a TTY — never silence.
+ * What each install actually starts capturing, and what the user must do next.
+ * Codex's line is not optional detail: registered hooks arrive `untrusted`, so
+ * a user who is not told to review them will conclude the feature is broken.
  */
-async function runHooks(ctx: SourceContext, action: "install" | "uninstall", yes: boolean): Promise<void> {
-  const compute = action === "install" ? hooksInstall : hooksUninstall;
-  const dry = compute(ctx.home);
-  if (dry.error) {
-    console.error(`context-audit: ${dry.error}`);
+function installNotes(provider: HookProvider, path: string): string[] {
+  if (provider === "claude") {
+    return [
+      `Skill, Agent/Task and typed-command events now stream to the usage ledger`,
+      `as they happen (new sessions pick the hooks up).`,
+    ];
+  }
+  const notes = [
+    `Codex will ask you to REVIEW AND TRUST this hook the next time it starts;`,
+    `it does not run, and nothing is recorded, until you do.`,
+    `Only UserPromptSubmit is installed: Codex's one tool is \`exec\`, so a`,
+    `tool hook would spawn a process on every shell command to recover what the`,
+    `rollout scan already reads exactly — and Codex does not purge rollouts, so`,
+    `the history-loss window hooks exist to close does not exist here.`,
+  ];
+  // This tool derives every Codex path from the home it audits, so a set
+  // CODEX_HOME means the file just written may not be the file Codex reads —
+  // a hook that silently never fires, said out loud instead.
+  if (process.env.CODEX_HOME) {
+    notes.push(
+      `CODEX_HOME is set: Codex reads $CODEX_HOME/hooks.json and this edit went`,
+      `to ${path} — copy it across if those are different files, or nothing runs.`
+    );
+  }
+  return notes;
+}
+
+/**
+ * Diff-and-confirm flow for the opt-in hooks channel, across every targeted
+ * harness. Every edit is printed before anything is written; writing takes an
+ * explicit --yes or an interactive y/N on a TTY — never silence.
+ */
+async function runHooks(
+  ctx: SourceContext,
+  action: "install" | "uninstall",
+  yes: boolean,
+  provider: HookProvider | "all"
+): Promise<void> {
+  const targets: HookProvider[] = provider === "all" ? ["claude", "codex"] : [provider];
+  const dry = targets.map((p) => ({ p, edit: hookWriter(p, action)(ctx.home) }));
+  // The default targets Claude, which is what `hooks install` has always
+  // meant; a Codex user would otherwise never learn the other half shipped.
+  // Printed on the already-installed path too — that is where a returning user
+  // lands, and it is the only place they would hear about it.
+  const codexHint = (): void => {
+    if (action !== "install" || provider !== "claude" || !existsSync(join(ctx.home, ".codex"))) return;
+    console.log(`Codex is on this machine too — capture its typed prompts with:`);
+    console.log(`  context-audit hooks install --provider codex`);
+  };
+
+  // One refusal aborts the whole run: a half-applied multi-provider edit is
+  // harder to reason about than none, and the healthy harness is one flag away.
+  const broken = dry.filter((d) => d.edit.error);
+  if (broken.length > 0) {
+    for (const b of broken) console.error(`context-audit: ${b.p}: ${b.edit.error}`);
+    if (targets.length > 1) console.error(`nothing was written. wire the other one with --provider <id>`);
     process.exitCode = 2;
     return;
   }
-  if (!dry.changed) {
-    console.log(
-      action === "install"
-        ? `nothing to add — the hooks are already installed in ${dry.path}`
-        : `nothing to remove — no context-audit hooks in ${dry.path}`
-    );
+
+  const changed = dry.filter((d) => d.edit.changed);
+  if (changed.length === 0) {
+    for (const d of dry) {
+      console.log(
+        action === "install"
+          ? `nothing to add — the ${d.p} hooks are already installed in ${d.edit.path}`
+          : `nothing to remove — no context-audit hooks in ${d.edit.path}`
+      );
+    }
+    codexHint();
     return;
   }
-  console.log(`hooks ${action} — the exact edit to ${dry.path}:\n`);
-  console.log(dry.diff);
+  for (const d of changed) {
+    console.log(`hooks ${action} (${d.p}) — the exact edit to ${d.edit.path}:\n`);
+    console.log(d.edit.diff);
+  }
   let confirmed = yes;
   if (!confirmed && process.stdin.isTTY && process.stdout.isTTY) {
     const { createInterface } = await import("node:readline/promises");
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = (await rl.question("apply this edit? [y/N] ")).trim().toLowerCase();
+    const answer = (await rl.question(changed.length > 1 ? "apply these edits? [y/N] " : "apply this edit? [y/N] "))
+      .trim()
+      .toLowerCase();
     rl.close();
     confirmed = answer === "y" || answer === "yes";
   }
   if (!confirmed) {
-    console.log(`not written. apply it with: context-audit hooks ${action} --yes`);
+    const flag = provider === "claude" ? "" : ` --provider ${provider}`;
+    console.log(`not written. apply it with: context-audit hooks ${action}${flag} --yes`);
     return;
   }
-  // Recomputed from disk at write time: a settings.json that changed since
-  // the diff was printed is re-read rather than clobbered from stale memory.
-  const wet = compute(ctx.home, { confirm: true });
-  if (wet.error) {
-    console.error(`context-audit: ${wet.error}`);
-    process.exitCode = 2;
-    return;
+  for (const d of changed) {
+    // Recomputed from disk at write time: a config file that changed since the
+    // diff was printed is re-read rather than clobbered from stale memory.
+    const wet = hookWriter(d.p, action)(ctx.home, { confirm: true });
+    if (wet.error) {
+      console.error(`context-audit: ${d.p}: ${wet.error}`);
+      process.exitCode = 2;
+      continue;
+    }
+    console.log(wet.written ? `written: ${wet.path}` : `no write needed — ${wet.path} already matched`);
+    if (action === "install") for (const line of installNotes(d.p, wet.path)) console.log(line);
+    // ~/.codex/hooks.json may be a file install created, and an emptied one is
+    // left in place rather than deleted — this tool measures, it does not clean
+    // up. Said out loud so the leftover is the user's choice to finish, not a
+    // mystery. Claude's settings.json is the user's own file and always
+    // predates us, so the same line there would be noise.
+    if (action === "uninstall" && d.p === "codex" && wet.after.trim() === "{}") {
+      console.log(`${wet.path} now holds only "{}" — delete it if this tool created it.`);
+    }
   }
-  console.log(wet.written ? `written: ${wet.path}` : `no write needed — ${wet.path} already matched`);
   if (action === "install") {
-    console.log(`Skill, Agent/Task and typed-command events now stream to the usage ledger`);
-    console.log(`as they happen (new sessions pick the hooks up). Remove them anytime:`);
-    console.log(`  context-audit hooks uninstall`);
+    codexHint();
+    console.log(`Remove them anytime:`);
+    console.log(`  context-audit hooks uninstall${provider === "claude" ? "" : ` --provider ${provider}`}`);
   }
 }
 
 /** Import the typed channel from ~/.claude/history.jsonl into the ledger. */
-async function runBackfillImport(ctx: SourceContext, includeBuiltins: boolean): Promise<void> {
+async function runBackfillImport(ctx: SourceContext, includeBuiltins?: boolean): Promise<void> {
   const historyPath = join(ctx.home, ".claude", "history.jsonl");
   if (!existsSync(historyPath)) {
     console.log(`nothing to import — ${historyPath} does not exist`);
@@ -307,13 +437,24 @@ async function runBackfillImport(ctx: SourceContext, includeBuiltins: boolean): 
     else if (a.kind === "command") commands.add(a.dirName);
   }
   const r = runBackfill(ctx.home, ledger, { skills, commands }, { includeBuiltins });
+  // Read back rather than echoed: the flag is optional, and what governs this
+  // run (and every hook that fires later) is what the ledger now stores.
+  const builtinsOn = ledger.meta().includeBuiltins === true;
 
   console.log(`backfill — ${historyPath}`);
   console.log(`  imported: ${r.imported} typed-command event(s)`);
   console.log(
     `  dropped: ${r.droppedPollerSessions} all-built-in session(s), ${r.droppedBuiltins} built-in command(s)` +
-      (r.droppedBuiltins > 0 && !includeBuiltins ? " — import them with --include-builtins" : "")
+      (r.droppedBuiltins > 0 && !builtinsOn ? " — record them with --include-builtins" : "")
   );
+  if (includeBuiltins !== undefined) {
+    // The preference outlives this command on purpose: a hook firing inside a
+    // future session has no command line to read it from.
+    console.log(
+      `  built-in commands: ${builtinsOn ? "recorded" : "dropped"} — stored preference, applied by every` +
+        ` capture channel (scan, hooks, backfill)`
+    );
+  }
   if (r.unresolved.length > 0) {
     console.log(`  unresolved (no installed skill/command by that name, imported anyway): ${r.unresolved.join(", ")}`);
   }
@@ -348,12 +489,12 @@ async function main(): Promise<void> {
   const ctx: SourceContext = { home: args.home ?? homedir(), cwd: process.cwd(), transcripts: args.transcripts };
 
   if (args.command === "log-event") {
-    await runLogEvent(ctx, args.claudeHook);
+    await runLogEvent(ctx, args.hookEvent, args.hookProvider);
     return;
   }
 
   if (args.command === "hooks") {
-    await runHooks(ctx, args.hooksAction!, args.yes);
+    await runHooks(ctx, args.hooksAction!, args.yes, args.hooksProvider);
     return;
   }
 
@@ -460,7 +601,19 @@ async function main(): Promise<void> {
   // cwds and transcript paths into --json — and break the additive contract
   // report.ts states ("each source gains an optional lifetime key, nothing
   // else moves").
-  for (const s of sources) delete s.history?.events;
+  //
+  // fileReads and agentRuns are stripped for exactly the same reason and had
+  // to be named explicitly: fileReads carries `dir` (an asset's absolute path)
+  // and `sessions` (raw session UUIDs), agentRuns carries agent ids, and none
+  // of the three existed in --json before this release. They are inputs to the
+  // dashboard's in-process join, not report output — buildUiPayload reads them
+  // from its own audit, which this strip never touches.
+  for (const s of sources) {
+    if (!s.history) continue;
+    delete s.history.events;
+    delete s.history.fileReads;
+    delete s.history.agentRuns;
+  }
   print(args.output, result, lifetime);
   process.exitCode = hasFlags(sources) ? 1 : 0;
 }

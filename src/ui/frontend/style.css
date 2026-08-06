@@ -934,6 +934,694 @@ pre.ev {
 }
 .ro-note { font-family: var(--font-num); font-size: 10.5px; color: var(--ink-faint); }
 
+/* --- two calibrated tones, named once --------------------------------------
+   `sig` and `dgr` are the ONLY colour utilities on this page, and they exist so
+   a panel and the header readout that reports the same fact cannot drift apart:
+   over-budget is --danger in both places, dead weight is --signal in both. Every
+   other mark on every new surface is tonal. */
+
+.sig { color: var(--signal); }
+.dgr { color: var(--danger); }
+
+/* --- portfolio rollup ------------------------------------------------------
+   The header's companion, not a second row of hero numbers: a low annunciator
+   strip of payload-wide facts, each compartment split from the next by a
+   hairline. Figures lead, the sentence that makes them readable follows, and
+   the denominator rides underneath in the engraved footnote voice. */
+
+.rollup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 11px;
+  padding: 10px 28px 11px;
+  border-bottom: 1px solid var(--rule);
+}
+/* Stretched, so its hairline runs the height of the strip however the stats
+   below it wrap. */
+.rollup-lab {
+  flex: none;
+  align-self: stretch;
+  padding-right: 16px;
+  margin-right: 16px;
+  border-right: 1px solid var(--rule-strong);
+}
+/* Compartments, not cards: a hairline between neighbours and nothing around
+   the run. The last one floats free of the rule, like the readout strip. */
+.rstat {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-align: left;
+  padding: 2px 18px 2px 0;
+  margin-right: 18px;
+  border-right: 1px solid var(--rule);
+}
+.rollup .rstat:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.rfig {
+  flex: none;
+  font-family: var(--font-num);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.rfig i {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--ink-faint);
+  margin-left: 6px;
+  letter-spacing: 0.06em;
+}
+.rtxt {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+  max-width: 44ch;
+}
+/* The denominator, always attached to the figure it qualifies. */
+em.rnote {
+  display: block;
+  font-style: normal;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+/* Severity follows the header's flagged readout exactly — the figure carries
+   the tone, the prose around it stays tonal so the strip never turns amber. */
+.rstat.sig, .rstat.dgr { color: var(--ink-dim); }
+.rstat.sig .rfig { color: var(--signal); }
+.rstat.dgr .rfig { color: var(--danger); }
+
+/* A stat that opens its own proof view. Amber on hover is the same affordance
+   grammar the row actions and the rescan button already use. */
+.rlinked:hover .rfig, .rlab:hover, .rlink:hover { color: var(--signal); }
+.rlinked:hover .rtxt { color: var(--ink); }
+.rspend { flex-direction: column; align-items: flex-start; gap: 3px; }
+.rlab {
+  display: block;
+  font-family: var(--font-engr);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 0 0 1px;
+  margin-bottom: 2px;
+}
+.rlinks { display: flex; flex-wrap: wrap; gap: 3px 14px; }
+.rlink {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+  white-space: nowrap;
+}
+.rlink b { font-weight: 400; color: var(--ink); margin-left: 5px; }
+.rlink b i { font-style: normal; font-size: 9.5px; color: var(--ink-faint); margin-left: 3px; }
+/* Right-anchored: the last compartment sits nearest the viewport edge, and a
+   tooltip that overflows right is what grows a horizontal scrollbar. */
+.rollup .rstat:last-child[data-tip]::after, .rdelta[data-tip]::after { left: auto; right: 0; }
+
+/* --- panel selector --------------------------------------------------------
+   A range selector, not a filter: the rail's chips decide which items are in
+   play, this decides which reading of them is drawn. Segments share borders
+   like .modes does, and the live one carries the amber the sorted column
+   header uses. */
+
+.panelbank {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 9px 28px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.panelbank > .engr { flex: none; }
+.panelset { display: flex; flex-wrap: wrap; }
+.panel-btn {
+  font-family: var(--font-engr);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule-strong);
+  padding: 4px 13px 3px;
+  white-space: nowrap;
+}
+.panel-btn + .panel-btn { border-left: none; }
+.panel-btn:hover { color: var(--ink); }
+.panel-btn.on {
+  color: var(--signal);
+  background: color-mix(in oklab, var(--signal) 8%, transparent);
+}
+
+/* --- panel frame -----------------------------------------------------------
+   Panels take the scrollport the table would have taken, so the footer stays
+   put and the document never scrolls. Structure is the engraved label and the
+   caption that states the method — no card, no border, no shadow. */
+
+.panelbox {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 28px 28px;
+}
+.panel-head { margin-bottom: 16px; }
+.panel-head .engr { margin-bottom: 6px; }
+.panel-cap {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+  max-width: 104ch;
+}
+/* The per-panel modifiers — .panel-prune / .panel-budget / .panel-overlap /
+   .panel-growth, and .panel-void on an empty one — ride on .panelbox, which
+   carries the whole frame. They exist as hooks; only the matrix currently
+   needs a measure of its own. */
+.panel-overlap .panel-cap { max-width: 100ch; }
+.panel-cap b {
+  font-family: var(--font-num);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+/* The retention qualifier, on its own line under every method statement. */
+.cap-win {
+  display: block;
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+  max-width: 92ch;
+}
+/* An empty panel teaches instead of drawing an axis of zeros. */
+.panel-empty { padding: 26px 0 0; max-width: 66ch; }
+.panel-empty .engr { margin-bottom: 11px; }
+.panel-empty p { font-size: 12.5px; line-height: 1.6; color: var(--ink-dim); margin-bottom: 10px; }
+.panel-empty b {
+  font-family: var(--font-num);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.panel-empty code { font-family: var(--font-num); font-size: 12px; color: var(--signal); }
+.panel-empty .cap-win { margin-top: 0; }
+
+/* --- drawings --------------------------------------------------------------
+   Every SVG is authored at 1160 units and paints with currentColor, so the
+   palette lives here and nowhere else. Rules are scoped under .chart so the
+   per-mark overrides below can win on document order rather than specificity. */
+
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 1160px;
+  color: var(--ink);
+}
+.chart .svg-engr {
+  font-family: var(--font-engr);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+.chart .svg-fig {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}
+/* Text opacity has a floor: --ink at 0.72 lands just above the --ink-faint AA
+   line, which is where axis labels have to stay. Line work keeps the low
+   opacities the markup authored — a graticule is meant to sit under the data. */
+.chart .ax-title { letter-spacing: 0.18em; opacity: 0.74; }
+.chart .grid, .chart .ax-line, .chart .xhair { pointer-events: none; }
+
+/* --- 1. prune quadrant ------------------------------------------------------
+   Plot left, readouts right, split by a hairline. The readouts are the
+   keyboard path and carry the numbers once; the plot zones are the mouse path. */
+
+.pq-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 0 28px;
+  align-items: start;
+  max-width: 1560px;
+}
+.pq-plot { min-width: 0; }
+.pq-side { border-left: 1px solid var(--rule); padding-left: 22px; }
+
+/* Marks: identity by shape, and a surface ring so a pile of overlapping items
+   still reads as a pile. Amber only where the cost column already says so. */
+.chart .pq-mark {
+  cursor: pointer;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 2.4px;
+  stroke-linejoin: round;
+  color: color-mix(in oklab, var(--ink) 84%, transparent);
+}
+.chart .pq-mark.dw { color: var(--signal); }
+.chart .xhair-lab {
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 2.4px;
+  stroke-linejoin: round;
+  opacity: 0.84;
+}
+/* The clickable quadrant. Colour state snaps; nothing crossfades. */
+.chart .pq-zone { cursor: pointer; fill: transparent; }
+.chart .pq-zone:hover, .chart .pq-zone:focus-visible {
+  fill: color-mix(in oklab, var(--ink) 5%, transparent);
+  outline: none;
+}
+
+.pq-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--rule-strong);
+}
+/* Glyph and label share the first line; every figure below takes a line of its
+   own. Laid out as flex rather than inline flow because an inline-block label
+   that will not fit beside the glyph wraps WHOLE, and a glyph left sitting on
+   its own line above a heading is the one card shape this page never draws. */
+.pq-quad {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
+  text-align: left;
+  padding: 10px 12px 12px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.pq-quad:nth-child(2n) { padding-left: 14px; padding-right: 0; border-left: 1px solid var(--rule); }
+.qglyph { flex: none; margin: 1px 7px 0 0; color: var(--ink-faint); }
+/* Two lines are reserved whether or not the label needs them: the four
+   readouts mirror a 2×2 plot, and figures that sit at different heights across
+   a row stop reading as one grid. */
+.pq-qlab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 27px;
+  font-family: var(--font-engr);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.pq-qn {
+  flex: 0 0 100%;
+  margin-top: 6px;
+  font-family: var(--font-num);
+  font-size: 20px;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: var(--ink-dim);
+}
+.pq-qtok {
+  flex: 0 0 100%;
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+}
+.pq-qn i, .pq-qtok i {
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  margin-left: 6px;
+}
+/* The prune shortlist reads a step brighter — by weight, not by hue. */
+.pq-quad.prime .pq-qn { color: var(--ink); }
+.pq-quad.prime .pq-qlab, .pq-quad.prime .qglyph { color: var(--ink-dim); }
+.pq-dw {
+  flex: 0 0 100%;
+  margin-top: 4px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.pq-quad:hover:not(:disabled) { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.pq-quad:hover:not(:disabled) .pq-qlab, .pq-quad:hover:not(:disabled) .qglyph { color: var(--signal); }
+.pq-quad:disabled { cursor: default; }
+.pq-quad:disabled .pq-qn, .pq-quad:disabled .pq-qtok, .pq-quad:disabled .pq-qlab { color: var(--ink-faint); }
+/* The side column sits against the page's right edge, and the bottom pair sits
+   low in the scrollport: their explanations anchor right and upward or they
+   would be clipped by the panel's own scrollport. */
+.pq-side [data-tip]::after { left: auto; right: 0; }
+.pq-grid .pq-quad:nth-child(n + 3)[data-tip]::after { top: auto; bottom: calc(100% + 7px); }
+
+.pq-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  margin: 14px 0 12px;
+}
+.pq-legend > .engr { flex: none; }
+.pq-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.pq-key {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.pq-key .kg { width: 13px; }
+/* The dead-weight key is the one amber entry, glyph included. Stated at two
+   classes because .pq-key would otherwise out-order the bare .sig utility. */
+.pq-key.sig { color: var(--signal); }
+.pq-key.sig .kg { color: inherit; }
+
+/* --- 2. listing budget ------------------------------------------------------ */
+
+.lb-body { max-width: 1160px; }
+.lb-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 24px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.lb-verdict { font-family: var(--font-num); font-size: 12.5px; color: var(--ink-dim); }
+.lb-verdict b {
+  font-weight: 400;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+/* Over budget is --danger here because it is --danger in the header readout.
+   The words around the figure stay tonal — one red number, not a red sentence. */
+.lb-verdict.dgr { color: var(--ink-dim); }
+.lb-verdict.dgr b { color: var(--danger); }
+.lb-fix { font-family: var(--font-num); font-size: 11.5px; color: var(--ink-faint); }
+.lb-fix b { font-weight: 400; color: var(--ink-dim); }
+.lb-mismatch {
+  font-family: var(--font-num);
+  font-size: 11px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--rule-strong);
+}
+.lb-chart { margin: 10px 0 2px; }
+/* Segments: tonal fill, hatched past the cut. Hatching, never a second hue. */
+.chart .lb-seg { cursor: pointer; }
+.chart .lb-seg:hover { fill-opacity: 0.62; }
+.chart .lb-seg.cut:hover { fill-opacity: 1; stroke-opacity: 0.7; }
+/* The cut itself is a rule, and rules on this page are tonal. */
+.chart .lb-cut { color: var(--ink); }
+.chart .lb-cutlab { opacity: 0.86; }
+.chart .lb-end { color: var(--ink-dim); }
+
+.lb-dropped { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.lb-dropped > .engr { margin-bottom: 8px; }
+/* Numbered in the order Claude Code drops them — the list IS the drop order.
+   Set narrower than the bar above it on purpose: a row stretched to 1160px
+   opens a gulf between the name and its figures. */
+.lb-dlist { list-style: none; counter-reset: drop; max-width: 820px; }
+.lb-dlist li {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  counter-increment: drop;
+  padding: 4px 0 3px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.lb-dlist li::before {
+  content: counter(drop, decimal-leading-zero);
+  flex: none;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.lb-dlist li:hover { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.lb-dname {
+  flex: 1 1 20ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+/* Figures right-align on their digits; the unit is a fixed slot after them, so
+   the column reads down as a column. */
+.lb-dfig { flex: none; width: 13ch; text-align: right; color: var(--ink-dim); }
+.lb-dfig i {
+  display: inline-block;
+  width: 5.5ch;
+  text-align: left;
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  margin-left: 6px;
+}
+.lb-dneed { flex: 0 1 auto; color: var(--ink-faint); white-space: nowrap; }
+.lb-dneed b { font-weight: 400; color: var(--ink-dim); }
+
+/* --- 3. provider overlap ----------------------------------------------------
+   A matrix, so it is ruled like one: hairlines between columns, the asset
+   column pinned while the providers scroll. */
+
+.ovl-wrap { overflow-x: auto; max-width: 100%; }
+table.ovl {
+  border-collapse: collapse;
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ovl th, .ovl td {
+  text-align: left;
+  white-space: nowrap;
+  padding: 6px 14px 5px;
+  border-bottom: 1px solid var(--rule);
+}
+.ovl thead th { vertical-align: bottom; padding-bottom: 8px; border-bottom: 1px solid var(--rule-strong); }
+.ovl-col, .ovl-cell { border-left: 1px solid var(--rule); }
+/* Flush with the panel's own left edge, so the matrix lines up with the
+   engraved label and the caption above it. */
+.ovl th.ovl-corner, .ovl th.ovl-name { padding-left: 0; }
+.ovl-prov {
+  display: block;
+  font-family: var(--font-engr);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+/* A provider's own retention dates read a step brighter than the fallback
+   shared window — the difference between a measurement and a stand-in. */
+.ovl-win { display: block; margin-top: 3px; font-size: 10px; color: var(--ink-dim); }
+.ovl-win.shared { color: var(--ink-faint); }
+.ovl tbody tr { cursor: pointer; }
+.ovl tbody tr:hover td, .ovl tbody tr:hover th { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.ovl-name {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  font-weight: 400;
+  padding-left: 0;
+  color: var(--ink);
+  background: var(--bg);
+}
+.ovl tbody tr:hover .ovl-name { background: var(--bg-lift); }
+.ovl-name .kg { width: 15px; }
+.ovl-twin {
+  margin-left: 9px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border: 1px solid var(--rule-strong);
+  padding: 1px 5px 0;
+  cursor: help;
+}
+/* Left-ragged, not right-aligned: the column heads carry a two-line provider
+   name and window, and tabular figures under a common left edge already
+   compare down the column without pulling the counts away from the label they
+   belong to. */
+.ovl-cell { color: var(--ink-dim); cursor: help; }
+.ovl-cell.fired b { font-weight: 400; color: var(--ink); }
+.ovl-cell.read { font-size: 10.5px; letter-spacing: 0.04em; color: var(--ink-faint); }
+/* Absent is a dot, never a zero. */
+.ovl-cell.void { color: var(--ink-faint); }
+.ovl-last { color: var(--ink-dim); }
+.ovl th:last-child[data-tip]::after { left: auto; right: 0; }
+
+/* --- 4. growth --------------------------------------------------------------
+   Two series on one axis, told apart by mark shape: a stroked step line and
+   filled bars. Each is captioned with the method it came from. */
+
+.gw-body { max-width: 1160px; }
+.gw-chart { margin-bottom: 4px; }
+.chart .gw-bar, .chart .gw-step, .chart .gw-obs { color: var(--ink); }
+.chart .gw-gap { color: var(--ink-faint); }
+.chart .gw-dl { opacity: 0.9; }
+.chart .gw-hit { cursor: help; }
+.chart .gw-hit:hover { fill: color-mix(in oklab, var(--ink) 4%, transparent); }
+.gw-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 30px;
+  padding-top: 11px;
+  border-top: 1px solid var(--rule);
+}
+.gw-key {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  max-width: 60ch;
+  font-family: var(--font-engr);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.gw-key i {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+/* flex-start, not center: the caption beside it runs several lines, and a
+   centred swatch sinks to the middle of them, away from the key it marks. */
+.gw-swatch { flex: none; align-self: flex-start; margin-top: 1px; color: var(--ink-dim); }
+
+/* --- table: the listing cut ------------------------------------------------
+   Same grammar as the plugin group row — an engraved label, air above it and
+   one strong hairline under it. It marks where the modelled cut falls; every
+   dropped row also carries its own tag, so the fact never depends on the line
+   landing where you expect. */
+
+tr.cutrow td {
+  padding-top: 16px;
+  padding-bottom: 7px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--rule-strong);
+  white-space: normal;
+  background: none;
+  cursor: default;
+}
+tr.cutrow .engr { display: inline; margin-right: 10px; }
+.cutfig { margin-right: 12px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.cutfig .dgr { color: var(--danger); }
+tr.cutrow .inlineclear { margin-left: 12px; font-size: 11px; }
+/* A dropped description is not a disabled row: it still costs, it just stops
+   auto-triggering. Recessed one step, tonal, never amber. */
+tr.dropped .c-name { color: var(--ink-dim); }
+.offtag[title] { cursor: help; }
+/* Dashed, because it is a MODELLED position in a drop order rather than a
+   state the harness reported. */
+.offtag.cut { border-style: dashed; }
+
+/* Superseded plugin versions still on disk: reported, never acted on. */
+.supd {
+  margin-left: 14px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule);
+  cursor: help;
+}
+
+/* The savings-if-disabled affordance: same hidden-until-hover footprint as the
+   edit button, but a figure, so it takes the numeric face. */
+.act.save {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  margin-right: 6px;
+}
+.c-act { white-space: nowrap; }
+
+/* The live what-if: a second line under the measured total, never a
+   replacement for it. Amber because a toggle is a state change, and the
+   hairline ties the projection to the figure it was derived from. */
+.readout .whatif {
+  color: var(--signal-text);
+  font-variant-numeric: tabular-nums;
+}
+.readout.projecting .whatif {
+  border-top: 1px solid var(--signal-dim);
+  margin-top: 3px;
+  padding-top: 3px;
+}
+.readout .sub2 { margin-top: 1px; }
+
+/* --- drawer: measured facts ------------------------------------------------
+   A fact line is denser than a kv row on purpose: the ledger adds a dozen
+   facets per item, and a dozen label/value rows would be the wall this drawer
+   exists not to become. Specificity matches `.dbody p`, which it overrides. */
+
+.dbody .factline {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  margin-bottom: 6px;
+}
+.dbody .factline b { font-weight: 400; color: var(--ink); }
+.dbody .factline[title] { cursor: help; }
+/* A bundled file's read share: track, tonal fill, path, figure — the same
+   grammar as the cost meter, at drawer scale. */
+/* The bar's slot is reserved by padding rather than by the bar itself: a file
+   read outside every fire session has no share to draw, and its path has to
+   start on the same edge as the paths that do. */
+.dbody .factline.bfline {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding-left: 54px;
+  margin-bottom: 4px;
+}
+.share {
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  display: inline-block;
+  width: 44px;
+  height: 3px;
+  background: color-mix(in oklab, var(--ink) 7%, transparent);
+}
+.share i { display: block; height: 100%; background: color-mix(in oklab, var(--ink) 36%, transparent); }
+.bfpath { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+
+.pathlist { list-style: none; margin: 3px 0 10px; }
+.pathlist li {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+  padding: 2px 0;
+}
+/* Stays tonal, deliberately: a referenced path that does not resolve is a fact
+   to check at the line, not a defect to alarm about. No amber, no danger, no
+   bold — a plan template's example path reads identically to a real omission. */
+.refpath { color: var(--ink-dim); }
+
 /* --- motion discipline ---------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -942,8 +1630,26 @@ pre.ev {
   .drawer { transition: none; }
 }
 
+@media (max-width: 1360px) {
+  /* The quadrant readouts fall under their plot rather than beside it; the
+     hairline moves with them so the structure survives the reflow. */
+  .pq-body { grid-template-columns: minmax(0, 1fr); }
+  .pq-side {
+    border-left: none;
+    border-top: 1px solid var(--rule);
+    padding-left: 0;
+    padding-top: 16px;
+    margin-top: 16px;
+  }
+  .pq-side [data-tip]::after { left: 0; right: auto; }
+  .pq-grid .pq-quad:nth-child(n + 3)[data-tip]::after { top: calc(100% + 7px); bottom: auto; }
+}
+
 @media (max-width: 900px) {
   .readouts { flex-wrap: wrap; gap: 16px 0; }
   .mast { flex-direction: column; align-items: flex-start; gap: 10px; }
   .plate { text-align: left; flex-wrap: wrap; }
+  .rollup { gap: 10px 0; }
+  .rstat { border-right: none; margin-right: 0; padding-right: 0; }
+  .panelbox { padding: 14px 16px 24px; }
 }

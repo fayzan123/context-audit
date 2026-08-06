@@ -1,0 +1,31 @@
+{
+  "description": "my own codex hooks — this text is mine and must survive",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^exec$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user-post-tool",
+            "timeout": 30
+          }
+        ],
+        "note": "user data on the entry must survive install and uninstall"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user-prompt-hook"
+          }
+        ]
+      }
+    ]
+  },
+  "unknownTopLevelKey": {
+    "keep": true
+  }
+}

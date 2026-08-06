@@ -1,7 +1,19 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+  type Dirent,
+  type Stats,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { discoverSkills, fileAsset, mdFilesUnder } from "./skills.js";
-import type { Skill } from "./types.js";
+import type { Skill, UiSuperseded } from "./types.js";
 
 export interface PluginInstall {
   /** Plugin name without the marketplace suffix, e.g. "superpowers". */
@@ -18,6 +30,18 @@ export interface PluginInstall {
    * caveat rather than silently resolved.
    */
   candidates?: number;
+  /** Manifest `installedAt` of the chosen entry, ISO — when the plugin first arrived. */
+  installedAt?: string;
+  /**
+   * Manifest `lastUpdated` of the chosen entry, ISO. This is "the CURRENT
+   * VERSION has been in place since", NOT a second install date: superpowers on
+   * the reference machine reads installedAt 2026-03-24 / lastUpdated
+   * 2026-07-25 — one install, one update, four months apart. Every
+   * fires-across-the-update-boundary figure splits the ledger on this
+   * timestamp, so reading it as an install date would move the boundary by
+   * months and quietly invent a "0 fires since update" that never happened.
+   */
+  lastUpdated?: string;
 }
 
 export interface PluginResolution {
@@ -43,6 +67,40 @@ function readJson(path: string): any {
   } catch {
     return undefined;
   }
+}
+
+function statOf(path: string): Stats | undefined {
+  try {
+    return statSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 2000-01-01T00:00:00Z — the same floor `provenance.ts` applies. Below it a
+ * timestamp is a filesystem or serializer default, not a date.
+ */
+const MIN_VALID_MS = 946684800000;
+
+/**
+ * Marketplace and plugin names arrive from installed_plugins.json keys and
+ * cache directory names — neither is under this tool's control — and both get
+ * joined into filesystem paths below.
+ */
+const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * A manifest timestamp normalized to ISO. The field has carried both ISO
+ * strings and epoch milliseconds across Claude Code versions, so both are
+ * accepted; a 1970-shaped value is rejected outright because it is a default
+ * standing in for "unknown". Passing one through would date an install before
+ * the product existed and, worse, anchor the update boundary at the epoch,
+ * putting every recorded fire on the "since update" side.
+ */
+function parseManifestDate(x: unknown): string | undefined {
+  const ms = typeof x === "number" ? x : typeof x === "string" ? Date.parse(x) : NaN;
+  return Number.isFinite(ms) && ms > MIN_VALID_MS ? new Date(ms).toISOString() : undefined;
 }
 
 /** enabledPlugins from settings.json: only an explicit `false` disables. */
@@ -169,12 +227,23 @@ export function resolveActivePlugins(home: string): PluginResolution {
         root: chosen.root,
         enabled: isEnabled(key),
         candidates: candidates.length,
+        // From the CHOSEN entry, not the earliest one: these two describe the
+        // install whose files this report measures. (Provenance separately
+        // takes the earliest installedAt across entries, because "when did this
+        // plugin first arrive" is a different question from "which copy is
+        // live" — the two are only equal when there is one entry.)
+        installedAt: parseManifestDate(chosen.entry?.installedAt),
+        lastUpdated: parseManifestDate(chosen.entry?.lastUpdated),
       });
     }
     return { installs, resolution: "config" };
   }
 
   // Fallback: cache/<marketplace>/<plugin>/<version>/ — newest version wins.
+  // No install/update dates here: only the manifest records them, and this
+  // branch runs precisely because the manifest could not be read. A version
+  // directory's birthtime dates the download, not the install decision, so
+  // inferring one would be a fabrication — the update boundary stays absent.
   const installs: PluginInstall[] = [];
   if (existsSync(cacheRoot)) {
     for (const marketplace of listDirs(cacheRoot)) {
@@ -201,6 +270,15 @@ export function resolveActivePlugins(home: string): PluginResolution {
  * network claim. Returns undefined whenever the answer cannot be determined
  * from local files; the UI then makes no update-available claim at all, which
  * is different from claiming "up to date".
+ *
+ * No DATE comes back with it, deliberately. The spec's "1.4.0 available since
+ * 47d" needs a publication date, and nothing on disk carries one: the official
+ * marketplace checkout is a GCS sync (`.gcs-sha`, no `.git`) overwritten whole
+ * on refresh, `known_marketplaces.json` `lastUpdated` and the checkout's own
+ * mtimes date THAT SYNC, and `plugin-catalog-cache.json`'s `fetchedAt` dates a
+ * fetch. Each would read as "available since today" for a version published
+ * months ago — an age understated by the whole interval, presented as a fact.
+ * Answering it needs the network, so the age is simply not offered.
  */
 export function latestKnownVersion(home: string, install: PluginInstall): string | undefined {
   // The marketplace name comes from installed_plugins.json keys and the
@@ -246,6 +324,324 @@ function listDirs(dir: string): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Bytes under a directory, following NO symlink.
+ *
+ * `Dirent.isDirectory()` is lstat-shaped, so a symlinked subdirectory is never
+ * descended: a cache directory linking to its own parent — or to `~` — would
+ * otherwise either spin forever or bill the user for their whole home
+ * directory under a "superseded plugin versions" heading. Unreadable entries
+ * are skipped rather than thrown: a total short by one file is still a usable
+ * measure, while an exception here would take down the scan that produced it.
+ * The depth cap is belt-and-braces for a tree no plugin should ever have.
+ */
+function dirBytes(dir: string, depth = 0): number {
+  if (depth > 32) return 0;
+  let total = 0;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) total += dirBytes(p, depth + 1);
+    else if (e.isFile()) total += statOf(p)?.size ?? 0;
+  }
+  return total;
+}
+
+/**
+ * Plugin versions still sitting in the cache that nothing resolves to any more
+ * — the disk cost of past updates. Paths are PRINTED, never touched: this tool
+ * measures, and a delete here would be the one irreversible thing it does.
+ *
+ * "Superseded" is decided against the ACTIVE INSTALL, three ways: the version
+ * string it names, the realpath its root actually points at, and the ORDERING.
+ * The second test is what keeps a live directory out of this list when the
+ * manifest version and the directory name disagree (an entry whose `version` is
+ * missing resolves to "unknown", which matches no directory) — printing the
+ * running plugin as dead weight would be worse than printing nothing.
+ *
+ * The third test is what keeps a cached version NEWER than the live one out of
+ * it. That directory is the pending update: `updateRelevance` names the same
+ * path as "the update available" and the drawer offers its diff, so listing it
+ * here told the reader to delete the version it was telling them to read. The
+ * predicate is deliberately the same one `updateRelevance` filters on, so the
+ * two can never disagree about a single directory.
+ *
+ * Caches with no matching install at all are skipped: an uninstalled plugin's
+ * leftovers are orphans, not superseded versions, and there is no active
+ * version to name them against.
+ */
+export function supersededVersions(home: string, installs: PluginInstall[]): UiSuperseded[] {
+  const cacheRoot = join(home, ".claude", "plugins", "cache");
+  if (!existsSync(cacheRoot)) return [];
+  let realCacheRoot = cacheRoot;
+  try {
+    realCacheRoot = realpathSync(cacheRoot);
+  } catch {
+    /* unreadable — the containment test below then rejects everything */
+  }
+
+  // Keyed on marketplace/name because that is the cache's own layout. An
+  // install with no marketplace (a config key with no `@`) cannot be located
+  // in the cache at all, so nothing under it can be attributed to it.
+  const active = new Map<string, PluginInstall>();
+  const activeRoots = new Set<string>();
+  for (const i of installs) {
+    if (i.marketplace && SAFE_SEGMENT.test(i.marketplace) && SAFE_SEGMENT.test(i.name)) {
+      active.set(`${i.marketplace}/${i.name}`, i);
+    }
+    try {
+      activeRoots.add(realpathSync(i.root));
+    } catch {
+      /* a root that will not resolve cannot shadow anything */
+    }
+  }
+
+  const out: UiSuperseded[] = [];
+  for (const marketplace of listDirs(cacheRoot)) {
+    if (!SAFE_SEGMENT.test(marketplace)) continue;
+    for (const name of listDirs(join(cacheRoot, marketplace))) {
+      if (!SAFE_SEGMENT.test(name)) continue;
+      const install = active.get(`${marketplace}/${name}`);
+      if (!install) continue;
+      const pluginDir = join(cacheRoot, marketplace, name);
+      // Which version the ordering test compares against. The manifest string
+      // is preferred; when it names none ("unknown"), the cache directory the
+      // live root resolves to is the remaining evidence of what is running.
+      // With neither, nothing is ranked and the realpath test below stays the
+      // only guard — dropping the whole group would hide real disk rather than
+      // avoid a claim.
+      let activeVersion = isNumericVersion(install.version) ? install.version : undefined;
+      if (activeVersion === undefined) {
+        try {
+          const realActive = realpathSync(install.root);
+          const base = basename(realActive);
+          if (dirname(realActive) === realpathSync(pluginDir) && isNumericVersion(base)) activeVersion = base;
+        } catch {
+          /* an install root that will not resolve names no version */
+        }
+      }
+      const versions: string[] = [];
+      const paths: string[] = [];
+      let bytes = 0;
+      for (const version of listDirs(pluginDir).sort(newestVersion)) {
+        if (version === install.version) continue;
+        // Outranks the live install: this is the pending update, not dead
+        // weight. Same predicate as updateRelevance's filter.
+        if (activeVersion !== undefined && newestVersion(version, activeVersion) < 0) continue;
+        const dir = join(pluginDir, version);
+        let real: string;
+        try {
+          real = realpathSync(dir);
+        } catch {
+          continue;
+        }
+        if (activeRoots.has(real)) continue;
+        // A version directory that is really a link out of the cache is not
+        // this plugin's disk. Measuring it would bill the user for someone
+        // else's files and print a foreign absolute path as if the cache
+        // owned it.
+        if (!containsPath(realCacheRoot, real)) continue;
+        versions.push(version);
+        paths.push(dir);
+        bytes += dirBytes(dir);
+      }
+      if (versions.length > 0) {
+        out.push({ plugin: name, marketplace, active: install.version, versions, bytes, paths });
+      }
+    }
+  }
+  return out.sort((a, b) => a.plugin.localeCompare(b.plugin) || (a.marketplace ?? "").localeCompare(b.marketplace ?? ""));
+}
+
+/**
+ * Files at or under this are hashed whole; anything larger is hashed by its
+ * first megabyte plus its size. The comparison below answers one drawer line —
+ * "does the newer cached version change this skill's files" — and reading
+ * gigabytes of cached binaries to answer it is not a trade worth making. The
+ * honest consequence, stated here so it is never a surprise: a same-size edit
+ * past the first megabyte of a multi-megabyte file reads as unchanged. Skill
+ * directories are text; this cap effectively only ever binds on bundled assets.
+ */
+const HASH_WHOLE_MAX = 4 * 1024 * 1024;
+const HASH_PREFIX = 1024 * 1024;
+
+/** Files walked per side before the comparison gives up. */
+const COMPARE_FILE_CAP = 2000;
+
+function digest(path: string, size: number): string | undefined {
+  try {
+    if (size <= HASH_WHOLE_MAX) return createHash("sha256").update(readFileSync(path)).digest("hex");
+    const buf = Buffer.alloc(HASH_PREFIX);
+    const fd = openSync(path, "r");
+    try {
+      const read = readSync(fd, buf, 0, HASH_PREFIX, 0);
+      return createHash("sha256").update(buf.subarray(0, read)).update(String(size)).digest("hex");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/** "same" | "changed" | undefined when a side could not be read — never guessed. */
+function compareFile(a: string, b: string): "same" | "changed" | undefined {
+  const sa = statOf(a);
+  const sb = statOf(b);
+  if (!sa || !sb) return undefined;
+  // Size first: a differing size is a difference, and proves it without a read.
+  if (sa.size !== sb.size) return "changed";
+  const da = digest(a, sa.size);
+  const db = digest(b, sb.size);
+  if (!da || !db) return undefined;
+  return da === db ? "same" : "changed";
+}
+
+/**
+ * Relative file paths under `root`, symlinks skipped (same loop guard as
+ * dirBytes). undefined whenever the listing is incomplete — a cap trip, a
+ * directory that would not open — because "identical" cannot be claimed from a
+ * partial walk, and claiming it would be the exact false reassurance this
+ * comparison exists to replace.
+ */
+function relFiles(root: string, dir = root, depth = 0, acc: string[] = []): string[] | undefined {
+  if (depth > 32) return undefined;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) {
+      if (!relFiles(root, p, depth + 1, acc)) return undefined;
+    } else if (e.isFile()) {
+      if (acc.length >= COMPARE_FILE_CAP) return undefined;
+      acc.push(relative(root, p));
+    }
+  }
+  return acc;
+}
+
+/**
+ * Does a newer CACHED version of this plugin change THIS asset's files?
+ *
+ * A byte comparison across version directories, not a version-number
+ * inference: "identical in 6.2.0" is a fact about files, and it is the
+ * difference between an update the user should read release notes for and one
+ * that cannot touch the skill they are looking at.
+ *
+ * Returns undefined — meaning UNKNOWN, which is not the claim "unchanged" —
+ * whenever the comparison cannot be made honestly: no newer version cached, a
+ * version string that will not order (a `latest` directory, an install whose
+ * manifest carried no version), an asset that symlinks out of its own plugin,
+ * a file neither side could read, or a tree past the walk cap.
+ */
+export function updateRelevance(
+  home: string,
+  install: PluginInstall,
+  assetPath: string
+): { version: string; identical: boolean; changedFiles?: number } | undefined {
+  if (!install.marketplace || !SAFE_SEGMENT.test(install.marketplace) || !SAFE_SEGMENT.test(install.name)) {
+    return undefined;
+  }
+  // Only comparable against a version this ordering can call newer. A
+  // non-numeric active version has no defined successor, and guessing one
+  // would produce "identical in latest" out of a directory name.
+  if (!isNumericVersion(install.version)) return undefined;
+
+  // The asset must live inside the install it claims to belong to, both as
+  // written and after resolution: the relative path computed here is joined
+  // into ANOTHER version directory below, so a `..` or an escaping symlink
+  // would send the comparison outside the plugin entirely.
+  const rel = relative(install.root, assetPath);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return undefined;
+
+  const pluginDir = join(home, ".claude", "plugins", "cache", install.marketplace, install.name);
+  let realPluginDir: string;
+  let realRoot: string;
+  let realAsset: string;
+  try {
+    realPluginDir = realpathSync(pluginDir);
+    realRoot = realpathSync(install.root);
+    realAsset = realpathSync(assetPath);
+  } catch {
+    return undefined;
+  }
+  if (!containsPath(realRoot, realAsset)) return undefined;
+  // Newest cached version that outranks the live one AND is genuinely this
+  // plugin's directory. The containment test is not paranoia: a version
+  // directory that is really a link elsewhere on disk turns this comparison
+  // into "read arbitrary files and report the diff as the plugin's update" —
+  // a `9.9.9 -> ~/Documents` link would win the ordering every time.
+  let newer: string | undefined;
+  let realNewer: string | undefined;
+  for (const v of listDirs(pluginDir)
+    .filter((v) => isNumericVersion(v) && newestVersion(v, install.version) < 0)
+    .sort(newestVersion)) {
+    let real: string;
+    try {
+      real = realpathSync(join(pluginDir, v));
+    } catch {
+      continue;
+    }
+    if (!containsPath(realPluginDir, real)) continue;
+    // The live root itself, reached under a higher version name (a manifest
+    // whose `version` disagrees with its `installPath`). Comparing a directory
+    // to itself would report "identical in 2.0.0" about the version already
+    // running — a true statement about the wrong question.
+    if (real === realRoot) continue;
+    newer = v;
+    realNewer = real;
+    break;
+  }
+  if (!newer || !realNewer) return undefined;
+
+  const other = join(realNewer, rel);
+  const st = statOf(assetPath);
+  if (!st) return undefined;
+
+  // Single-file asset (a command or agent .md): one comparison, and a file the
+  // newer version no longer ships is a change, not an unknown.
+  if (st.isFile()) {
+    if (!existsSync(other)) return { version: newer, identical: false, changedFiles: 1 };
+    const verdict = compareFile(assetPath, other);
+    if (!verdict) return undefined;
+    return { version: newer, identical: verdict === "same", changedFiles: verdict === "same" ? 0 : 1 };
+  }
+
+  const here = relFiles(assetPath);
+  if (!here) return undefined;
+  // A skill directory absent from the newer version: every file is dropped.
+  if (!existsSync(other)) return { version: newer, identical: here.length === 0, changedFiles: here.length };
+  const there = relFiles(other);
+  if (!there) return undefined;
+
+  // The union, so files ADDED by the update count as changes too — an update
+  // that only adds a reference file still changes what this skill loads.
+  const hereSet = new Set(here);
+  const thereSet = new Set(there);
+  let changed = 0;
+  for (const f of new Set([...here, ...there])) {
+    if (!hereSet.has(f) || !thereSet.has(f)) {
+      changed++;
+      continue;
+    }
+    const verdict = compareFile(join(assetPath, f), join(other, f));
+    if (!verdict) return undefined;
+    if (verdict === "changed") changed++;
+  }
+  return { version: newer, identical: changed === 0, changedFiles: changed };
 }
 
 export interface PluginAsset {

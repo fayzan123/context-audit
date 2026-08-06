@@ -1,0 +1,9 @@
+{
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5-codex",
+  "permission_mode": "on-request",
+  "prompt": "/deploy",
+  "transcript_path": "/Users/someone/.codex/sessions/2026/08/06/rollout-nosess.jsonl",
+  "turn_id": "turn-5"
+}

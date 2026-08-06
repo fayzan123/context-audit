@@ -115,7 +115,7 @@ That number is the point of this tool. It converts "I should clean this up somed
 
 Two honest caveats the report also prints: the usage window starts when your oldest transcript does, and "never fired" cannot see value-per-invocation. A skill you call twice a year when production is down is not dead weight. This gives you the counts; you decide what they mean.
 
-Where a tool keeps no readable history — Cursor doesn't — the usage section says so instead of guessing. Absent data stays absent.
+Where a tool keeps no readable history, the usage section says so instead of guessing. Absent data stays absent.
 
 ## The usage ledger — history that survives the purge
 
@@ -124,8 +124,8 @@ Transcript-derived counts evaporate on Claude Code's retention cycle (`cleanupPe
 That turns "6 fires in 42d" into "142 fires since tracking began 2026-03-01" over time, and every lifetime figure carries its `trackedSince` date as the qualifier. Three writers feed it:
 
 - **Scan-time ingestion** — always on, zero setup. Claude transcripts (subagent sidechains included) and Codex rollouts, with channel (model-dispatched vs typed vs passive load), outcome (ok / error / rejected), project, model and agent attribution where the source records them.
-- **`context-audit backfill`** — one-time import of typed `/commands` from `~/.claude/history.jsonl`, which survives the transcript purge and typically reaches months further back. Built-ins (`/usage`, `/model`, …) are dropped unless you pass `--include-builtins`, automation-polluted sessions are filtered, and imported events are labeled: "typed-channel history extends to 2026-02-26 (backfilled)".
-- **`context-audit hooks install`** — opt-in real-time capture via Claude Code hooks. It prints the exact `settings.json` diff and writes nothing without confirmation; `hooks uninstall` removes exactly what install added. Hook and scan events converge on the same ids, so double-capture collapses.
+- **`context-audit backfill`** — one-time import of typed `/commands` from `~/.claude/history.jsonl`, which survives the transcript purge and typically reaches months further back. Automation-polluted sessions are filtered, and imported events are labeled: "typed-channel history extends to 2026-02-26 (backfilled)". Claude Code's own built-ins (`/usage`, `/model`, …) are dropped by every writer, not just this one — `--include-builtins` sets a durable ledger preference rather than a one-run flag, because a CLI flag cannot reach a hook firing inside a live session.
+- **`context-audit hooks install`** — opt-in real-time capture. `--provider claude` wires Claude Code's `settings.json`; `--provider codex` wires `~/.codex/hooks.json` (Codex will ask you to review and trust it on next start, and it records nothing until you do). Either way it prints the exact diff and writes nothing without confirmation; `hooks uninstall` removes exactly what install added. Hook and scan events converge on the same ids where the harness gives them one, so double-capture collapses.
 
 The dashboard's fires cells show both figures ("42 · 6 in 41d"), the drawer gains provenance (install date with the evidence chain that produced it — manifest, file birthtime, git first-add, or ledger first-seen, each labeled), channel/provider/outcome splits, a per-week trend strip, and a drill-down that opens the transcript at the exact line — rows whose transcript was already purged say "transcript deleted (event retained)". The CLI's `--json` gains a per-source `lifetime` block with the same figures, diffable like everything else.
 
@@ -153,7 +153,7 @@ That's the case. It's a sharp small utility, not a platform.
 |---|---|---|---|
 | `claude` | `~/.claude`+`./.claude` skills, agents, commands; `CLAUDE.md` (global + project); **enabled plugins' skills, commands and agents**, at their active version | skill/agent names + descriptions; CLAUDE.md bodies | ✅ `~/.claude/projects` transcripts |
 | `codex` | `~/.codex/AGENTS.md`, `~/.codex/prompts/*.md` | AGENTS.md body; prompt names | ✅ `~/.codex/sessions` rollouts |
-| `cursor` | `./.cursor/rules/*.mdc` (nested dirs included), legacy `./.cursorrules` | `alwaysApply` + legacy rule bodies; rule descriptions | — none kept in a readable form |
+| `cursor` | `./.cursor/rules/*.mdc` (nested dirs included), legacy `./.cursorrules` | `alwaysApply` + legacy rule bodies; rule descriptions | ⚠️ `state.vscdb` rule attachments — read-only, undocumented schema, dated per conversation |
 | `agents-md` | `./AGENTS.md`, `~/AGENTS.md` — audited once, not once per tool that reads it | whole body | — |
 
 The unit of audit is "an instruction file an agent will execute," not "a Claude skill." The detection engine is shared; each source contributes discovery, a cost model, and (where transcripts exist) usage.

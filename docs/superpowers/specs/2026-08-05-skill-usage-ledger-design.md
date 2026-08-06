@@ -1,7 +1,7 @@
 # Skill usage ledger + metrics — durable, provider-tagged usage tracking
 
 **Date:** 2026-08-05
-**Status:** Approved design, pre-implementation
+**Status:** Implemented. S1 (ledger core) 2026-08-05; S2 (joins + portfolio views) and S3 (Cursor ingestion + long tail) 2026-08-06. Sections below carry inline notes where implementation settled a question the design left open or turned up a limit the design did not anticipate.
 
 ## What and why
 
@@ -16,6 +16,13 @@ Explicitly rejected mechanism: appending "increment a counter" instructions to s
 3. **Nothing leaves the machine; no new dependencies.** The ledger is plain JSONL under the user's home, written with `node:fs`. No SQLite, no network.
 4. **Facts, not judgment — extended to usage.** No scores, no health grades. Every metric below is a count, a date, a ratio of counts, or a join of facts, each carrying its observation window. LLM-judged metrics (post-fire correction, "should have fired") are out of scope for the default scan, permanently.
 5. **Cursor: schema-ready, ingestion deferred.** Cursor's `state.vscdb` records rule attachment per message (`cursorRules` on every bubble — verified), but the schema is undocumented and this machine has no `.cursor/rules` to validate against. The ledger's `provider` field supports `cursor` from day one; the ingester ships as a fast-follow. Until then the UI keeps its honest "no readable history."
+
+   **Shipped in S3 (2026-08-06).** The ingester reads `cursorDiskKV` read-only through `node:sqlite`, feature-gated behind a dynamic import so Node < 22.13 degrades to "no readable history" rather than crashing — `engines` stays `>=18`. Rule attachments become `channel: "load"` events (a rule attached to a message is a passive load, not a dispatch). Three facts constrain what may be claimed from this store, and each is surfaced as a caveat rather than absorbed silently:
+   - **Timestamps are per-conversation, not per-message.** Bubbles carry none; `composerData.createdAt` is the only date, so every attachment in one conversation shares it.
+   - **The element shape of a `cursorRules` entry is unverified.** Every record on the reference machine is an empty array, so the parser accepts several plausible shapes and *counts* anything it cannot name as unparsed instead of guessing.
+   - **Project attribution is best-effort**, resolved through `workspaceStorage/<hash>/workspace.json`; the shortfall is reported ("resolved 2 of 3 workspaces"), never rounded up.
+
+   The store is undocumented and unversioned, so any shape surprise degrades the whole read to "no readable history" with a stated reason. Rule rows are marked dispatch-tracked *only* when the store actually read — a degraded read leaves them honestly untracked rather than showing a fabricated zero.
 6. **Agent usage tracking rides the same ledger.** `Agent`/`Task` tool_use blocks record `input.subagent_type` (verified) — this closes the recorded Session-3 gap "no agent usage tracking, can't prove which of 272 agents are dead." Agent launches are ledger events with `kind: "agent"`.
 
 ## The ledger
@@ -77,12 +84,28 @@ Each adapter's existing `usage()` pass emits raw events; a new ingest step appen
 - **Claude Code:** `PostToolUse` matcher `^Skill$` **plus** `UserPromptExpansion` — verified: user-typed `/commands` never produce a Skill tool_use, so PostToolUse alone undercounts the typed channel. Also `^(Agent|Task)$` for agent launches. Hook stdin payloads (session_id, cwd, tool_name, tool_input, tool_use_id) pipe to `context-audit log-event`, which validates and appends.
 - **Codex:** same events via `~/.codex/hooks.json` (hooks engine stable since v0.124.0).
 
+  **Shipped in S3 (2026-08-06), with one deliberate narrowing.** The file shape was verified empirically against codex-cli 0.144.4 by writing candidate files and asking the harness what it registered (`codex app-server` → `hooks/list`), because guessing here fails silently:
+
+  ```json
+  { "description": "…", "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "…" } ] } ] } }
+  ```
+
+  The top level is an object with `description` and `hooks` — not the event map directly — and event keys are **PascalCase**. `snake_case` keys parse *without a warning* and register **zero** hooks, so the wrong casing would have produced a tool that reported success and captured nothing. Registered hooks arrive `trustStatus: "untrusted"`: Codex prompts the user to review and trust them on next start, and they do not run until then — the install output says so, because a capture channel the user believes is live but isn't is worse than none.
+
+  **Only `UserPromptSubmit` is installed.** Codex has no dedicated skill-dispatch tool — its one tool is `exec`, and SKILL.md reads ride inside shell arguments — so a `PostToolUse` hook would spawn a process on *every shell command* to recover a signal the rollout scan already reads exactly. And Codex does not purge rollouts (they reach back to March on the reference machine), so the >30-day loss window that justifies hooks for Claude does not exist here. The cost is real and the benefit is not.
+
+  The Codex hook's clock cannot match the rollout scan's timestamp, so the two ids do **not** collapse the way a `tool_use` id does. What prevents double counting is the session-level exclusion — which had to be generalized from `sessionId` to `(provider, sessionId)`, in both the CLI and the dashboard copies, or a Codex hooks user would have had every typed prompt counted twice.
+
 ### 3. Backfill import (one-time, on first scan or `context-audit backfill`)
 
 `~/.claude/history.jsonl` survives the 30-day purge — verified: 5,038 entries spanning 2026-02-26 → 2026-08-05 (~5.3 months vs ~6 weeks of transcripts), each `{display, pastedContents, timestamp(epoch-ms), project, sessionId}`. It recovers the **typed channel only**. The importer's cleaning rules (all verified against real data):
 
 1. Per entry, split `display` on newlines, take the first token of the first line; accept only `^\/[A-Za-z][A-Za-z0-9:_-]*$` (rejects pasted absolute paths and anchor fragments — both observed; `:` is admitted so rule 4's plugin dispatch names like `/superpowers:brainstorming` remain matchable).
 2. Classify against a built-ins allowlist (`/usage /status /model /exit /clear /compact /effort /login /config /context /resume /continue /mcp /doctor /permissions /plugins /plugin /voice /rate-limit-options`) — built-ins are recorded with `kind: "command"` only if the user opts in; by default they are dropped (3,043 of 3,179 slash entries here are built-ins).
+
+   **Resolved in S2 (2026-08-06) — the rule is symmetric across all three writers.** As first built this was a *backfill* rule, so the same `/usage` fire was dropped when imported from history.jsonl and banked when seen by the transcript scan or a hook: the count depended on which channel happened to observe it. The gate now lives at the one place every writer passes through — `ledger.appendEvents` drops typed-channel Claude built-ins — and the opt-in is a **durable ledger preference** (`meta.includeBuiltins`) rather than a CLI flag, because a flag on `backfill` can never reach a hook firing inside someone else's session. `backfill --include-builtins` / `--no-include-builtins` set that stored preference; `appendEvents` reports `droppedBuiltins` separately from `skipped` so the two reasons are never conflated.
+
+   Two scoping decisions worth stating: the gate applies only to `channel: "typed"` (an auto or load event named `compact` is not a slash command), and only to `provider: "claude"` (the list is Claude Code's; a Codex prompt legitimately named `status` is a real asset that joins to a real row, and dropping it would be a silent undercount of something that exists). The append-only store is never rewritten, so flipping the preference off does not retract built-ins banked while it was on.
 3. Drop sessions whose entries are 100% built-ins — this kills automation pollution (a ~10.8-minute-cadence `/usage` poller accounts for 2,594 entries and 2,918 of 3,147 sessions on this machine).
 4. Remaining tokens match against installed skills/commands/plugin dispatch names; unmatched tokens (typos, renamed, deleted — 8 distinct here) are kept as `name` with no inventory join, surfacing in the existing external-fires bucket.
 5. Backfilled events are flagged `backfill: true` and the UI labels the extended horizon: "typed-channel history extends to 2026-02-26 (backfilled); model-invoked history begins 2026-06-24."
@@ -191,7 +214,22 @@ Note: `src/history.ts` already builds `{file, lineNo, timestamp}` per invocation
 - **Post-fire correction rate** ("did the user reject the output") — needs LLM judgment of transcript content. Out of the default scan permanently; if ever built, opt-in, batched, and labeled as model-judged.
 - **Trigger recall** ("should have fired but didn't") — no deterministic version exists. One measurable sliver may ship later: sessions where the user typed the slash command while the description was verifiably dropped from the over-budget listing.
 - **Per-skill-run token cost** — `message.usage` is on 100% of assistant lines (verified), but attribution over a skill-run window is confounded (cost hides in cache fields, subagent work lives in separate files, interleaved non-skill work over-credits). Per-**agent** run cost is near-exact (sum the agent's dedicated `subagents/agent-<id>.jsonl`) and may ship for agent rows in S2, labeled with its method. Per-skill stays out until it can be stated honestly.
+
+  **The agent carve-out was taken in S2.** `agentCost` sums *total tokens processed* — input + output + cache creation + cache read — deduped by `message.id`, because one assistant response spans several transcript lines repeating the same usage object and per-line summing would multiply a run's cost by its block count. That method string renders inline wherever the figure does, including that it is a token count and **not a bill** (cached input is priced far below fresh input). Runs whose transcript the 30-day purge already took are *absent*, never zero, so the figure states its denominator ("priced n of m launches"). Per-skill cost remains out, permanently.
 - **Any score, grade, or composite index.**
+
+### Limits found while building S2/S3 (stated, not worked around)
+
+Each of these is a claim the design assumed was available and the evidence would not support. In every case the tool says nothing rather than saying something plausible.
+
+- **"1.4.0 available since 47d" does not ship.** Nothing local dates a version's publication: the official marketplace checkout is a GCS sync with no git history, overwritten wholesale on refresh, and every candidate timestamp (`known_marketplaces.json` `lastUpdated`, the catalog cache's `fetchedAt`) reads as *today* after any sync — which would report a months-old release as "available since today". The other half of that row — whether the newer cached version actually changes *this* skill's files — ships as a real byte comparison. The date needs the network, so it is absent.
+- **`updateRelevance` absent means unknown, never "unchanged".** It compares against versions already in the cache; if the newer version was never downloaded there is nothing to compare and the row says nothing.
+- **The plugin update *from*-version is unrecoverable.** Snapshots record no versions and the cache cannot prove which superseded directory was live. `delta.pluginsUpdated[].from` is therefore optional and the UI says "previous version not recorded" rather than printing a sentinel that reads like a version.
+- **Agent launches made from inside a sidechain are not linked to their run's cost.** `LedgerEvent.agent` already means "the sidechain this fire happened in" for every other kind, and overwriting it on those events would change the field's meaning for every consumer. Main-thread launches link exactly; the rest are absent, which the "priced n of m launches" denominator states.
+- **Bundled-file reads are a floor, not a total.** Only the `Read` tool counts: a file opened via `cat`, surfaced by Grep, or @-mentioned is invisible to the transcript pass.
+- **A missing reference cannot always be distinguished from an example path.** `resolveRefs` was narrowed to directory-shaped assets only (a single-file agent ships no bundled files, so every path in its body is prose — this alone cut reported paths from 124 to 21 on the reference machine) and rejects placeholder shapes, but a plan template's `src/recovery.js` and a skill's genuinely missing `reference/typography.md` are indistinguishable to any static reader. So the row renders as a fact carrying its method, with no severity colour and no table badge — it is something to check, not a defect to alarm about.
+- **Disable dates are an upper bound.** There is no disable log; moving a skill into `skills-disabled/` is a rename, which leaves mtime alone but bumps ctime — as does anything else touching the directory's metadata. The figure carries `disabledAtSource: "ctime"` so the UI can label the bound. Plugins disabled through `settings.json` get no date at all, because that file's mtime dates the last edit to *any* setting on the machine.
+- **Dead-weight rent is a per-session figure.** The design wrote it as "Σ injected × sessions"; the implementation sums `injectedChars` over age-gated silent items and the header renders it as "tok/session", which is what it is. It must never sit unlabeled beside `portfolio.topSpend`, which *is* a window total.
 
 ## Dashboard changes (summary)
 
@@ -199,6 +237,13 @@ Note: `src/history.ts` already builds `{file, lineNo, timestamp}` per invocation
 - **Header:** dead-weight rent quantifies the existing never-fired readout; S2 adds the portfolio rollup strip and since-last-scan delta chip.
 - **Drawer:** grows engraved sections — provenance · fires (channel/agent/model/provider splits) · invocations drill-down · trend strip with event ticks (edits, updates, budget crossing) · content health · reliability · relationships (co-invocation, collisions, cross-provider twins).
 - **New views (S2):** quadrant scatter, budget bar with cut line, provider overlap matrix — all under `.impeccable.md` rules: data-bearing marks only, one amber signal, tabular numerics, no decorative sparklines; the weekly dot-strip and event ticks are data-bearing and drawer-scoped.
+
+  **As shipped:** the four views (those three plus S3's growth chart) live behind a single-select `panel` bank above the results — deliberately not called "view", which the rail already uses for the lens filter. Each panel has a teaching empty state and none draws an empty axis as though it were a measurement of zero. Three details are load-bearing rather than decorative:
+  - The **prune quadrant** states what it did NOT plot and why ("1 not plotted — no dispatch record exists for them, which is not a zero · 4 not plotted — disabled, so no cost is being paid"). Plotting an absent measurement at x=0 would render absence as zero, which is the exact error the whole catalog is built to avoid.
+  - The **overlap matrix** puts each provider's OWN window in its column head, because the stores keep wildly different amounts of history — on the reference shape, claude 43 days against codex 5 months against cursor 15 months — and one shared caption would make the counts look like-for-like when they are not. An empty cell renders as "no record", never 0.
+  - The **growth chart** breaks its owned line across weeks with no snapshot rather than interpolating. Joining them would draw a history the snapshots never recorded.
+
+  The budget panel's cut line is a MODEL of the documented drop order, standing in for invocation counters Claude Code keeps to itself, and says so wherever it appears.
 - **Epistemic house rules extended:** every count states its window or trackedSince date; `n/a` ≠ `0` ≠ "0 since backfill horizon"; backfilled and labeled-approximate values always name their method inline.
 
 ## Architecture notes

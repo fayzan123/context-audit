@@ -5,6 +5,7 @@ import {
   chipCounts,
   defaultState,
   fmtInt,
+  focusSet,
   initialState,
   isFiltered,
   pluginUpdateSummary,
@@ -12,11 +13,13 @@ import {
   renderDrawerBody,
   renderPage,
   renderResults,
+  tokens,
   usageWindow,
   type AppState,
   type LogEntry,
   type SortKey,
 } from "./render.js";
+import { PANELS, pruneModel, quadrantIds, type QuadrantKey } from "./views.js";
 
 const app = document.getElementById("app")!;
 const page = document.getElementById("page")!;
@@ -99,9 +102,29 @@ function focusKey(): FocusMark | undefined {
       ? "drawer"
       : undefined;
   if (!root) return undefined;
-  for (const attr of ["data-sort", "data-toggle", "data-open", "data-open-event", "data-id"]) {
+  // The value-carrying controls, each with the tag its selector must pin to
+  // where more than one kind of node carries that attribute: `data-quadrant`
+  // is on the readout BUTTONS and on the plot's hit zones, `data-id` is on
+  // table rows, matrix rows, budget segments and scatter marks — and focus has
+  // to come back to the focusable one, not to whichever the query finds first.
+  for (const [attr, tag] of [
+    ["data-sort", ""],
+    ["data-toggle", ""],
+    ["data-open", ""],
+    ["data-open-event", ""],
+    ["data-panel-to", ""],
+    ["data-focus", ""],
+    ["data-quadrant", "button"],
+    // Every host of data-id is a different element type, so the selector takes
+    // the focused node's own tag: a pinned row and a portfolio proof link can
+    // carry the same id, and only one of them was holding the caret.
+    ["data-id", "self"],
+  ] as [string, string][]) {
     const owner: HTMLElement | null = el.closest<HTMLElement>(`[${attr}]`);
-    if (owner === el) return { root, sel: `[${attr}="${CSS.escape(el.getAttribute(attr)!)}"]` };
+    if (owner === el) {
+      const prefix = tag === "self" ? el.tagName.toLowerCase() : tag;
+      return { root, sel: `${prefix}[${attr}="${CSS.escape(el.getAttribute(attr)!)}"]` };
+    }
   }
   if (el.hasAttribute("data-rescan")) return { root, sel: "[data-rescan]" };
   if (el.hasAttribute("data-close")) return { root, sel: "[data-close]" };
@@ -119,9 +142,12 @@ function focusKey(): FocusMark | undefined {
     };
   }
   if (el.hasAttribute("data-search")) return { root, sel: "[data-search]" };
-  // After clearing, the .clear button is visibility:hidden and unfocusable —
-  // the search input is where a keyboard user goes next anyway.
-  if (el.hasAttribute("data-clear")) return { root, sel: "[data-search]" };
+  // After clearing, the .clear button is visibility:hidden and unfocusable,
+  // and the focus chip is gone entirely — the search input is where a keyboard
+  // user goes next anyway.
+  if (el.hasAttribute("data-clear") || el.hasAttribute("data-unfocus")) {
+    return { root, sel: "[data-search]" };
+  }
   if (el.hasAttribute("data-logtoggle")) return { root, sel: "[data-logtoggle]" };
   return undefined;
 }
@@ -174,6 +200,9 @@ function render(): void {
     (row ?? page.querySelector<HTMLElement>("[data-rescan]"))?.focus();
   }
 
+  // The projection lived on a node that no longer exists, and the figure it
+  // was projecting from has just been re-measured.
+  whatIfPinned = false;
   // Choreography plays once per data arrival, never on filter/sort churn.
   if (state.animate) clearReveal();
   state.animate = false;
@@ -208,6 +237,44 @@ function connectionLost(): void {
 }
 
 /**
+ * The live what-if total: what "always in context" would read if this row's
+ * toggle went through. It is a DOM state — a projection that exists only while
+ * a control is being reached for or acted on — so it cannot live in render.ts,
+ * which knows nothing about hover or in-flight actions.
+ *
+ * The measured figure is never overwritten: the projection is a second line
+ * under it, arrow-led, so the number the page reports and the number it is
+ * guessing at can never be confused for each other.
+ */
+let whatIfPinned = false;
+
+function showWhatIf(item: UiItem | undefined, chars = 0): void {
+  const box = page.querySelector<HTMLElement>('[data-readout="injected"]');
+  if (!box) return;
+  box.querySelector(".whatif")?.remove();
+  box.classList.toggle("projecting", !!item);
+  if (!item || !payload) return;
+  const delta = item.enabled ? -chars : chars;
+  const next = Math.max(0, payload.header.injectedChars + delta);
+  const line = document.createElement("span");
+  line.className = "sub whatif";
+  // textContent, not innerHTML: item names come off disk.
+  line.textContent = `→ ${fmtInt(tokens(next))} tok if ${item.name} is ${item.enabled ? "disabled" : "enabled"} · ${delta < 0 ? "−" : "+"}${fmtInt(tokens(Math.abs(delta)))}`;
+  box.appendChild(line);
+}
+
+/** Resolve the hovered or focused control to its row and its own figure. */
+function whatIfFrom(host: HTMLElement): void {
+  const item = payload?.items.find((i) => i.id === host.dataset.toggle);
+  if (!item) return;
+  // The affordance states the saving it would make; the payload states the
+  // cost. They are the same number, and the attribute is what the row
+  // committed to on screen — so it wins where it exists.
+  const attr = Number(host.dataset.savingChars);
+  showWhatIf(item, Number.isFinite(attr) && attr > 0 ? attr : item.injectedChars);
+}
+
+/**
  * Find an item again in a freshly scanned payload. Toggling moves the
  * directory, which changes the path-derived ID. Path first: a rescan keeps
  * paths, and name+kind+source alone cannot tell an enabled skill from its
@@ -239,6 +306,22 @@ async function doToggle(id: string): Promise<void> {
     sw.setAttribute("aria-checked", String(next));
     sw.setAttribute("aria-label", `${next ? "disable" : "enable"} ${prev.name}`);
   }
+  // The what-if total is pinned for the length of the action: the switch has
+  // already moved, and the header should show where the total is going while
+  // the server does the work.
+  if (prev) {
+    const host = document.querySelector<HTMLElement>(
+      `[data-toggle="${CSS.escape(id)}"][data-saving-chars]`
+    );
+    const attr = Number(host?.dataset.savingChars);
+    whatIfPinned = true;
+    showWhatIf(prev, Number.isFinite(attr) && attr > 0 ? attr : prev.injectedChars);
+    announce(
+      `${prev.enabled ? "disabling" : "enabling"} ${prev.name} — always in context would be ${fmtInt(
+        tokens(Math.max(0, payload.header.injectedChars + (prev.enabled ? -prev.injectedChars : prev.injectedChars)))
+      )} tokens`
+    );
+  }
   state.busy = true;
   state.error = undefined;
   try {
@@ -256,6 +339,16 @@ async function doToggle(id: string): Promise<void> {
       // was flipped from the table, and silently swapped the drawer's subject
       // when a different row was showing.
       if (wasSelected) state.selected = moved?.id;
+      // A pinned set is a set of IDS, and toggling moves the directory — which
+      // changes the path-derived id. Without this the row would drop silently
+      // out of a pin it still belongs to, and the chip would quietly count one
+      // fewer than the panel that produced it.
+      if (state.focus && moved) {
+        state.focus = {
+          ...state.focus,
+          ids: state.focus.ids.map((x) => (x === id ? moved.id : x)),
+        };
+      }
       announce(`${prev?.name ?? "item"} ${r.action}d`);
       render();
       // The row's ID changed with its path, so the saved focus selector no
@@ -435,6 +528,38 @@ app.addEventListener("input", (e) => {
   renderResultsOnly();
 });
 
+/**
+ * Reaching for a savings affordance previews what it would do to the header
+ * total, by pointer or by keyboard. The same projection the in-flight toggle
+ * pins, shown a beat earlier — the question "what would this save me" is asked
+ * before the click, not after it.
+ */
+const savingHost = (t: EventTarget | null): HTMLElement | null =>
+  t instanceof Element ? t.closest<HTMLElement>("[data-saving-chars]") : null;
+
+app.addEventListener("mouseover", (e) => {
+  if (whatIfPinned) return;
+  const host = savingHost(e.target);
+  if (host) whatIfFrom(host);
+});
+app.addEventListener("mouseout", (e) => {
+  if (whatIfPinned) return;
+  const host = savingHost(e.target);
+  // Moving between a control and its own child is not leaving it.
+  if (host && !(e.relatedTarget instanceof Node && host.contains(e.relatedTarget))) {
+    showWhatIf(undefined);
+  }
+});
+app.addEventListener("focusin", (e) => {
+  if (whatIfPinned) return;
+  const host = savingHost(e.target);
+  if (host) whatIfFrom(host);
+});
+app.addEventListener("focusout", (e) => {
+  if (whatIfPinned) return;
+  if (savingHost(e.target)) showWhatIf(undefined);
+});
+
 function renderResultsOnly(): void {
   if (!payload) return;
   const results = page.querySelector("#results");
@@ -461,17 +586,79 @@ function clearFilters(): void {
   state.kinds = [];
   state.query = "";
   state.lens = "all";
+  state.focus = undefined;
   render();
   announce("filters cleared");
 }
 
+/**
+ * Pin an explicit id set — a quadrant, or a portfolio stat's proof view — and
+ * return to the inventory, which is where a set of rows can actually be read.
+ *
+ * `reset` separates the two callers. A portfolio stat printed a count over the
+ * WHOLE machine and promised to show exactly that, so it clears the narrowing
+ * that would deliver fewer rows than it named, and widens the scope when the
+ * set reaches outside it. A quadrant was computed FROM the current filters, so
+ * clearing them would show a set the plot never plotted.
+ */
+function pinFocus(f: { label: string; ids: string[] }, reset: boolean): void {
+  if (!payload) return;
+  state.focus = f;
+  state.panel = "inventory";
+  if (reset) {
+    state.query = "";
+    state.providers = [];
+    state.kinds = [];
+    state.lens = "all";
+    const ids = new Set(f.ids);
+    if (state.mode === "skills" && payload.items.some((i) => ids.has(i.id) && i.kind !== "skill")) {
+      state.mode = "all";
+      pruneFiltersForMode(payload, state);
+    }
+  }
+  render();
+  announce(`inventory pinned to ${f.ids.length} row${f.ids.length === 1 ? "" : "s"} — ${f.label}`);
+}
+
 app.addEventListener("click", (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>(
-    "[data-chip], [data-mode], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], #catch, tr[data-id]"
+    "[data-chip], [data-mode], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], [data-unfocus], [data-panel-to], [data-focus], [data-quadrant], #catch, [data-id]"
   );
   if (!el || !payload) return;
 
   if (el.hasAttribute("data-clear")) return clearFilters();
+
+  if (el.hasAttribute("data-unfocus")) {
+    state.focus = undefined;
+    render();
+    return announce("pinned rows released — your other filters are unchanged");
+  }
+
+  if (el.dataset.panelTo) {
+    const key = el.dataset.panelTo;
+    if (state.panel === key) return;
+    state.panel = key;
+    render();
+    return announce(`${PANELS.find((p) => p.key === key)?.label ?? key} panel`);
+  }
+
+  // A portfolio stat opening its own proof view.
+  if (el.dataset.focus) {
+    const f = focusSet(payload, el.dataset.focus);
+    if (!f) return announce("that stat has no rows to show in this payload");
+    return pinFocus(f, true);
+  }
+
+  // A quadrant of the prune plot: the ids it actually plotted, filtered into
+  // the table. Resolved through the panel's own model so the set the click
+  // shows is the set the readout counted, median and all.
+  if (el.dataset.quadrant) {
+    const key = el.dataset.quadrant;
+    const ids = quadrantIds(payload, state, key);
+    if (ids.length === 0) return announce("that quadrant is empty");
+    const label = pruneModel(payload, state).quads[key as QuadrantKey]?.label ?? key;
+    return pinFocus({ label, ids }, false);
+  }
 
   if (el.hasAttribute("data-logtoggle")) {
     state.logOpen = !state.logOpen;

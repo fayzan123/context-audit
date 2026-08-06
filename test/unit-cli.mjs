@@ -189,7 +189,23 @@ console.log("BACKFILL (history.jsonl import):");
 
   const rep = run([], home).out;
   check("report labels the extended typed horizon", rep.includes("typed-channel history extends to 2026-02-26 (backfilled)"), rep);
-  check("report surfaces pre-window fires", rep.includes("fired before this window, 0 in it:") && rep.includes("greet × 1 since 2026-02-26"), rep);
+  // CHANGED (was: pinned "fired before this window, 0 in it:"). This fixture
+  // home has no transcripts at all — only history.jsonl and one skill — so the
+  // scan observed NO window. The old wording placed the ledger's fires
+  // "before this window" against a span nobody looked through, and the report
+  // was fixed to say which observation the fires come from. The test pinned the
+  // defect, so it now pins the correction, and additionally asserts that no
+  // window claim is made anywhere in a report that had no window to make it.
+  check(
+    "report surfaces ledger fires without inventing a window",
+    rep.includes("ledger fires (no transcript window to compare):") && rep.includes("greet × 1 since 2026-02-26"),
+    rep
+  );
+  check(
+    "no window claim in a report with zero transcripts",
+    !rep.includes("this window") && !rep.includes("local transcript file(s)"),
+    rep
+  );
 }
 {
   const home = fixtureHome("backfill-home");
@@ -225,6 +241,18 @@ console.log("AUDIT (lifetime block from the durable ledger):");
   // Raw events exist to be banked; --json stays additive (report.ts contract)
   // and must never carry session ids, cwds or transcript paths.
   check("--json strips the raw events array after banking", src.history.events === undefined && !JSON.stringify(j).includes('"events":'), Object.keys(src.history).join(","));
+  // fileReads carries absolute asset paths and RAW session uuids, agentRuns
+  // carries agent ids; both are join inputs for buildUiPayload, and neither
+  // existed in --json before S2. They are stripped beside `events`, and this
+  // pins that — a refactor could otherwise re-leak them with the suite green.
+  check(
+    "--json strips fileReads and agentRuns, which carry paths and session ids",
+    src.history.fileReads === undefined &&
+      src.history.agentRuns === undefined &&
+      !JSON.stringify(j).includes('"fileReads":') &&
+      !JSON.stringify(j).includes('"agentRuns":'),
+    Object.keys(src.history).join(",")
+  );
   check("idle is never-fired in BOTH windows", lt.neverFired.length === 1 && lt.neverFired[0] === "idle");
   check("dead-weight estimate is the idle listing entry", lt.deadWeightEstChars === 28, String(lt.deadWeightEstChars));
   check("no typedSince without backfilled events", lt.typedSince === undefined);
