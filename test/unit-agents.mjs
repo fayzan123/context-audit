@@ -123,6 +123,37 @@ check(
   (audit.caveats ?? []).some((c) => /still scanned/.test(c) && /SETUP\.md/.test(c)),
   JSON.stringify(audit.caveats)
 );
+// Asserted on BOTH surfaces, because the first version of this check ran only
+// against auditSource and stayed green while the dashboard lost the finding
+// entirely: scanOnly was wired into the CLI's scan, and the page builds its own
+// payload and counts `flagged` from `items`. The CLI exited 1 naming the
+// payload while the page said nothing carried a flag — and its own caveat, two
+// clicks away, said the opposite. A security invariant proven on one surface is
+// proven on one surface.
+{
+  const uiPayload = await buildUiPayload(ctx, { history: false });
+  const uiFlags = uiPayload.items.flatMap((i) => i.findings ?? []).filter((f) => f.level === "flag");
+  check(
+    "the dashboard shows the flag too, not just the CLI",
+    uiFlags.some((f) => /SETUP\.md$/.test(f.path ?? "")),
+    JSON.stringify(uiFlags.map((f) => `${f.check}:${f.path}`))
+  );
+  check(
+    "and the sidebar's flagged count includes it",
+    uiPayload.header.flagged >= 1,
+    `header.flagged = ${uiPayload.header.flagged}`
+  );
+  check(
+    "the flagged row is not togglable and says why it cannot be",
+    uiPayload.items.some((i) => /SETUP\.md$/.test(i.path) && !i.togglable && /not a registered asset/i.test(i.readOnlyReason ?? "")),
+    JSON.stringify(uiPayload.items.filter((i) => /SETUP/.test(i.name)).map((i) => [i.togglable, i.readOnlyReason]))
+  );
+  check(
+    "it costs nothing, so no cost figure moved to show it",
+    uiPayload.items.filter((i) => /SETUP\.md$/.test(i.path)).every((i) => i.injectedChars === 0),
+    JSON.stringify(uiPayload.items.filter((i) => /SETUP/.test(i.name)).map((i) => i.injectedChars))
+  );
+}
 
 // --- agent launches reach the usage table -----------------------------------
 // The adapter used to hand historyFacts skills and commands only, and the

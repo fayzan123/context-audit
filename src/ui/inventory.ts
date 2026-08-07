@@ -124,6 +124,8 @@ const V1_READONLY = {
   plugin: "Plugin-managed — read-only here; enable or disable the plugin from Claude Code",
   project: "Project-scoped — the disable convention covers user-scoped assets only",
   kind: "No disable convention for this kind: it is not resolved from a directory this tool can move it out of",
+  unregistered:
+    "Not a registered asset — a file in an agents directory with no frontmatter name, so nothing ever loads it. It is shown because the scanner flagged it, and there is nothing here to disable",
   vendor: "Read-only — no invented disable conventions for other vendors in v1",
   custom: "Explicit-directory audits are read-only",
 } as const;
@@ -349,6 +351,34 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
           tracked:
             (adapter.id === "claude" && (kind === "skill" || kind === "command" || kind === "agent")) ||
             (adapter.id === "codex" && kind === "prompt"),
+        });
+      }
+
+      // Files the source deliberately keeps OUT of the inventory — nothing
+      // loads them, they cost nothing, they can never fire — become rows here
+      // only when the scanner flags one.
+      //
+      // `auditSource` hands these to the scanner for the CLI, but the dashboard
+      // builds its own payload and reads its `flagged` count from `items`, so a
+      // finding with no row was a finding nobody saw: the CLI exited 1 naming a
+      // payload in ~/.claude/agents/README.md while the page said "Nothing on
+      // this machine carries a security flag" — with its own caveat two clicks
+      // away saying the opposite. Out of the count is the right answer for a
+      // README; it is the wrong answer for a README carrying a payload.
+      //
+      // Only the flagged ones, so a clean machine is byte-identical to having
+      // no such rows at all: same items, same totals, same never-fired count.
+      // `tracked: false` because nothing can dispatch it — "never fired" would
+      // be a claim about a thing that cannot fire, and n/a is the honest cell.
+      for (const stray of adapter.scanOnly?.(ctx) ?? []) {
+        if (!securityScan([stray], false).some((f) => f.level === "flag")) continue;
+        rows.push({
+          skill: stray,
+          source: adapter.id,
+          enabled: true,
+          togglable: false,
+          readOnlyReason: V1_READONLY.unregistered,
+          tracked: false,
         });
       }
 
