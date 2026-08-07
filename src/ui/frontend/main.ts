@@ -133,6 +133,10 @@ function focusKey(): FocusMark | undefined {
   if (el.hasAttribute("data-close")) return { root, sel: "[data-close]" };
   if (el.hasAttribute("data-statbar")) return { root, sel: "[data-statbar]" };
   if (el.hasAttribute("data-prov")) return { root, sel: "[data-prov]" };
+  if (el.hasAttribute("data-theme-toggle")) return { root, sel: "[data-theme-toggle]" };
+  if (el.hasAttribute("data-check-all")) return { root, sel: "[data-check-all]" };
+  if (el.hasAttribute("data-disable-checked")) return { root, sel: "[data-disable-checked]" };
+  if (el.dataset.check) return { root, sel: `[data-check="${CSS.escape(el.dataset.check)}"]` };
   if (el.dataset.pluginUpdate) {
     return {
       root,
@@ -150,8 +154,18 @@ function focusKey(): FocusMark | undefined {
   return undefined;
 }
 
+function applyTheme(): void {
+  if (state.theme === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", state.theme);
+}
+
+/** What "light" and "dark" mean right now, with no explicit choice made. */
+const systemPrefersLight = (): boolean =>
+  typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches;
+
 function render(): void {
   if (!payload) return;
+  applyTheme();
   const active = document.activeElement as HTMLElement | null;
   const drawerHadFocus = !!active && (drawer === active || drawer.contains(active));
   const restore = focusKey();
@@ -334,6 +348,7 @@ async function doToggle(id: string): Promise<void> {
         `${r.action}d ${prev?.name ?? "item"}${r.from && r.to ? ` — ${r.from} → ${r.to}` : ""}`
       );
       payload = r.payload;
+      state.checked = [];
       const moved = relocate(prev);
       // Only the SELECTED row's selection follows the move. Reselecting on
       // every toggle made the drawer slide open uninvited whenever a switch
@@ -430,6 +445,60 @@ async function doPluginUpdate(name: string, marketplace: string): Promise<void> 
   }
 }
 
+/**
+ * Turn off everything the prune shortlist has checked, in one request.
+ *
+ * The verdict the button states is the one that gets acted on: the ids are
+ * resolved and counted here, the server runs the same per-item guards the
+ * single toggle does, and anything it refuses is named in the activity log
+ * rather than quietly dropped from the count.
+ */
+async function doDisableChecked(): Promise<void> {
+  if (!payload || state.busy) return;
+  const ids = (state.checked ?? []).filter((id) => payload!.items.some((i) => i.id === id));
+  if (ids.length === 0) return announce("nothing selected");
+  const saving = ids.reduce(
+    (a, id) => a + (payload!.items.find((i) => i.id === id)?.injectedChars ?? 0),
+    0
+  );
+  state.busy = true;
+  state.error = undefined;
+  pushLog("cmd", `turning off ${ids.length} item${ids.length === 1 ? "" : "s"} — saving ~${fmtInt(tokens(saving))} tok/session`);
+  state.logOpen = true;
+  announce(`turning off ${ids.length} items`);
+  render();
+  try {
+    const r = await api("/api/toggle-many", { ids });
+    state.busy = false;
+    if (r.ok) {
+      payload = r.payload;
+      // The ids are path-derived and every move changed a path, so the whole
+      // selection is stale by construction. Clearing it is the honest state:
+      // the rows it named are not those rows any more.
+      state.checked = [];
+      state.selected = undefined;
+      for (const name of r.done ?? []) pushLog("ok", `disabled ${name}`);
+      for (const f of r.refused ?? []) pushLog("err", `${f.name} — ${f.error}`);
+      const n = (r.done ?? []).length;
+      const summary =
+        `turned off ${n} of ${ids.length}` +
+        ((r.refused ?? []).length > 0 ? ` — ${(r.refused ?? []).length} refused, see above` : "") +
+        ` · always in context is now ${fmtInt(payload!.header.injectedTokens)} tok/session`;
+      pushLog("ok", summary);
+      announce(summary);
+    } else {
+      state.error = r.error ?? "could not turn these off";
+      pushLog("err", state.error!);
+      announce(state.error!);
+    }
+    render();
+  } catch {
+    state.busy = false;
+    render();
+    connectionLost();
+  }
+}
+
 /** Open failures are readable, same as toggle failures — never silent. */
 async function doOpen(id: string): Promise<void> {
   const name = payload?.items.find((i) => i.id === id)?.name ?? "item";
@@ -496,6 +565,7 @@ async function doRescan(): Promise<void> {
     state.busy = false;
     if (r.ok) {
       payload = r.payload;
+      state.checked = [];
       if (state.selected) state.selected = relocate(prev)?.id;
       state.animate = true; // the readouts re-settle: rescan has visible feedback
       pushLog("ok", `rescan complete — ${payload!.items.length} items · ${payload!.tookMs} ms`);
@@ -630,7 +700,7 @@ function openStat(key: string): void {
 
 app.addEventListener("click", (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>(
-    "[data-nav], [data-lens], [data-provider], [data-stat], [data-statbar], [data-prov], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], [data-unfocus], [data-quadrant], #catch, [data-id]"
+    "[data-nav], [data-lens], [data-provider], [data-stat], [data-statbar], [data-prov], [data-theme-toggle], [data-check], [data-check-all], [data-disable-checked], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], [data-unfocus], [data-quadrant], #catch, [data-id]"
   );
   if (!el || !payload) return;
 
@@ -655,6 +725,37 @@ app.addEventListener("click", (e) => {
     render();
     page.querySelector<HTMLElement>(".prov")?.scrollIntoView({ block: "nearest" });
     return announce(state.provOpen ? "caveats shown" : "caveats hidden");
+  }
+
+  if (el.hasAttribute("data-theme-toggle")) {
+    // From "auto", the toggle flips away from whatever the system is showing —
+    // pressing "light" while the system is already light would otherwise do
+    // nothing visible and read as a broken control.
+    const showing = state.theme === "auto" ? (systemPrefersLight() ? "light" : "dark") : state.theme;
+    state.theme = showing === "light" ? "dark" : "light";
+    render();
+    return announce(`${state.theme} theme`);
+  }
+
+  if (el.dataset.check) {
+    e.stopPropagation();
+    const id = el.dataset.check;
+    const on = state.checked ?? [];
+    state.checked = on.includes(id) ? on.filter((x) => x !== id) : [...on, id];
+    return render();
+  }
+
+  if (el.hasAttribute("data-check-all")) {
+    // "All" means every row this list can actually act on — offering to select
+    // a read-only row would print a count the action could not deliver.
+    const selectable = [...page.querySelectorAll<HTMLElement>("[data-check]")].map((n) => n.dataset.check!);
+    state.checked = (state.checked ?? []).length === selectable.length ? [] : selectable;
+    return render();
+  }
+
+  if (el.hasAttribute("data-disable-checked")) {
+    void doDisableChecked();
+    return;
   }
 
   if (el.dataset.stat) return openStat(el.dataset.stat);

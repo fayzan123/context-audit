@@ -1729,6 +1729,52 @@ console.log("UI HTTP tier (server security + endpoints):");
       projToggle.status === 403 && /project/i.test(projToggle.json?.error ?? ""),
       `status ${projToggle.status}: ${projToggle.json?.error}`
     );
+    // --- turning off a set in one request ---------------------------------
+    // The prune shortlist's whole point is that pruning is a batch decision.
+    // 68 rows through /api/toggle would be 68 full rescans; this runs the same
+    // per-item guards and rescans once. A refusal is reported per item and
+    // never swallowed, because a count that silently shrinks is a count that
+    // lied about what it was going to do.
+    {
+      const before = (await api("/api/audit")).json?.payload?.items ?? [];
+      const t = before.find((i) => i.name === "togglee");
+      const plug = before.find((i) => i.plugin);
+      const many = await api("/api/toggle-many", {
+        method: "POST",
+        body: { ids: [t?.id ?? "", plug?.id ?? "", "f".repeat(16)] },
+      });
+      check(
+        "POST /api/toggle-many turns off everything it can and rescans once",
+        many.status === 200 &&
+          many.json?.ok === true &&
+          (many.json?.done ?? []).includes("togglee") &&
+          existsSync(join(home, ".claude/skills-disabled/togglee/SKILL.md")) &&
+          many.json?.payload?.items?.find((i) => i.name === "togglee")?.enabled === false,
+        JSON.stringify(many.json?.done ?? many.json?.error)
+      );
+      check(
+        "…and names every item it refused, with the reason, rather than dropping it",
+        (many.json?.refused ?? []).length === 2 &&
+          (many.json?.refused ?? []).some((r) => /unknown item/.test(r.error)),
+        JSON.stringify(many.json?.refused)
+      );
+      check(
+        "…and the payload it returns is the state AFTER the batch, not before it",
+        many.json?.payload?.header?.injectedChars < (await api("/api/audit")).json?.payload?.header?.injectedChars + 1,
+        "stale payload"
+      );
+      const empty = await api("/api/toggle-many", { method: "POST", body: { ids: [] } });
+      const bad = await api("/api/toggle-many", { method: "POST", body: { ids: "togglee" } });
+      check(
+        "an empty or malformed id list is refused before anything moves",
+        empty.status === 400 && bad.status === 400,
+        `empty ${empty.status}, bad ${bad.status}`
+      );
+      // Put it back for the assertions that follow.
+      const again = (await api("/api/audit")).json?.payload?.items?.find((i) => i.name === "togglee");
+      if (again) await api("/api/toggle", { method: "POST", body: { id: again.id } });
+    }
+
     const ghost = await api("/api/toggle", { method: "POST", body: { id: "f".repeat(16) } });
     check("unknown item ID is 404", ghost.status === 404);
     // The server resolves IDs against its own inventory; a path in the ID
@@ -1928,13 +1974,21 @@ console.log("UI FRONTEND tier (fixture render):");
   for (const [label, n] of [["cost per session", 400], ["never fired", 3]]) {
     check(`stat bar shows ${label} = ${n}`, html.includes(`class="statfig">${fmtInt(n)}`), `missing stat ${fmtInt(n)}`);
   }
-  // "inventory: 5 files" is NOT a headline figure. It is context — which is
-  // what the provenance statement is for.
+  // "inventory: 5 files" is NOT a headline figure. It is context, and context
+  // lives in the provenance statement — which is now a disclosure, because
+  // 90px of qualifier prose in the first reading position made the least
+  // actionable thing on the page the first thing the eye landed on.
+  const provHtml = renderApp(payload, { ...defaultState(), provOpen: true });
   check(
-    "the inventory file count moved into the provenance statement, out of the headline",
+    "the inventory file count is context in the statement, never a headline figure",
     !html.includes(`class="statfig">5`) &&
-      html.includes(`<p class="provline"><b>5</b> instruction files scanned across <b>2</b> providers.`),
+      provHtml.includes(`<p class="provline"><b>5</b> instruction files scanned across <b>2</b> providers.`),
     "inventory count still a headline"
+  );
+  check(
+    "the statement is closed by default and opens from the sidebar foot",
+    !html.includes('class="provline"') && /class="provlink"[^>]*data-prov/.test(html),
+    "provenance disclosure wrong"
   );
   // Flagged is a sidebar section with its own count. A security total in two
   // places is a security total that can disagree.
@@ -2016,12 +2070,17 @@ console.log("UI FRONTEND tier (fixture render):");
     "silent row wording wrong"
   );
   check(
-    "the window and the retention rule are stated ONCE, in the provenance statement",
-    /class="provline"[\s\S]*?\(<b>41d<\/b>\)/.test(html) &&
-      html.includes("Older sessions are deleted, so nothing inside that window means") &&
-      html.includes("<em>not used lately</em>") &&
+    "the window and the retention rule are stated ONCE, in the statement",
+    /class="provline"[\s\S]*?\(<b>41d<\/b>\)/.test(provHtml) &&
+      provHtml.includes("Older sessions are deleted, so nothing inside that window means") &&
+      provHtml.includes("<em>not used lately</em>") &&
       !/·\s*41d<\/th>/.test(html),
     "provenance statement incomplete, or the window is still a column caption"
+  );
+  check(
+    "…and the always-on control still carries the window and the tracking date",
+    /class="provlink"[\s\S]*?<i>window<\/i>41d<\/span>/.test(html),
+    "sidebar foot lost the window"
   );
   // The inverse of what this used to assert, and deliberately: the window note
   // rode 8 cells here and 490 elements on a real machine. It is stated once,
@@ -2079,16 +2138,21 @@ console.log("UI FRONTEND tier (fixture render):");
   // --- "Injected" is explained in plain language, IN THE LAYOUT ------------
   // A definition that only exists on hover does not exist for a first-time
   // reader, so every term the page uses is defined where it first appears.
+  // Each term is defined UNDER THE HEAD THAT INTRODUCES IT, which is what
+  // "at its first appearance, in the layout" asks for. A strip of definitions
+  // at the top of the page is a glossary, and a glossary is a thing you have
+  // to go and read.
   check(
-    "the cost figure avoids jargon, and 'cost / session' is defined in the layout",
+    "the cost figure avoids jargon, and 'cost / session' is defined under its own column head",
     html.includes('class="statlab">tok / session · 0.2% of a 200K context</span>') &&
-      html.includes("<b>cost / session</b>tokens loaded into the model&#39;s context before you type, every session, used or not") &&
+      /data-sort="injected"[^>]*>[\s\S]*?<span class="thdef">loaded before you type, every session<\/span>/.test(html) &&
       !/>[^<]*injected/.test(html),
-    "cost definition missing from the layout, or the jargon is back in the text"
+    "cost definition missing from the column head, or the jargon is back in the text"
   );
   check(
-    "and a FIRE is defined where the word first appears, in the same statement",
-    html.includes("A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"),
+    "and a FIRE is defined under the column that counts them",
+    /data-sort="activity"[^>]*>[\s\S]*?<span class="thdef">a fire is one recorded dispatch<\/span>/.test(html) &&
+      provHtml.includes("A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"),
     "fire is not defined in the layout"
   );
   const costDrawer = renderDrawer(items[1], defaultState(), win);
@@ -2307,9 +2371,8 @@ console.log("UI FRONTEND tier (fixture render):");
     const dwRows = (dwHtml.match(/c-cost dw/g) ?? []).length;
     check("dead weight marks enabled+silent+expensive rows only", dwRows === 2, `dw rows: ${dwRows}`);
     check(
-      "dead weight is DEFINED in the layout, and the cell that earns it says so",
-      dwHtml.includes("<b>dead weight</b>at least a quarter of your priciest item&#39;s cost, nothing recorded against it, and installed before the window opened") &&
-        dwHtml.includes("amber cost = dead weight") &&
+      "dead weight is DEFINED where it is reported, and the cell that earns it says so",
+      dwHtml.includes("amber = <em>dead weight</em>, a cost paid with nothing recorded against it") &&
         dwHtml.includes("Dead weight: this cost is being paid with nothing recorded against it."),
       "dead-weight definition or mark missing"
     );
@@ -2395,7 +2458,8 @@ console.log("UI FRONTEND tier (fixture render):");
   check(
     "the inventory view carries no styled tooltip at all",
     (html.match(/data-tip=/g) ?? []).length === 0 &&
-      html.includes('class="provline"') && html.includes('class="terms"'),
+      /class="thdef"/.test(html) &&
+      /class="provlink"/.test(html),
     `data-tip occurrences: ${(html.match(/data-tip=/g) ?? []).length}`
   );
 
@@ -2536,7 +2600,7 @@ drawer.includes("download-execute") && drawer.includes("curl | sh") && drawer.in
   );
   check(
     "a broken ledger renders its caveat inside the statement it qualifies",
-    caveatHtml.includes("data-prov>41d · 1 caveat<") &&
+    caveatHtml.includes("<i>caveats</i>1</span>") &&
       renderApp(
         { ...payload, ledgerCaveat: "usage ledger unavailable (EACCES) — lifetime figures omitted" },
         { ...defaultState(), provOpen: true }
@@ -2552,7 +2616,7 @@ drawer.includes("download-execute") && drawer.includes("curl | sh") && drawer.in
   // the label names its method inline so the two windows are never conflated.
   const backfillHtml = renderApp(
     { ...payload, history: { ...payload.history, backfilledSince: "2026-02-26T08:00:00Z" } },
-    defaultState()
+    { ...defaultState(), provOpen: true }
   );
   check(
     "a backfilled horizon is stated in the provenance statement, with its method",
@@ -2563,7 +2627,7 @@ drawer.includes("download-execute") && drawer.includes("curl | sh") && drawer.in
   );
   check(
     "no backfill claim, and no backfill legend entry, without backfilled events",
-    !html.includes("Typed history reaches back") && !html.includes("how: backfilled"),
+    !provHtml.includes("Typed history reaches back") && !provHtml.includes("how: backfilled"),
     "phantom backfill claim"
   );
   // The legend names only the deviations this payload actually contains:
@@ -2571,8 +2635,8 @@ drawer.includes("download-execute") && drawer.includes("curl | sh") && drawer.in
   // same failure as a chip counting zero rows.
   check(
     "the deviation legend lists the kinds present, and only those",
-    html.includes("marks a figure this does not describe — its own note says how: unmeasured.") &&
-      !html.includes("an upper bound"),
+    provHtml.includes("marks a figure this does not describe — its own note says how: unmeasured.") &&
+      !provHtml.includes("an upper bound"),
     "deviation legend wrong"
   );
   // An event whose transcript was already purged at scan time renders disabled

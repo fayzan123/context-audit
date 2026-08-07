@@ -286,12 +286,114 @@ if (ready === true) {
   );
   await evaluate(`(() => { const i = document.querySelector("[data-search]"); i.value = ""; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
 
+  // --- readability, measured rather than asserted on source ----------------
+  // The first version of this overhaul paid for its chrome budget by shrinking
+  // text — table 12px, provenance 11px, terms 10.5px, axis labels 9.5px. That
+  // is the one saving that makes a page harder to read rather than easier, so
+  // the floor is pinned in COMPUTED pixels, where a stylesheet edit cannot
+  // quietly walk it back.
+  const type = await evaluate(`(() => {
+    const px = (s) => { const el = document.querySelector(s); return el ? parseFloat(getComputedStyle(el).fontSize) : null; };
+    const all = [...document.querySelectorAll("#page *")]
+      .filter((el) => el.textContent && el.textContent.trim() && !el.querySelector("*"))
+      .filter((el) => !el.closest("[aria-hidden='true']"))
+      .map((el) => parseFloat(getComputedStyle(el).fontSize))
+      .filter((n) => Number.isFinite(n));
+    return {
+      smallest: Math.min(...all),
+      row: px(".inv tbody td.c-name"),
+      nav: px(".nav span"),
+      colDef: px(".thdef"),
+      sampled: all.length,
+    };
+  })()`);
+  check(
+    "nothing rendered on the page is set below 11px",
+    type.smallest >= 11 && type.sampled > 40,
+    `smallest ${type.smallest}px across ${type.sampled} nodes`
+  );
+  check(
+    "the table, the sidebar and the column definitions are all at reading size",
+    type.row >= 13 && type.nav >= 13 && type.colDef >= 11,
+    `row ${type.row}, nav ${type.nav}, def ${type.colDef}`
+  );
+
+  // --- light and dark are two calibrations of one instrument ----------------
+  const themes = await evaluate(`(() => {
+    const root = document.documentElement;
+    const read = () => {
+      const cs = getComputedStyle(root);
+      const names = ["--bg","--ink","--ink-dim","--ink-faint","--rule","--rule-strong","--signal","--signal-dim","--signal-text","--danger","--wash"];
+      const out = {};
+      for (const n of names) out[n] = cs.getPropertyValue(n).trim();
+      out.scheme = cs.colorScheme;
+      return out;
+    };
+    const was = root.getAttribute("data-theme");
+    root.setAttribute("data-theme", "dark");
+    const dark = read();
+    root.setAttribute("data-theme", "light");
+    const light = read();
+    if (was === null) root.removeAttribute("data-theme"); else root.setAttribute("data-theme", was);
+    return { dark, light };
+  })()`);
+  check(
+    "both themes define every palette token — no rule falls through to a default",
+    Object.entries(themes.dark).every(([, v]) => v !== "") &&
+      Object.entries(themes.light).every(([, v]) => v !== ""),
+    JSON.stringify(themes)
+  );
+  check(
+    "…and every one of them actually differs between the two",
+    Object.keys(themes.dark).filter((k) => k !== "scheme").every((k) => themes.dark[k] !== themes.light[k]),
+    Object.keys(themes.dark).filter((k) => themes.dark[k] === themes.light[k]).join(",")
+  );
+  check(
+    "the light calibration declares its color-scheme, so form controls follow",
+    themes.dark.scheme === "dark" && themes.light.scheme === "light",
+    `${themes.dark.scheme} / ${themes.light.scheme}`
+  );
+
+  // --- the prune view answers before it draws -------------------------------
+  const prune = await evaluate(`(async () => {
+    document.querySelector('[data-nav="prune"]').click();
+    await new Promise((r) => setTimeout(r, 60));
+    const verdict = document.querySelector(".panel-prune .verdict");
+    const act = document.querySelector(".sl-act");
+    const list = document.querySelector(".sl-list");
+    const chart = document.querySelector(".pq-chart");
+    return {
+      verdict: verdict && verdict.textContent.trim(),
+      verdictTop: verdict && Math.round(verdict.getBoundingClientRect().top),
+      actionTop: act && Math.round(act.getBoundingClientRect().top),
+      listTop: list && Math.round(list.getBoundingClientRect().top),
+      foldOpen: document.querySelector(".panel-prune .pq-fold")?.open ?? null,
+      hasChart: !!chart,
+      viewport: window.innerHeight,
+    };
+  })()`);
+  check(
+    "the prune view leads with the finding in words, not with a plot",
+    !!prune.verdict && /cost you [\d,]+ tok every session/.test(prune.verdict) &&
+      prune.foldOpen === false && prune.hasChart === true,
+    JSON.stringify(prune)
+  );
+  check(
+    "the action sits above the list, on screen without scrolling past it",
+    prune.actionTop !== null &&
+      prune.actionTop > prune.verdictTop &&
+      prune.actionTop < prune.listTop &&
+      prune.actionTop < prune.viewport,
+    JSON.stringify(prune)
+  );
+
   // One narrow width, because a fixed sidebar plus a table is exactly the
   // shape that grows a horizontal scrollbar when nobody looks. Same 900px
   // height as above, so the budget comparison is like for like — a shorter
   // viewport spends a larger share on chrome that did not change.
   await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
   const narrow = await evaluate(`(() => {
+    document.querySelector('[data-nav="all"]').click();
     document.querySelector("[data-statbar]").click();
     return {
       docScrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,

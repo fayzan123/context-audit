@@ -3,19 +3,15 @@
    No gradients, no shadows, no glow, no rounded-card grammar — the page should
    read as a bench instrument, not a SaaS analytics template. */
 
+/* --- palette -----------------------------------------------------------------
+   Two calibrations of one instrument. Dark is canonical — a brand-tinted
+   near-black, never #000 — and light is the bench-manual variant: warm paper,
+   near-black ink carrying the same brand hue, and the amber taken DOWN in
+   lightness rather than reused, because a 76%-light amber on paper is a
+   highlighter, not a signal. Every other rule on this page reads these tokens
+   and nothing else, so a theme is a palette swap and never a second stylesheet. */
+
 :root {
-  --bg: oklch(17.5% 0.012 250);
-  --bg-lift: oklch(20% 0.014 250);
-  --bg-drawer: oklch(19% 0.014 250);
-  --ink: oklch(88% 0.008 90);
-  --ink-dim: oklch(63% 0.014 250);
-  --ink-faint: oklch(59% 0.014 250);   /* 4.6:1 on --bg — AA for small text */
-  --rule: color-mix(in oklab, oklch(88% 0.008 90) 13%, transparent);
-  --rule-strong: color-mix(in oklab, oklch(88% 0.008 90) 26%, transparent);
-  --signal: oklch(76% 0.125 72);          /* calibrated amber — state, sort, sweep */
-  --signal-dim: color-mix(in oklab, oklch(76% 0.125 72) 55%, transparent);  /* rules and fills only */
-  --signal-text: color-mix(in oklab, oklch(76% 0.125 72) 78%, transparent); /* dimmed signal that still reads as text */
-  --danger: oklch(62% 0.17 27);           /* restrained red — critical/high only */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);  /* exponential-out; nothing bounces */
   /* The engraved voice: humanist faces with real character, one per platform,
      so the stack lands on a chosen face rather than falling through to the
@@ -26,16 +22,70 @@
   --font-num: "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+/* Dark: the default, and what the page falls back to when nothing is stated. */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: oklch(17.5% 0.012 250);
+  --bg-lift: oklch(20% 0.014 250);
+  --bg-drawer: oklch(19% 0.014 250);
+  --ink: oklch(90% 0.008 90);
+  --ink-dim: oklch(70% 0.014 250);
+  --ink-faint: oklch(63% 0.014 250);   /* 5.3:1 on --bg — AA with room to spare */
+  --rule: color-mix(in oklab, oklch(88% 0.008 90) 14%, transparent);
+  --rule-strong: color-mix(in oklab, oklch(88% 0.008 90) 28%, transparent);
+  --signal: oklch(76% 0.125 72);          /* calibrated amber — state, sort, sweep */
+  --signal-dim: color-mix(in oklab, oklch(76% 0.125 72) 55%, transparent);  /* rules and fills only */
+  --signal-text: color-mix(in oklab, oklch(76% 0.125 72) 82%, transparent); /* dimmed signal that still reads as text */
+  --danger: oklch(64% 0.17 27);           /* restrained red — critical/high only */
+  --wash: color-mix(in oklab, oklch(90% 0.008 90) 4%, transparent);  /* hover, one step off the surface */
+}
 
-html { color-scheme: dark; }
+/* Light: the bench manual. Same structure, same hairlines, inverted ramp. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: oklch(97% 0.005 90);
+  --bg-lift: oklch(94% 0.007 90);
+  --bg-drawer: oklch(98.5% 0.004 90);
+  --ink: oklch(26% 0.012 250);
+  --ink-dim: oklch(44% 0.012 250);
+  --ink-faint: oklch(50% 0.012 250);   /* 6.4:1 on --bg */
+  --rule: color-mix(in oklab, oklch(26% 0.012 250) 17%, transparent);
+  --rule-strong: color-mix(in oklab, oklch(26% 0.012 250) 34%, transparent);
+  --signal: oklch(54% 0.135 60);       /* 4.9:1 on paper — the same hue, taken down */
+  --signal-dim: color-mix(in oklab, oklch(54% 0.135 60) 50%, transparent);
+  --signal-text: oklch(48% 0.135 58);
+  --danger: oklch(48% 0.19 27);
+  --wash: color-mix(in oklab, oklch(26% 0.012 250) 5%, transparent);
+}
+
+/* No stated preference: follow the system, and let an explicit choice win. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: oklch(97% 0.005 90);
+    --bg-lift: oklch(94% 0.007 90);
+    --bg-drawer: oklch(98.5% 0.004 90);
+    --ink: oklch(26% 0.012 250);
+    --ink-dim: oklch(44% 0.012 250);
+    --ink-faint: oklch(50% 0.012 250);
+    --rule: color-mix(in oklab, oklch(26% 0.012 250) 17%, transparent);
+    --rule-strong: color-mix(in oklab, oklch(26% 0.012 250) 34%, transparent);
+    --signal: oklch(54% 0.135 60);
+    --signal-dim: color-mix(in oklab, oklch(54% 0.135 60) 50%, transparent);
+    --signal-text: oklch(48% 0.135 58);
+    --danger: oklch(48% 0.19 27);
+    --wash: color-mix(in oklab, oklch(26% 0.012 250) 5%, transparent);
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-engr);
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 15px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -71,7 +121,7 @@ body {
 .engr {
   display: block;
   font-family: var(--font-engr);
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -113,7 +163,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .brand {
   display: block;
   font-family: var(--font-engr);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.17em;
   text-transform: uppercase;
@@ -121,7 +171,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .sidesub {
   display: block;
   margin-top: 3px;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -136,14 +186,14 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   text-align: left;
   padding: 3px 16px 2px 4px;
   font-family: var(--font-engr);
-  font-size: 12.5px;
+  font-size: 14px;
   color: var(--ink-dim);
 }
 .nav > s {
   flex: none;
   width: 12px;
   text-decoration: none;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--signal);
 }
 .nav > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -152,7 +202,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   margin-left: 10px;
   font-family: var(--font-num);
   font-weight: 400;
-  font-size: 11px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
 }
@@ -162,7 +212,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 /* The only marks the sidebar carries, in the tones those two facts already
    have elsewhere: the listing readout's over-budget --danger, and the findings
    severity tone. No new colour rule, and no other entry is ever marked. */
-.navmark { flex: none; margin-left: 8px; font-style: normal; font-size: 9px; }
+.navmark { flex: none; margin-left: 8px; font-style: normal; font-size: 11px; }
 .navmark.dgr { color: var(--danger); }
 .navmark.sig { color: var(--signal); }
 
@@ -180,18 +230,43 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
    band above the table. */
 .sideacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
 .provlink {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 11.5px;
+  line-height: 1.45;
   color: var(--ink-dim);
-  border-bottom: 1px solid var(--rule-strong);
-  padding: 0 0 1px;
+  border-bottom: 1px solid var(--rule);
+  padding: 0 0 6px;
 }
-.provlink:hover { color: var(--signal); border-bottom-color: var(--signal-dim); }
-.sidestamp { font-family: var(--font-num); font-size: 10px; line-height: 1.5; color: var(--ink-faint); }
+.provlink span {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  align-items: baseline;
+  width: 100%;
+  white-space: nowrap;
+}
+.provlink i {
+  font-style: normal;
+  font-family: var(--font-engr);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  overflow: hidden;
+}
+.provlink:hover, .provlink.on { color: var(--signal); border-bottom-color: var(--signal-dim); }
+.provlink:hover span:last-child, .provlink.on span:last-child { color: var(--signal-text); }
+.provlink .dev { vertical-align: baseline; margin: 0 1px 0 0; color: inherit; cursor: inherit; }
+.sidestamp { font-family: var(--font-num); font-size: 11.5px; line-height: 1.5; color: var(--ink-faint); }
 
 .btn {
   font-family: var(--font-engr);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -265,15 +340,15 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .statfig {
   flex: none;
   font-family: var(--font-num);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 300;
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
-.statfig s { text-decoration: none; margin-left: 7px; font-size: 12px; }
-.statlab { font-size: 11px; color: var(--ink-dim); white-space: nowrap; }
+.statfig s { text-decoration: none; margin-left: 7px; font-size: 13.5px; }
+.statlab { font-size: 12.5px; color: var(--ink-dim); white-space: nowrap; }
 .stat:hover .statfig { color: var(--signal); }
 .stat:hover .statlab { color: var(--ink); }
 .stat.dgr .statfig { color: var(--danger); }
@@ -295,7 +370,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .vgroup { display: flex; }
 .lens {
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   padding: 3px 10px 2px;
@@ -321,9 +396,10 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
    The terms beside it are defined HERE, in the layout — a definition that only
    exists on hover does not exist for a first-time reader. */
 
-.prov { padding: 8px 28px; border-bottom: 1px solid var(--rule); }
-.prov .lede { font-size: 12.5px; line-height: 1.35; color: var(--ink); margin-bottom: 2px; }
-.provline { font-size: 11px; line-height: 1.45; color: var(--ink-dim); }
+.prov { padding: 9px 28px 10px; border-bottom: 1px solid var(--rule); }
+.prov.open { background: var(--wash); }
+.prov .lede { font-size: 14px; line-height: 1.35; color: var(--ink); margin-bottom: 2px; }
+.provline { font-size: 12.5px; line-height: 1.45; color: var(--ink-dim); }
 .provline b {
   font-family: var(--font-num);
   font-weight: 400;
@@ -337,7 +413,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   display: flex;
   flex-wrap: wrap;
   margin-top: 3px;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--ink-faint);
 }
@@ -346,7 +422,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .term b {
   font-family: var(--font-engr);
   font-weight: 600;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -357,7 +433,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
    and the legend above naming the kinds present on this page. */
 .dev {
   font-weight: 400;
-  font-size: 12px;
+  font-size: 13.5px;
   line-height: 0;
   vertical-align: super;
   margin-left: 3px;
@@ -374,7 +450,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   max-width: 110ch;
   padding: 1px 0 1px 10px;
   margin-bottom: 4px;
-  font-size: 11px;
+  font-size: 12.5px;
   line-height: 1.5;
   color: var(--ink-dim);
   border-left: 1px solid var(--signal-dim);
@@ -384,7 +460,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .viewnote {
   padding: 11px 28px 2px;
   max-width: 104ch;
-  font-size: 12.5px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--ink-dim);
 }
@@ -406,7 +482,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .find { display: flex; align-items: center; gap: 8px; }
 .find input {
   font-family: var(--font-num);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--ink);
   background: none;
   border: none;
@@ -424,7 +500,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 
 .clear {
   font-family: var(--font-engr);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -437,7 +513,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .clear.gone { visibility: hidden; }
 .inlineclear {
   font-family: var(--font-num);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--signal);
   border-bottom: 1px solid var(--signal-dim);
   padding: 0;
@@ -469,7 +545,7 @@ button[data-tip], th[data-tip] { cursor: pointer; }
   /* Explicit resets: .engr hosts (bank labels) would otherwise pass their
      uppercase and letterspacing straight into the explanation text. */
   font-family: var(--font-engr);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 400;
   letter-spacing: 0.01em;
   line-height: 1.5;
@@ -494,7 +570,7 @@ button[data-tip], th[data-tip] { cursor: pointer; }
   display: inline-flex;
   align-items: stretch;
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-dim);
   border: 1px solid var(--rule);
 }
@@ -517,7 +593,7 @@ table.inv {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-num);
-  font-size: 12px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
 .inv th {
@@ -529,7 +605,7 @@ table.inv {
   z-index: 2;
   background: var(--bg);
   font-family: var(--font-engr);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -541,7 +617,20 @@ table.inv {
   user-select: none;
   white-space: nowrap;
 }
+.thlab { display: block; }
+.thdef {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-engr);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
 .inv th:hover { color: var(--ink-dim); }
+.inv th:hover .thdef { color: var(--ink-faint); }
 .inv th.sorted { color: var(--signal); }
 .inv th s { text-decoration: none; margin-left: 4px; color: var(--signal); }
 .inv th.c-num, .inv td.c-num { text-align: right; }
@@ -552,17 +641,17 @@ table.inv {
   white-space: nowrap;
 }
 .inv tbody tr { cursor: pointer; }
-.inv tbody tr:hover td { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.inv tbody tr:hover td { background: var(--wash); }
 .inv tbody tr.sel td { background: color-mix(in oklab, var(--signal) 9%, transparent); }
 
 .inv th:first-child, .inv td:first-child { padding-left: 28px; }
 .inv th:last-child, .inv td:last-child { padding-right: 28px; }
 
-.c-name { font-size: 12.5px; color: var(--ink); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.c-name { font-size: 14px; color: var(--ink); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .pfx { color: var(--ink-faint); }
 .offtag {
   margin-left: 8px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -581,7 +670,7 @@ tr.off .sw { opacity: 0.75; }
   display: inline-block;
   width: 15px;
   font-style: normal;
-  font-size: 10px;
+  font-size: 11.5px;
   color: var(--ink-faint);
 }
 .kg-skill { color: var(--ink); }
@@ -650,7 +739,7 @@ td.c-act-col.zero .dim, td.c-act-col.na .dim { color: inherit; }
 .ro { color: var(--ink-faint); cursor: help; }
 
 .badge {
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: 0.04em;
   padding: 1px 6px 0;
   border: 1px solid currentColor;
@@ -664,7 +753,7 @@ td.c-act-col.zero .dim, td.c-act-col.na .dim { color: inherit; }
 
 .act {
   font-family: var(--font-engr);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -679,7 +768,7 @@ tr.grp td {
   padding-top: 18px;
   padding-bottom: 6px;
   font-family: var(--font-num);
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink);
   border-bottom: 1px solid var(--rule-strong);
   background: none;
@@ -691,7 +780,7 @@ tr.grp .engr { display: inline; margin-right: 10px; }
 .upd {
   margin-left: 10px;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--signal);
   border: 1px solid var(--signal-dim);
   padding: 1px 6px 0;
@@ -710,10 +799,10 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 .empty-state { padding: 48px 28px; max-width: 620px; }
 .empty-state .engr { margin-bottom: 12px; }
 .empty-state p { color: var(--ink-dim); margin-bottom: 10px; }
-.empty-state b { color: var(--ink); font-weight: 400; font-family: var(--font-num); font-size: 13px; }
+.empty-state b { color: var(--ink); font-weight: 400; font-family: var(--font-num); font-size: 14.5px; }
 .empty-state code {
   font-family: var(--font-num);
-  font-size: 12.5px;
+  font-size: 14px;
   color: var(--signal);
 }
 
@@ -731,7 +820,7 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
   text-align: left;
   padding: 5px 28px 4px;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--ink-dim);
 }
 .loghead .engr { display: inline; }
@@ -749,7 +838,7 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
   padding: 5px 28px 9px;
   border-top: 1px solid var(--rule);
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   line-height: 1.65;
 }
 .ll { display: block; color: var(--ink-dim); overflow-wrap: anywhere; }
@@ -762,17 +851,19 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 
 .foot {
   display: flex;
+  flex-wrap: nowrap;
   gap: 26px;
   align-items: baseline;
   padding: 8px 28px 10px;
   border-top: 1px solid var(--rule-strong);
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--ink-dim);
 }
 /* Dead weight is DEFINED in the terms strip above the table; what the footer
    adds is which mark carries it, and only while a marked row is on screen. */
-.footdw { color: var(--signal-text); }
+.footdw { color: var(--signal-text); white-space: nowrap; }
+.footdw em { font-style: normal; }
 .foot .live i {
   display: inline-block;
   width: 6px;
@@ -787,7 +878,8 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
   white-space: nowrap;
   max-width: 44ch;
 }
-.foot span:last-child { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.foot > span { white-space: nowrap; }
+.foot span:last-child { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* --- drawer --------------------------------------------------------------- */
 
@@ -826,15 +918,15 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 }
 .dname {
   font-family: var(--font-num);
-  font-size: 16px;
+  font-size: 17px;
   overflow-wrap: anywhere;
 }
-.x { font-size: 18px; color: var(--ink-dim); padding: 0 4px; }
+.x { font-size: 20px; color: var(--ink-dim); padding: 0 4px; }
 .x:hover { color: var(--ink); }
 .dmeta {
   padding: 0 24px 14px;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--ink-dim);
   border-bottom: 1px solid var(--rule);
 }
@@ -849,17 +941,17 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 .dbody section { padding: 14px 0 4px; border-bottom: 1px solid var(--rule); }
 .dbody section:last-child { border-bottom: none; }
 .dbody > section > .engr { margin-bottom: 7px; }
-.dbody p { font-size: 13px; margin-bottom: 8px; }
+.dbody p { font-size: 14.5px; margin-bottom: 8px; }
 .dsub { padding-top: 11px; }
 .dsub:first-of-type { padding-top: 4px; }
-.engr.sub { font-size: 9px; letter-spacing: 0.13em; color: var(--ink-faint); margin-bottom: 6px; }
+.engr.sub { font-size: 11px; letter-spacing: 0.13em; color: var(--ink-faint); margin-bottom: 6px; }
 
 .path {
   display: block;
   width: 100%;
   text-align: left;
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-dim);
   overflow-wrap: anywhere;
   padding: 0 0 8px;
@@ -868,12 +960,12 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 
 .kv { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
 .kv .engr { min-width: 118px; margin: 0; }
-.kv span:last-child { font-family: var(--font-num); font-size: 12px; font-variant-numeric: tabular-nums; }
+.kv span:last-child { font-family: var(--font-num); font-size: 13.5px; font-variant-numeric: tabular-nums; }
 
 /* Plain-language gloss under a figure. The numbers are the protagonist; these
    lines exist so the number means something the first time it is read. */
 .kv-note, .caveat-note {
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.5;
   color: var(--ink-dim);
   margin: 2px 0 12px;
@@ -888,7 +980,7 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 table.fmt { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
 .fmt td {
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   padding: 3px 12px 3px 0;
   vertical-align: top;
   border-bottom: 1px solid var(--rule);
@@ -905,7 +997,7 @@ table.fmt { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
   list-style: none;
   padding: 9px 0 8px;
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-faint);
 }
 .infofold summary::-webkit-details-marker { display: none; }
@@ -918,13 +1010,13 @@ table.fmt { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
   align-items: baseline;
   gap: 10px;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   margin-bottom: 6px;
 }
 /* Named apart from the masthead .plate on purpose: two bare classes of equal
    specificity in one sheet, and the later one silently restyles the earlier. */
 .sevplate {
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   padding: 1px 6px 0;
@@ -936,28 +1028,28 @@ table.fmt { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
 .conf { color: var(--ink-faint); }
 .check { color: var(--ink); }
 .lvl { margin-left: auto; color: var(--ink-faint); }
-.finding p { font-size: 12.5px; }
+.finding p { font-size: 14px; }
 pre.ev {
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-dim);
-  background: color-mix(in oklab, var(--ink) 5%, transparent);
+  background: var(--wash);
   border-left: 1px solid var(--rule-strong);
   padding: 7px 10px;
   margin: 6px 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.floc { font-family: var(--font-num); font-size: 10.5px; color: var(--ink-faint); }
+.floc { font-family: var(--font-num); font-size: 12px; color: var(--ink-faint); }
 
 /* --- ledger sections -------------------------------------------------------
    Provenance, lifetime fires, channel split, weekly strip and the invocation
    drill-down. All tonal: these are measurements, not states. */
 
-.lifeline { font-family: var(--font-num); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lifeline { font-family: var(--font-num); font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .provline, .outcomeline, .projline {
   font-family: var(--font-num);
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
   margin-bottom: 8px;
@@ -967,7 +1059,7 @@ pre.ev {
 .pchip {
   border: 1px solid var(--rule-strong);
   padding: 1px 6px 0;
-  font-size: 11px;
+  font-size: 12.5px;
   white-space: nowrap;
 }
 .pchip b { font-weight: 400; color: var(--ink); margin-left: 4px; }
@@ -978,7 +1070,7 @@ pre.ev {
 .chbar i { display: block; height: 100%; }
 .chbar .ch-auto { background: color-mix(in oklab, var(--ink) 55%, transparent); }
 .chbar .ch-typed { background: color-mix(in oklab, var(--ink) 24%, transparent); }
-.chlab { font-family: var(--font-num); font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.chlab { font-family: var(--font-num); font-size: 12.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
 
 /* Weekly strip: one discrete cell per ISO week, filled by count bucket.
    Data-bearing and drawer-scoped — countable cells, not a decorative line. */
@@ -993,7 +1085,7 @@ pre.ev {
 /* Invocation drill-down: every row is the open-the-proof button. A purged
    row stays listed — the ledger event is retained — but disabled, with the
    fact stated where the affordance was. */
-.evcap { font-family: var(--font-num); font-size: 10.5px; }
+.evcap { font-family: var(--font-num); font-size: 12px; }
 .evlist { display: flex; flex-direction: column; margin-bottom: 6px; }
 .evrow {
   display: flex;
@@ -1002,7 +1094,7 @@ pre.ev {
   width: 100%;
   text-align: left;
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-dim);
   padding: 4px 0 3px;
   border-bottom: 1px solid var(--rule);
@@ -1014,7 +1106,7 @@ pre.ev {
 /* Channel and outcome read as words in chips, not as colors: an errored fire
    is a measurement, and red belongs to finding severity alone. */
 .evch, .evmark {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   border: 1px solid var(--rule-strong);
@@ -1022,11 +1114,11 @@ pre.ev {
   color: var(--ink-faint);
   white-space: nowrap;
 }
-.evgone { font-size: 10px; color: var(--ink-faint); }
+.evgone { font-size: 11.5px; color: var(--ink-faint); }
 
 /* Exact-name collision paths, listed inside the warning that carries them. */
 .colpaths { list-style: none; margin-top: 4px; }
-.colpaths li { font-family: var(--font-num); font-size: 10.5px; overflow-wrap: anywhere; padding: 2px 0; }
+.colpaths li { font-family: var(--font-num); font-size: 12px; overflow-wrap: anywhere; padding: 2px 0; }
 
 .err {
   margin: 12px 24px 0;
@@ -1034,7 +1126,7 @@ pre.ev {
   border: 1px solid var(--danger);
   color: var(--danger);
   font-family: var(--font-num);
-  font-size: 11.5px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -1045,7 +1137,7 @@ pre.ev {
   padding: 14px 24px 18px;
   border-top: 1px solid var(--rule-strong);
 }
-.ro-note { font-family: var(--font-num); font-size: 10.5px; color: var(--ink-faint); }
+.ro-note { font-family: var(--font-num); font-size: 12px; color: var(--ink-faint); }
 
 /* --- two calibrated tones, named once --------------------------------------
    `sig` and `dgr` are the ONLY colour utilities on this page, and they exist so
@@ -1068,7 +1160,7 @@ pre.ev {
 .wm-line {
   margin-bottom: 4px;
   font-family: var(--font-num);
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
   color: var(--ink-dim);
@@ -1077,7 +1169,7 @@ pre.ev {
 .wm-line[title] { cursor: help; }
 .wm-link {
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   color: var(--ink-dim);
   padding: 0;
@@ -1085,7 +1177,7 @@ pre.ev {
   white-space: nowrap;
 }
 .wm-link b { font-weight: 400; color: var(--ink); margin-left: 5px; }
-.wm-link b i { font-style: normal; font-size: 9.5px; color: var(--ink-faint); margin-left: 3px; }
+.wm-link b i { font-style: normal; font-size: 11px; color: var(--ink-faint); margin-left: 3px; }
 .wm-link:hover, .wm-link:hover b { color: var(--signal); }
 .gw-delta { max-width: 78ch; }
 
@@ -1103,7 +1195,7 @@ pre.ev {
 .panel-head { margin-bottom: 16px; }
 .panel-head .engr { margin-bottom: 6px; }
 .panel-cap {
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.55;
   color: var(--ink-dim);
   max-width: 104ch;
@@ -1123,7 +1215,7 @@ pre.ev {
 .cap-win {
   display: block;
   margin-top: 5px;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--ink-faint);
   max-width: 92ch;
@@ -1131,14 +1223,14 @@ pre.ev {
 /* An empty panel teaches instead of drawing an axis of zeros. */
 .panel-empty { padding: 26px 0 0; max-width: 66ch; }
 .panel-empty .engr { margin-bottom: 11px; }
-.panel-empty p { font-size: 12.5px; line-height: 1.6; color: var(--ink-dim); margin-bottom: 10px; }
+.panel-empty p { font-size: 14px; line-height: 1.6; color: var(--ink-dim); margin-bottom: 10px; }
 .panel-empty b {
   font-family: var(--font-num);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
-.panel-empty code { font-family: var(--font-num); font-size: 12px; color: var(--signal); }
+.panel-empty code { font-family: var(--font-num); font-size: 13.5px; color: var(--signal); }
 .panel-empty .cap-win { margin-top: 0; }
 
 /* --- drawings --------------------------------------------------------------
@@ -1170,6 +1262,124 @@ pre.ev {
    opacities the markup authored — a graticule is meant to sit under the data. */
 .chart .ax-title { letter-spacing: 0.18em; opacity: 0.74; }
 .chart .grid, .chart .ax-line, .chart .xhair { pointer-events: none; }
+
+/* --- the verdict, and the shortlist ----------------------------------------
+   Every analysis view opens with its finding in one sentence at reading size,
+   and the drawing goes underneath as evidence. The order used to be the other
+   way round, which asked the reader to derive from a chart something the
+   payload already knew. */
+
+.verdict {
+  max-width: 78ch;
+  margin-bottom: 14px;
+  font-size: 18px;
+  line-height: 1.45;
+  color: var(--ink-dim);
+}
+.verdict b {
+  font-family: var(--font-num);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.verdict em { font-style: normal; color: var(--ink); }
+
+/* The list you act on. Ruled rows, tabular figures, one checkbox — the same
+   two-position switch the table uses, at list scale. */
+.sl { max-width: 1160px; }
+.sl-list { list-style: none; }
+.sl-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 7px 4px 6px 0;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-num);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.sl-row:hover { background: var(--wash); }
+.sl-row.on { background: color-mix(in oklab, var(--signal) 9%, transparent); }
+.sl-box {
+  flex: none;
+  position: relative;
+  width: 15px;
+  height: 15px;
+  align-self: center;
+  border: 1px solid var(--rule-strong);
+  padding: 0;
+}
+.sl-box i {
+  position: absolute;
+  inset: 3px;
+  background: transparent;
+  transition: background 120ms var(--ease);
+}
+.sl-box:hover { border-color: var(--signal); }
+.sl-row.on .sl-box { border-color: var(--signal-dim); }
+.sl-row.on .sl-box i { background: var(--signal); }
+/* A row this list cannot act on still lists — the cost is real either way —
+   but it says so where the control would be, rather than offering one that
+   would refuse. */
+.sl-box.ro {
+  border: none;
+  text-align: center;
+  color: var(--ink-faint);
+  cursor: help;
+}
+.sl-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.sl-tok { flex: none; width: 9ch; text-align: right; color: var(--ink-dim); }
+.sl-tok i { font-style: normal; font-size: 11px; color: var(--ink-faint); margin-left: 5px; }
+.sl-use { flex: none; width: 24ch; color: var(--ink-dim); }
+/* No amber here: every row in this list is costly-and-quiet by construction,
+   so colouring them all marks nothing. The dead-weight count is stated once,
+   in the note under the list, where it is a figure rather than a wash. */
+
+.sl-act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--rule-strong);
+  margin-bottom: 2px;
+}
+.sl-go { padding: 7px 16px 6px; }
+.sl-go:not(:disabled) { color: var(--signal); border-color: var(--signal-dim); }
+.sl-go:not(:disabled):hover { border-color: var(--signal); background: color-mix(in oklab, var(--signal) 10%, transparent); }
+.sl-save { font-family: var(--font-num); font-size: 12.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.sl-save b { font-weight: 400; color: var(--ink); }
+.sl-all {
+  margin-left: auto;
+  font-family: var(--font-num);
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 0 0 1px;
+}
+.sl-all:hover { color: var(--signal); border-bottom-color: var(--signal-dim); }
+.sl code { font-family: var(--font-num); font-size: 12px; color: var(--ink-dim); }
+
+/* The distribution, behind a disclosure: it is evidence for the finding, and
+   evidence goes under it. */
+.pq-fold { margin-top: 22px; border-top: 1px solid var(--rule); }
+.pq-fold summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 11px 0 10px;
+  font-family: var(--font-engr);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.pq-fold summary::-webkit-details-marker { display: none; }
+.pq-fold summary::before { content: "▸ "; }
+.pq-fold[open] summary::before { content: "▾ "; }
+.pq-fold summary:hover { color: var(--signal); }
+.pq-fold .panel-cap { margin-bottom: 14px; }
 
 /* --- 1. prune quadrant ------------------------------------------------------
    Plot left, readouts right, split by a hairline. The readouts are the
@@ -1206,7 +1416,7 @@ pre.ev {
 /* The clickable quadrant. Colour state snaps; nothing crossfades. */
 .chart .pq-zone { cursor: pointer; fill: transparent; }
 .chart .pq-zone:hover, .chart .pq-zone:focus-visible {
-  fill: color-mix(in oklab, var(--ink) 5%, transparent);
+  fill: var(--wash);
   outline: none;
 }
 
@@ -1238,7 +1448,7 @@ pre.ev {
   min-width: 0;
   min-height: 27px;
   font-family: var(--font-engr);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1248,7 +1458,7 @@ pre.ev {
   flex: 0 0 100%;
   margin-top: 6px;
   font-family: var(--font-num);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 300;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -1257,13 +1467,13 @@ pre.ev {
 .pq-qtok {
   flex: 0 0 100%;
   font-family: var(--font-num);
-  font-size: 12px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
   color: var(--ink-dim);
 }
 .pq-qn i, .pq-qtok i {
   font-style: normal;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--ink-faint);
   margin-left: 6px;
@@ -1275,10 +1485,10 @@ pre.ev {
   flex: 0 0 100%;
   margin-top: 4px;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-.pq-quad:hover:not(:disabled) { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.pq-quad:hover:not(:disabled) { background: var(--wash); }
 .pq-quad:hover:not(:disabled) .pq-qlab, .pq-quad:hover:not(:disabled) .qglyph { color: var(--signal); }
 .pq-quad:disabled { cursor: default; }
 .pq-quad:disabled .pq-qn, .pq-quad:disabled .pq-qtok, .pq-quad:disabled .pq-qlab { color: var(--ink-faint); }
@@ -1299,7 +1509,7 @@ pre.ev {
 .pq-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .pq-key {
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--ink-dim);
   white-space: nowrap;
 }
@@ -1320,10 +1530,10 @@ pre.ev {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--rule);
 }
-.lb-verdict { font-family: var(--font-num); font-size: 12.5px; color: var(--ink-dim); }
+.lb-verdict { font-family: var(--font-num); font-size: 14px; color: var(--ink-dim); }
 .lb-verdict b {
   font-weight: 400;
-  font-size: 15px;
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
@@ -1331,11 +1541,11 @@ pre.ev {
    The words around the figure stay tonal — one red number, not a red sentence. */
 .lb-verdict.dgr { color: var(--ink-dim); }
 .lb-verdict.dgr b { color: var(--danger); }
-.lb-fix { font-family: var(--font-num); font-size: 11.5px; color: var(--ink-faint); }
+.lb-fix { font-family: var(--font-num); font-size: 13px; color: var(--ink-faint); }
 .lb-fix b { font-weight: 400; color: var(--ink-dim); }
 .lb-mismatch {
   font-family: var(--font-num);
-  font-size: 11px;
+  font-size: 12.5px;
   white-space: nowrap;
   border-bottom: 1px solid var(--rule-strong);
 }
@@ -1363,17 +1573,17 @@ pre.ev {
   padding: 4px 0 3px;
   border-bottom: 1px solid var(--rule);
   font-family: var(--font-num);
-  font-size: 11.5px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 .lb-dlist li::before {
   content: counter(drop, decimal-leading-zero);
   flex: none;
-  font-size: 10px;
+  font-size: 11.5px;
   color: var(--ink-faint);
 }
-.lb-dlist li:hover { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.lb-dlist li:hover { background: var(--wash); }
 .lb-dname {
   flex: 1 1 20ch;
   min-width: 0;
@@ -1390,7 +1600,7 @@ pre.ev {
   width: 5.5ch;
   text-align: left;
   font-style: normal;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   margin-left: 6px;
 }
@@ -1405,7 +1615,7 @@ pre.ev {
 table.ovl {
   border-collapse: collapse;
   font-family: var(--font-num);
-  font-size: 12px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
 .ovl th, .ovl td {
@@ -1422,7 +1632,7 @@ table.ovl {
 .ovl-prov {
   display: block;
   font-family: var(--font-engr);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1430,10 +1640,10 @@ table.ovl {
 }
 /* A provider's own retention dates read a step brighter than the fallback
    shared window — the difference between a measurement and a stand-in. */
-.ovl-win { display: block; margin-top: 3px; font-size: 10px; color: var(--ink-dim); }
+.ovl-win { display: block; margin-top: 3px; font-size: 11.5px; color: var(--ink-dim); }
 .ovl-win.shared { color: var(--ink-faint); }
 .ovl tbody tr { cursor: pointer; }
-.ovl tbody tr:hover td, .ovl tbody tr:hover th { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+.ovl tbody tr:hover td, .ovl tbody tr:hover th { background: var(--wash); }
 .ovl-name {
   position: sticky;
   left: 0;
@@ -1447,7 +1657,7 @@ table.ovl {
 .ovl-name .kg { width: 15px; }
 .ovl-twin {
   margin-left: 9px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -1461,7 +1671,7 @@ table.ovl {
    belong to. */
 .ovl-cell { color: var(--ink-dim); cursor: help; }
 .ovl-cell.fired b { font-weight: 400; color: var(--ink); }
-.ovl-cell.read { font-size: 10.5px; letter-spacing: 0.04em; color: var(--ink-faint); }
+.ovl-cell.read { font-size: 12px; letter-spacing: 0.04em; color: var(--ink-faint); }
 /* Absent is a dot, never a zero. */
 .ovl-cell.void { color: var(--ink-faint); }
 .ovl-last { color: var(--ink-dim); }
@@ -1477,7 +1687,7 @@ table.ovl {
 .chart .gw-gap { color: var(--ink-faint); }
 .chart .gw-dl { opacity: 0.9; }
 .chart .gw-hit { cursor: help; }
-.chart .gw-hit:hover { fill: color-mix(in oklab, var(--ink) 4%, transparent); }
+.chart .gw-hit:hover { fill: var(--wash); }
 .gw-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1491,7 +1701,7 @@ table.ovl {
   gap: 9px;
   max-width: 60ch;
   font-family: var(--font-engr);
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -1499,7 +1709,7 @@ table.ovl {
 }
 .gw-key i {
   font-style: normal;
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 400;
   letter-spacing: 0.01em;
   text-transform: none;
@@ -1517,7 +1727,7 @@ table.ovl {
    only ever true for one sort order. Every dropped row still carries its tag. */
 tr.dropped .c-name { color: var(--ink-dim); }
 .offtag[title] { cursor: help; }
-.offtag .dev { vertical-align: baseline; font-size: 10px; margin-left: 4px; }
+.offtag .dev { vertical-align: baseline; font-size: 11.5px; margin-left: 4px; }
 /* Dashed, because it is a MODELLED position in a drop order rather than a
    state the harness reported. */
 .offtag.cut { border-style: dashed; }
@@ -1526,7 +1736,7 @@ tr.dropped .c-name { color: var(--ink-dim); }
 .supd {
   margin-left: 14px;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--ink-faint);
   border-bottom: 1px solid var(--rule);
   cursor: help;
@@ -1536,7 +1746,7 @@ tr.dropped .c-name { color: var(--ink-dim); }
    edit button, but a figure, so it takes the numeric face. */
 .act.save {
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -1551,7 +1761,7 @@ tr.dropped .c-name { color: var(--ink-dim); }
 .stat .whatif {
   flex: 0 0 100%;
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--signal-text);
 }
@@ -1568,7 +1778,7 @@ tr.dropped .c-name { color: var(--ink-dim); }
 
 .dbody .factline {
   font-family: var(--font-num);
-  font-size: 11.5px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
   color: var(--ink-dim);
@@ -1605,7 +1815,7 @@ tr.dropped .c-name { color: var(--ink-dim); }
 .pathlist { list-style: none; margin: 3px 0 10px; }
 .pathlist li {
   font-family: var(--font-num);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--ink-dim);
   overflow-wrap: anywhere;
@@ -1649,12 +1859,12 @@ tr.dropped .c-name { color: var(--ink-dim); }
   .side { padding-top: 11px; }
   .sidehead, .navgroup > .engr, .nav, .sidefoot { padding-left: 12px; padding-right: 12px; }
   .nav { padding-left: 2px; }
-  .brand { font-size: 13px; letter-spacing: 0.13em; }
+  .brand { font-size: 14.5px; letter-spacing: 0.13em; }
   .statbar, .viewbar, .prov, .viewnote { padding-left: 16px; padding-right: 16px; }
   .inv th:first-child, .inv td:first-child { padding-left: 16px; }
   .inv th:last-child, .inv td:last-child { padding-right: 16px; }
   .foot, .loghead, .loglines { padding-left: 16px; padding-right: 16px; }
-  .statfig { font-size: 18px; }
+  .statfig { font-size: 20px; }
   .stat { padding-right: 14px; margin-right: 14px; }
   .term { padding-right: 12px; margin-right: 12px; }
   .panelbox { padding: 14px 16px 24px; }

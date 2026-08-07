@@ -73,18 +73,22 @@ check(
   "mirror-count cell wrong"
 );
 {
-  // Two visible occurrences on the whole page, both earned: the sidebar foot
-  // (which leads to the statement) and the statement itself. It used to caption
-  // three column headers and every usage cell under them.
+  // ONE visible occurrence on the whole page: the sidebar foot, which is also
+  // the control that opens the full statement. It used to caption three column
+  // headers and every usage cell under them.
   const vis = visible(html);
   const hits = (vis.match(/41d/g) ?? []).length;
   check(
-    "the window is stated once, in the provenance line — never as a column or cell suffix",
+    "the window is stated once, in the sidebar foot — never as a column or cell suffix",
     !/·\s*41d<\/th>/.test(html) &&
-      /class="provlink" data-prov>41d · /.test(vis) &&
-      /class="provline"[\s\S]*?\(<b>41d<\/b>\)/.test(vis) &&
-      hits === 2,
+      /class="provlink"[\s\S]*?<i>window<\/i>41d<\/span>/.test(vis) &&
+      hits === 1,
     `visible 41d occurrences: ${hits}`
+  );
+  check(
+    "…and the full statement carries it too, once opened",
+    /class="provline"[\s\S]*?\(<b>41d<\/b>\)/.test(R.renderApp(payload, { ...R.defaultState(), provOpen: true })),
+    "statement lost the window"
   );
 }
 
@@ -390,25 +394,31 @@ check("fmtK compacts figures the way the rehoused rent line needs", R.fmtK(31000
   );
 }
 
-// --- never-auto-fired table badge (#18) --------------------------------------
+// --- never-auto-fired: the drawer's fact, not the row's (#18) -----------------
 {
+  // Four fact badges used to ride the activity cell. Each states something the
+  // count does not, so none was a repetition — but together they pushed the row
+  // past the right edge of a real window, and a clipped fact is not a stated
+  // one. They live where they are always readable instead.
   check(
-    "a 100%-typed row carries the never-auto-fired badge in the table — once",
-    (html.match(/never auto-fired<\/span>/g) ?? []).length === 1,
-    `badges: ${(html.match(/never auto-fired<\/span>/g) ?? []).length}`
+    "no fact badge rides the table row any more",
+    !html.includes("never auto-fired") &&
+      !/badge fact/.test(html) &&
+      !/ interrupted \(~/.test(html) &&
+      !html.includes("tried &amp; dropped"),
+    "a fact badge is still in the table"
   );
   check(
-    "the table badge is tonal and names the trackedSince qualifier",
-    /badge fact" title="Every recorded fire was user-typed since tracking began 2026-03-01[^"]*">never auto-fired/.test(html),
-    "badge qualifier missing"
-  );
-  const shadowedTyped = R.renderApp(
-    { ...payload, items: [{ ...byName("typedonly"), enabled: false, twinPath: "/x" }] },
-    R.defaultState()
+    "the never-auto-fired fact is stated in full, with its qualifier, in the drawer",
+    drawerFor("typedonly").includes("never auto-fired — every recorded fire was typed") &&
+      drawerFor("typedonly").includes("since tracking began 2026-03-01"),
+    "never-auto-fired fact lost"
   );
   check(
-    "a shadowed row gets no never-auto-fired badge",
-    !shadowedTyped.includes("never auto-fired"),
+    "a shadowed row still gets none of it",
+    !R.renderDrawerBody({ ...byName("typedonly"), enabled: false, twinPath: "/x" }, R.defaultState(), win).includes(
+      "never auto-fired"
+    ),
     "shadowed row badged"
   );
 }
@@ -448,10 +458,9 @@ check("fmtK compacts figures the way the rehoused rent line needs", R.fmtK(31000
     "full interrupted fact missing"
   );
   check(
-    "the interrupted table badge appears only where interrupts exist",
-    html.includes("1 interrupted (~1,000 tok, 17% of fires)</span>") &&
-      (html.match(/ interrupted \(~/g) ?? []).length === 1,
-    `table badges: ${(html.match(/ interrupted \(~/g) ?? []).length}`
+    "…and the drawer is the only place it is stated",
+    !html.includes("interrupted 1×") && (html.match(/interrupted/g) ?? []).length === 0,
+    "interrupted leaked back into the table"
   );
 }
 
@@ -813,6 +822,11 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
 
   const pq = panelOf(p2, "prune");
   check(
+    "the shortlist says how much of itself the action can actually reach",
+    pq.includes("of these can be turned off from here; the rest are agents, plugin assets or project-scoped files, which this tool measures but does not move"),
+    "the view promises an action over rows it cannot move"
+  );
+  check(
     "concentration moved under the plot that asks the same question, printing dispatch NAMES",
     pq.includes("<b>2</b> names account for <b>84%</b> of every recorded fire"),
     "name count missing"
@@ -877,9 +891,13 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   );
   check(
     "the caption refuses interpolation in words",
-    g.includes("breaks over the <b>1</b> week with none — ticked on the axis") &&
-      g.includes("Nothing is interpolated across a gap: joining them would draw a history the snapshots never recorded."),
+    g.includes("breaks over the <b>1</b> week with no snapshot — ticked on the axis, and never interpolated across"),
     "caption missing"
+  );
+  check(
+    "…and the view LEADS with the finding rather than the drawing",
+    /<p class="verdict">You own <b>\d+<\/b> instruction files\. In a typical week <b>\d+<\/b> of them get used\.<\/p>/.test(g),
+    "growth verdict missing"
   );
   check(
     "each series names the method it came from, beside the series",
@@ -987,21 +1005,16 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
 // --- table facts: one burst, and the scope it all landed in ------------------
 {
   check(
-    "a one-burst item that is no longer new carries the tried & dropped badge — once",
-    countOf(app2, /tried &amp; dropped/g) === 1 &&
-      rowOf(app2, "id-burst-old").includes("tried &amp; dropped"),
-    `badges: ${countOf(app2, /tried &amp; dropped/g)}`
+    "a one-burst item states its burst in the drawer, and nothing in the table",
+    countOf(app2, /tried &amp; dropped/g) === 0 &&
+      drawer2("id-burst-old").includes("one burst — every fire inside <b>3d</b>") &&
+      drawer2("id-burst-old").includes("quiet <b>88d</b>"),
+    "burst fact lost"
   );
   check(
-    "the badge's title states the span, the silence and the record it was measured over",
-    /All 4 recorded fires landed within one 3-day span \(2026-05-05 → 2026-05-08\), and nothing since — 88d ago\. Measured over the ledger&#39;s record since 2026-03-01\./.test(app2),
-    "burst title incomplete"
-  );
-  check(
-    "a one-burst item whose burst is still recent is called new, never dropped",
-    rowOf(app2, "id-burst-new").includes("∗") &&
-      !rowOf(app2, "id-burst-new").includes("tried &amp; dropped"),
-    "a fresh item was called dropped"
+    "a one-burst item whose burst is still recent is called new by its trend glyph",
+    rowOf(app2, "id-burst-new").includes("∗"),
+    "a fresh item lost its trend"
   );
   check(
     "the drawer states the burst span either way",
@@ -1019,14 +1032,10 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
     "quiet line wrong"
   );
   check(
-    "the scope badge names the one project every fire landed in — once",
-    countOf(app2, /only in context-audit/g) === 1 &&
-      rowOf(app2, "id-scoped").includes(`>only in context-audit</span>`),
-    `scope badges: ${countOf(app2, /only in context-audit/g)}`
-  );
-  check(
-    "its title states the asymmetry: paid everywhere, used in one place",
-    app2.includes("Its cost is paid in every session in every project; its recorded use is in that one."),
+    "the scope fact is the drawer's, and states the asymmetry: paid everywhere, used in one place",
+    countOf(app2, /only in context-audit/g) === 0 &&
+      drawer2("id-scoped").includes("every recorded fire landed in one project") &&
+      drawer2("id-scoped").includes("its always-in-context cost is paid in every session in every project"),
     "scope asymmetry not stated"
   );
   check(
@@ -1117,14 +1126,14 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   const opened = R.renderApp(p2, { ...R.defaultState(), provOpen: true });
   check(
     "caveats are read IN THE LAYOUT, inside the provenance statement they qualify",
-    /<section class="prov"[\s\S]*?<ul class="cav">/.test(opened) &&
+    /<section class="prov open"[\s\S]*?<ul class="cav">/.test(opened) &&
       opened.includes("<li>Cursor&#39;s local conversation store could not be opened (SQLITE_CANTOPEN); cursor rules show no readable history.</li>") &&
       opened.includes("<li>3 ledger lines were unreadable and were skipped.</li>"),
     "caveat list wrong"
   );
   check(
-    "the sidebar foot states the window and the caveat count, and is the control that opens them",
-    /<button class="provlink" data-prov>41d · 2 caveats<\/button>/.test(app2),
+    "the sidebar foot states the window, the tracking date and the caveat count, and opens them",
+    /<button class="provlink" data-prov aria-expanded="false">[\s\S]*?<i>window<\/i>41d<\/span>[\s\S]*?<i>tracked<\/i>2026-03-01<\/span>[\s\S]*?<i>caveats<\/i>2<\/span>/.test(app2),
     "sidebar foot wrong"
   );
   check(
@@ -1136,7 +1145,7 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   one.caveats = ["one thing went wrong"];
   check(
     "one caveat is singular",
-    R.renderApp(one, R.defaultState()).includes("data-prov>41d · 1 caveat<"),
+    R.renderApp(one, R.defaultState()).includes("<i>caveats</i>1</span>"),
     "plural wrong"
   );
   const none = clone(p2);
@@ -1145,7 +1154,7 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   none.pluginResolution = "config";
   check(
     "a payload that states no caveats says zero, and draws no list either way",
-    R.renderApp(none, { ...R.defaultState(), provOpen: true }).includes("data-prov>41d · 0 caveats<") &&
+    R.renderApp(none, { ...R.defaultState(), provOpen: true }).includes("<i>caveats</i>0</span>") &&
       !R.renderApp(none, { ...R.defaultState(), provOpen: true }).includes('class="cav"'),
     "empty caveat chrome"
   );
@@ -1175,15 +1184,16 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
 
   const noFires = clone(p2);
   noFires.items = noFires.items.map((i) => ({ ...i, fires: null }));
-  teaches(
-    "prune: no fires anywhere draws no axis and states the reading instead",
-    panelOf(noFires, "prune"),
-    [
-      "no fires to plot against",
-      "so the horizontal axis has no range — every mark would sit on the same line",
-      "is being paid across them with nothing recorded against it",
-    ]
-  );
+  {
+    const box = panelBox(panelOf(noFires, "prune"));
+    check(
+      "prune: nothing having fired is the strongest reading, not an empty state",
+      /<p class="verdict"><b>\d+<\/b> items cost you <b>[\d,]+<\/b> tok every session and have never fired/.test(box) &&
+        box.includes('class="sl-list"') &&
+        !box.includes("panel-void"),
+      box.slice(0, 260)
+    );
+  }
 
   const noCut = clone(p2);
   delete noCut.budgetCut;
@@ -1278,11 +1288,19 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   );
   const lb = panelBox(panelOf(p2, "budget"));
   check(
-    "the budget bar states the modelled order and what a drop actually costs",
-    lb.includes("<b>105%</b> of budget · <b>1</b> description dropped") &&
-      lb.includes("needs <b>420</b> chars freed to fit") &&
-      lb.includes("A dropped skill still exists and can still be typed; it just stops auto-triggering."),
-    "budget panel wrong"
+    "the listing view leads with what is happening to the skills, not with a percentage",
+    lb.includes("<b>1</b> of your skills' description is not loading.") &&
+      lb.includes("shared budget of about <b>8,000</b> characters") &&
+      lb.includes("Free <b>420</b> characters and it comes back.") &&
+      lb.includes("it just stops auto-triggering, which looks exactly like the model ignoring you"),
+    "budget verdict wrong"
+  );
+  check(
+    "…and keeps the per-row headroom and the drawing as evidence beneath it",
+    lb.includes("needs <b>420</b> chars freed to fit") &&
+      lb.includes("show the listing against its budget") &&
+      lb.indexOf('class="verdict"') < lb.indexOf("lb-chart"),
+    "budget evidence missing or above the finding"
   );
   const mismatch = clone(p2);
   mismatch.header.listing.chars = 8999;
@@ -1430,7 +1448,8 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
 console.log("\nRENDER unit (the qualifier rule):");
 
 {
-  const prov = app2.slice(app2.indexOf(`<section class="prov"`), app2.indexOf("</section>", app2.indexOf(`<section class="prov"`)));
+  const openApp2 = R.renderApp(p2, { ...R.defaultState(), provOpen: true });
+  const prov = openApp2.slice(openApp2.indexOf(`<section class="prov`), openApp2.indexOf("</section>", openApp2.indexOf(`<section class="prov`)));
   check(
     "the provenance statement is complete: what was read, the window, when tracking began, what a fire is",
     /<b>11<\/b> instruction files scanned/.test(prov) &&
@@ -1452,6 +1471,7 @@ console.log("\nRENDER unit (the qualifier rule):");
     R.renderApp(p2, { ...R.defaultState(), selected: "id-agent-priced" }),
     R.renderApp(p2, { ...R.defaultState(), selected: "id-blind" }),
     R.renderApp(p2, { ...R.defaultState(), nav: "all" }),
+    openApp2,
   ].join("\n");
   for (const [kind, term] of [
     ["window", "measured over a different provider&#39;s window"],
@@ -1546,24 +1566,25 @@ console.log("\nRENDER unit (the qualifier rule):");
 // reader, and one that must be dismissed is one they dismiss before reading.
 {
   const vis = visible(app2);
+  const visOpen = visible(R.renderApp(p2, { ...R.defaultState(), provOpen: true }));
   const defined = [
-    ["fire", "A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"],
-    ["cost / session", "<b>cost / session</b>tokens loaded into the model&#39;s context before you type, every session, used or not"],
-    ["window", "counted from <b>87</b> transcripts covering 2026-06-24 → 2026-08-04 (<b>41d</b>)"],
-    ["tracked since", "the durable ledger since <b>2026-03-01</b>"],
-    ["listing budget", "<b>listing budget</b>the ~8,000 characters Claude Code allows every enabled skill&#39;s name and description"],
+    ["fire", visOpen, "A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"],
+    ["fire (at the column that counts them)", vis, `<span class="thdef">a fire is one recorded dispatch</span>`],
+    ["cost / session", vis, `<span class="thdef">loaded before you type, every session</span>`],
+    ["window", visOpen, "counted from <b>87</b> transcripts covering 2026-06-24 → 2026-08-04 (<b>41d</b>)"],
+    ["tracked since", vis, "<i>tracked</i>2026-03-01"],
+    ["listing budget", visible(R.renderResults(p2, { ...R.defaultState(), nav: "budget" })), "shared budget of about <b>8,000</b> characters"],
+    // Defined where the amber first appears, which is the only placement that
+    // holds on a payload whose prune shortlist happens to carry no amber row.
+    [
+      "dead weight",
+      visible(R.renderResults(payload, R.defaultState())),
+      "amber = <em>dead weight</em>, a cost paid with nothing recorded against it",
+    ],
   ];
-  for (const [term, def] of defined) {
-    check(`"${term}" is defined in the rendered layout, not in an attribute`, vis.includes(def), `definition of ${term} missing`);
+  for (const [term, where, def] of defined) {
+    check(`"${term}" is defined in the rendered layout, not in an attribute`, where.includes(def), `definition of ${term} missing`);
   }
-  const dw = R.renderApp(payload, R.defaultState());
-  check(
-    `"dead weight" is defined where the amber first appears, and only when it does`,
-    visible(dw).includes(
-      "<b>dead weight</b>at least a quarter of your priciest item&#39;s cost, nothing recorded against it, and installed before the window opened"
-    ) && !vis.includes("<b>dead weight</b>"),
-    "dead-weight definition missing, or shown with nothing to define"
-  );
 }
 
 // --- the sidebar, against the hard-ban list ---------------------------------
@@ -1597,7 +1618,7 @@ console.log("\nRENDER unit (the qualifier rule):");
   );
   check(
     "the foot carries the window span and the caveat count, both on one control",
-    /<button class="provlink" data-prov>41d · 2 caveats<\/button>/.test(side),
+    /<button class="provlink" data-prov aria-expanded="false">/.test(side) && side.includes("<i>window</i>41d"),
     "sidebar foot wrong"
   );
 }

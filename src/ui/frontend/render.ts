@@ -49,8 +49,21 @@ export interface AppState {
    * changes only whether the figures are drawn, never what they say.
    */
   statBar: boolean;
-  /** The caveat list inside the provenance statement, opened from the sidebar foot. */
+  /**
+   * Which calibration of the palette to draw: the canonical dark instrument,
+   * the light bench manual, or whatever the system asks for. Held here like
+   * every other view state — main.ts stamps it on the root element — and
+   * neither setting changes a single figure.
+   */
+  theme: "auto" | "dark" | "light";
+  /** The full provenance statement and its caveats, opened from the sidebar foot. */
   provOpen?: boolean;
+  /**
+   * Rows the prune shortlist has checked for disabling. Ids, so the set
+   * survives a re-sort; cleared whenever the payload is replaced, because a
+   * toggle moves a directory and the path-derived ids move with it.
+   */
+  checked?: string[];
   /**
    * An explicit id set the table is narrowed to: what a prune-quadrant click
    * produces. It carries its own label because it is rendered as a chip in the
@@ -87,6 +100,7 @@ export function defaultState(): AppState {
   return {
     nav: "all",
     statBar: true,
+    theme: "auto",
     log: [],
     providers: [],
     query: "",
@@ -1047,8 +1061,6 @@ function sidebar(payload: UiPayload, state: AppState): string {
   const active = navKey(payload, state);
   const counts = new Map(liveCounts(payload, state).map((c) => [`${c.group}\0${c.key}`, c.count]));
   const n = (k: string): number => counts.get(`nav\0${k}`) ?? 0;
-  const win = usageWindow(payload);
-  const cav = caveatList(payload);
 
   // A mark rides an entry only where the page already treats that state as
   // one, in the tone that fact already carries: the listing readout's
@@ -1099,13 +1111,16 @@ function sidebar(payload: UiPayload, state: AppState): string {
       )}
     </div>
     <div class="sidefoot">
-      <button class="provlink" data-prov>${esc(win.span || "no window")} · ${fmtInt(cav.length)} caveat${plural(cav.length)}</button>
+      ${provLink(payload, state)}
       <span class="sidestamp">rev ${esc(payload.version)} · ${esc(fmtStamp(payload.generatedAt).slice(11))} · ${fmtInt(payload.tookMs)} ms</span>
       <div class="sideacts">
         <button class="btn rescan" data-rescan${state.busy ? " disabled" : ""}>${state.busy ? "scanning…" : "rescan"}</button>
         <button class="btn vstat${state.statBar ? " on" : ""}" data-statbar aria-pressed="${state.statBar}" title="${esc(
           "Draw the headline figures above the content. Every figure stays exactly what it was either way — this decides only whether they are drawn."
         )}">stats</button>
+        <button class="btn vstat" data-theme-toggle title="${esc(
+          "Switch between the dark instrument and the light bench manual. Both are calibrated; neither changes a figure."
+        )}">${state.theme === "light" ? "dark" : "light"}</button>
       </div>
     </div>
   </nav>`;
@@ -1184,17 +1199,39 @@ function viewBar(payload: UiPayload, state: AppState): string {
 // --- the provenance statement -----------------------------------------------
 
 /**
- * The one statement that licenses deleting the rest of the page's text.
+ * The always-on face of the provenance statement, in the sidebar foot where it
+ * costs the content nothing.
+ *
+ * The full statement used to sit above every view: ~90px of dense qualifier
+ * text in the first reading position, which made the least actionable thing on
+ * the page the first thing the eye landed on. What stays visible at all times
+ * is the part a reader needs to interpret any figure — the window, the
+ * tracking date, and the fact that `°` means a figure this does not describe —
+ * and the control opens the rest in full.
+ */
+function provLink(payload: UiPayload, state: AppState): string {
+  const win = usageWindow(payload);
+  const since = trackedSince(payload);
+  const cav = caveatList(payload);
+  return `<button class="provlink${state.provOpen ? " on" : ""}" data-prov aria-expanded="${!!state.provOpen}">
+    <span><i>window</i>${esc(win.span || "not scanned")}</span>
+    ${since ? `<span><i>tracked</i>${esc(fmtDay(since))}</span>` : ""}
+    <span><i>caveats</i>${fmtInt(cav.length)}</span>
+  </button>`;
+}
+
+/**
+ * The statement itself, opened from that control.
  *
  * It covers, in one place: how many transcripts were read, the window they
  * cover, when durable tracking began, and what a FIRE is. Every figure that
  * matches it carries nothing at all; every figure that does not carries the
- * one deviation mark, and the legend here names the kinds actually present.
+ * one deviation mark, and the legend names the kinds actually present.
  *
- * The terms strip beside it defines each word at its first appearance IN THE
- * LAYOUT. A definition that only exists on hover does not exist for a
- * first-time reader, and one that must be dismissed is one they will dismiss
- * before reading it.
+ * The individual TERMS are no longer a strip here — each one is defined at its
+ * own first appearance instead, which is what the rule always asked for: `cost
+ * / session` and `fire` under their column heads, `listing budget` and `dead
+ * weight` in the verdict sentences of the views that report them.
  */
 function provenanceBlock(payload: UiPayload, state: AppState): string {
   const win = usageWindow(payload);
@@ -1236,44 +1273,24 @@ function provenanceBlock(payload: UiPayload, state: AppState): string {
   // is where context belongs.
   const statement = `<p class="provline"><b>${fmtInt(payload.header.items)}</b> instruction file${plural(payload.header.items)} scanned${payload.header.providers > 1 ? ` across <b>${fmtInt(payload.header.providers)}</b> providers` : ""}. A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name — ${counted}${tracking}.${backfill}${retention}${legend}</p>`;
 
-  const term = (t: string, d: string): string =>
-    `<span class="term"><b>${esc(t)}</b>${esc(d)}</span>`;
-  const anyDead = payload.items.some((i) =>
-    isDeadWeight(i, Math.max(...payload.items.map((x) => x.injectedChars), 0), win)
-  );
-  const terms = onInventory
-    ? `<p class="terms">${
-        term("cost / session", "tokens loaded into the model's context before you type, every session, used or not") +
-        (payload.header.listing
-          ? term(
-              "listing budget",
-              `the ~${fmtInt(payload.header.listing.budgetChars)} characters Claude Code allows every enabled skill's name and description; past it the least-invoked stop loading`
-            )
-          : "") +
-        (anyDead
-          ? term(
-              "dead weight",
-              "at least a quarter of your priciest item's cost, nothing recorded against it, and installed before the window opened"
-            )
-          : "")
-      }</p>`
-    : "";
-
+  // The page's purpose, once, on the inventory. One line at reading size beats
+  // five lines of qualifier text for a first-time visitor, and the qualifiers
+  // are a click away in the same place they have always been.
   const lede = onInventory
     ? `<p class="lede">What your AI tools load before you type — what it costs, what never fires, and what is flagged.</p>`
     : "";
 
-  // The caveats are part of this statement, not a strip of their own — but a
-  // collapsed disclosure still costs the inventory a row of height for a
-  // summary line the sidebar foot already prints. So the foot IS the control:
-  // it announces the count at all times, and opening it renders the list here,
-  // where the figures it qualifies are.
+  // Closed, this whole block is one line. Open, it is the full statement and
+  // every caveat on it — read where the figures it qualifies are, rather than
+  // in front of them.
+  if (!state.provOpen) return lede ? `<section class="prov">${lede}</section>` : "";
+
   const caveats =
-    cav.length > 0 && state.provOpen
+    cav.length > 0
       ? `<ul class="cav">${cav.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`
       : "";
 
-  return `<section class="prov" aria-label="provenance">${lede}${statement}${terms}${caveats}</section>`;
+  return `<section class="prov open" aria-label="provenance">${lede}${statement}${caveats}</section>`;
 }
 
 /**
@@ -1291,8 +1308,12 @@ const COLS: { key: SortKey; label: string; cls?: string; def?: string }[] = [
   { key: "name", label: "name", cls: "c-name" },
   { key: "source", label: "provider" },
   { key: "scope", label: "scope" },
-  { key: "injected", label: "cost / session", cls: "c-num" },
-  { key: "activity", label: "activity", cls: "c-act-col" },
+  // The two terms this table introduces are defined under the heads that
+  // introduce them. That is what "defined at its first appearance, in the
+  // layout" actually asks for — a strip of definitions at the top of the page
+  // is a glossary, and a glossary is a thing you have to go and read.
+  { key: "injected", label: "cost / session", cls: "c-num", def: "loaded before you type, every session" },
+  { key: "activity", label: "activity", cls: "c-act-col", def: "a fire is one recorded dispatch" },
   { key: "findings", label: "flags" },
 ];
 
@@ -1420,7 +1441,7 @@ function tableHead(state: AppState, cols: typeof COLS): string {
       // cut every cell loose from its header in the accessibility tree. The
       // sort state is announced by aria-sort, which is what it is for.
       const sorted = active ? ` aria-sort="${state.sort.dir === 1 ? "ascending" : "descending"}"` : "";
-      return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}" data-sort="${c.key}" tabindex="0"${sorted}>${esc(c.label)}<s aria-hidden="true">${arrow}</s></th>`;
+      return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}" data-sort="${c.key}" tabindex="0"${sorted}><span class="thlab">${esc(c.label)}<s aria-hidden="true">${arrow}</s></span>${c.def ? `<span class="thdef">${esc(c.def)}</span>` : ""}</th>`;
     })
     .join("");
   return `<tr>${cells}<th class="c-act"><span class="sr">actions</span></th></tr>`;
@@ -1576,44 +1597,18 @@ function activityCell(item: UiItem, mergedWin: Window, win: Window): string {
     ? `${fmtInt(f.lifetime.invocations)} lifetime across ${fmtInt(f.lifetime.sessions)} ${noun}${plural(f.lifetime.sessions)}${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""} · ${fmtInt(f.invocations)} in the ${win.span || "scanned"} window, a separate pass over this provider's own store.`
     : `${fmtInt(f.invocations)} across ${fmtInt(f.sessions)} ${noun}${plural(f.sessions)}${f.firstFired ? ` · first ${fmtDay(f.firstFired)}` : ""}.`;
 
-  // Table-level dispatch and waste facts. Each is a DIFFERENT fact from the
-  // count beside it, not a qualifier on it, so none of them is a repetition —
-  // and each appears only when its fact does, never as empty chrome.
-  const typedOnly =
-    f.byChannel && f.byChannel.auto === 0 && f.byChannel.typed > 0
-      ? ` <span class="badge fact" title="${esc(`Every recorded fire was user-typed${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""} — the model has not reached for this on its own.`)}">never auto-fired</span>`
-      : "";
-  const interrupted =
-    f.interruptedAfter > 0
-      ? ` <span class="badge fact" title="${esc(`${fmtInt(f.interruptedAfter)} of ${fmtInt(f.invocations)} fires stopped mid-run — the body tokens had already loaded.`)}">${fmtInt(f.interruptedAfter)} interrupted (~${fmtInt(tokens(item.bodyChars * f.interruptedAfter))} tok${f.invocations > 0 ? `, ${Math.round((f.interruptedAfter / f.invocations) * 100)}% of fires` : ""})</span>`
-      : "";
-  // Tried and dropped: every recorded fire inside one 7-day span, withheld
-  // while that burst is still recent — an item first used yesterday has all
-  // its fires inside one span too, and "dropped" would be a verdict on
-  // something that has barely started.
-  const sp = f.spread;
-  const burst =
-    sp?.oneBurst && trendOf(f.weeklyBins, win.asOf)?.trend !== "new"
-      ? ` <span class="badge fact" title="${esc(
-          `All ${fmtInt(n)} recorded fires landed within ${sp.spanDays === 0 ? "a single day" : `one ${fmtInt(sp.spanDays)}-day span`}` +
-            `${f.lifetime?.firstFired ?? f.firstFired ? ` (${fmtDay(f.lifetime?.firstFired ?? f.firstFired)} → ${fmtDay(f.lifetime?.lastFired ?? f.lastFired)})` : ""}` +
-            `${f.quiet ? `, and nothing since — ${fmtInt(f.quiet.days)}d ago` : ", and nothing since"}.` +
-            `${f.trackedSince ? ` Measured over the ledger's record since ${fmtDay(f.trackedSince)}.` : ""}`
-        )}">tried &amp; dropped</span>`
-      : "";
-  const scopeIn = item.scopeNote?.allFiresIn;
-  const scopeShort = scopeIn && scopeIn.length > 22 ? `${scopeIn.slice(0, 21)}…` : scopeIn;
-  const scope = scopeIn
-    ? ` <span class="badge fact" title="${esc(
-        `Every recorded fire of this ${item.scope}-scoped item landed in one project: ${scopeIn}. Its cost is paid in every session in every project; its recorded use is in that one.`
-      )}">only in ${esc(scopeShort)}</span>`
-    : "";
-
+  // The four fact badges that used to ride here — never auto-fired,
+  // interrupted, tried & dropped, only-in-one-project — moved to the drawer.
+  // Each is a DIFFERENT fact from the count beside it rather than a
+  // repetition, so none of them was wrong to state; but four of them on one
+  // cell pushed the row past the right edge of a real window, and a fact you
+  // cannot read because it is clipped is not a fact you have shown anyone.
+  // Every one is stated in full, with its own method, in "is it used".
   return `<td class="c-act-col" title="${esc(title)}"><span class="afig">${fmtInt(n)} fire${plural(n)}</span>${lastPart}${trendGlyph(
     f,
     win,
     quietBudgetNote(item, f, win)
-  )}${windowMark}${typedOnly}${burst}${scope}${interrupted}</td>`;
+  )}${windowMark}</td>`;
 }
 
 function row(
@@ -2721,7 +2716,7 @@ export function renderResults(payload: UiPayload, state: AppState): string {
   <div class="foot">
     <span class="live"><i></i>127.0.0.1 — local only, nothing leaves the machine</span>
     ${analysis ? "" : `<span>${fmtInt(shown)} / ${fmtInt(base)} ${esc(noun)} shown</span>`}
-    ${anyDead ? `<span class="footdw">amber cost = dead weight</span>` : ""}
+    ${anyDead ? `<span class="footdw">amber = <em>dead weight</em>, a cost paid with nothing recorded against it</span>` : ""}
     ${state.error && !state.selected ? `<span class="footerr" role="alert">${esc(state.error)}</span>` : ""}
     <span class="dim">${esc(payload.root)}</span>
   </div>`;

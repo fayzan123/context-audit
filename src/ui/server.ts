@@ -238,6 +238,56 @@ export async function startUiServer(
         });
       }
 
+      // Turn off a set in one request. The prune shortlist's whole point is
+      // that pruning is a batch job — 68 rows through /api/toggle would be 68
+      // full rescans, minutes of wall clock, for one decision the user already
+      // made. Every item runs the SAME guards as the single toggle (the ids
+      // are still the only thing taken from the client, and the paths still
+      // come from the server's own inventory); only the rescan is shared.
+      //
+      // Partial failure is reported, never swallowed: a refused item is named
+      // with its reason, and the ones that did move still moved.
+      if (url.pathname === "/api/toggle-many" && req.method === "POST") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const ids: unknown = body?.ids;
+        if (!Array.isArray(ids) || ids.length === 0 || ids.some((i) => typeof i !== "string")) {
+          return sendJson(res, 400, { ok: false, error: "ids must be a non-empty array of item ids" });
+        }
+        const done: { name: string; from: string; to: string }[] = [];
+        const refused: { name: string; error: string }[] = [];
+        for (const id of ids as string[]) {
+          const item = payload.items.find((i) => i.id === id);
+          if (!item) {
+            refused.push({ name: id, error: "unknown item — rescan and retry" });
+            continue;
+          }
+          if (!item.togglable) {
+            refused.push({ name: item.name, error: item.readOnlyReason ?? "this item cannot be toggled" });
+            continue;
+          }
+          if (item.twinPath) {
+            refused.push({
+              name: item.name,
+              error: `exists both enabled and disabled (${item.path} and ${item.twinPath}) — resolve the duplicate first`,
+            });
+            continue;
+          }
+          const result = performToggle(item.path, skillRoots);
+          if (!result.ok) {
+            refused.push({ name: item.name, error: result.error });
+            continue;
+          }
+          console.log(`context-audit ui: ${result.action}d ${plain(item.name)} (${plain(result.from)} → ${plain(result.to)})`);
+          done.push({ name: item.name, from: result.from, to: result.to });
+        }
+        return sendJson(res, 200, {
+          ok: true,
+          done: done.map((d) => d.name),
+          refused,
+          payload: await rescan(),
+        });
+      }
+
       if (url.pathname === "/api/open" && req.method === "POST") {
         const body = JSON.parse((await readBody(req)) || "{}");
         const item = payload.items.find((i) => i.id === body?.id);

@@ -50,6 +50,15 @@ const n2 = (v: number): string => (Number.isFinite(v) ? String(Math.round(v * 10
 
 const fmtDay = (iso?: string): string => (iso ? iso.slice(0, 10) : "");
 
+/** Whole days between two ISO stamps — the scan stamp is the only clock. */
+function daysBetween(from: string, asOf?: string): number | undefined {
+  if (!asOf) return undefined;
+  const a = Date.parse(from);
+  const b = Date.parse(asOf);
+  if (Number.isNaN(a) || Number.isNaN(b)) return undefined;
+  return Math.max(0, Math.floor((b - a) / 86_400_000));
+}
+
 /** "2026-08-05" → "08-05"; the year rides on the first tick only. */
 const fmtMd = (iso: string): string => iso.slice(5, 10);
 
@@ -103,7 +112,7 @@ function svgLabel(
   opts: { cls?: string; size?: number; anchor?: string; opacity?: number; rotate?: number } = {}
 ): string {
   const t = opts.rotate ? ` transform="rotate(${opts.rotate} ${n2(x)} ${n2(y)})"` : "";
-  return `<text class="svg-engr${opts.cls ? ` ${opts.cls}` : ""}" x="${n2(x)}" y="${n2(y)}"${t} fill="currentColor" font-size="${opts.size ?? 9.5}" opacity="${opts.opacity ?? 0.62}" text-anchor="${opts.anchor ?? "start"}">${esc(text)}</text>`;
+  return `<text class="svg-engr${opts.cls ? ` ${opts.cls}` : ""}" x="${n2(x)}" y="${n2(y)}"${t} fill="currentColor" font-size="${opts.size ?? 11}" opacity="${opts.opacity ?? 0.62}" text-anchor="${opts.anchor ?? "start"}">${esc(text)}</text>`;
 }
 
 /** Tabular figure inside an SVG — numbers are the protagonist, so they align. */
@@ -133,7 +142,7 @@ function panel(key: string, title: string, capHtml: string, bodyHtml: string): s
   return `<section class="panelbox panel-${esc(key)}" data-panel="${esc(key)}" aria-label="${esc(title)}">
     <div class="panel-head">
       <span class="engr">${esc(title)}</span>
-      <p class="panel-cap">${capHtml}</p>
+      ${capHtml ? `<p class="panel-cap">${capHtml}</p>` : ""}
     </div>
     ${bodyHtml}
   </section>`;
@@ -416,12 +425,24 @@ function quadGlyph(key: QuadrantKey): string {
   return `<svg class="qglyph" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">${cells.join("")}</svg>`;
 }
 
-export function renderPruneQuadrant(payload: UiPayload, state: AppState): string {
+/**
+ * The prune view, which is the product: what should I turn off?
+ *
+ * It used to open on a cost × fires scatter and make the reader derive the
+ * answer from it. On a real machine the median fire count is 0 — half the
+ * marks stack on a single vertical line — so the quadrant split degenerates
+ * and two paragraphs of method sit above a plot that says "most of these have
+ * never fired". That sentence is the finding, and the payload already knew it.
+ *
+ * So the view now LEADS with the verdict in plain words, follows it with the
+ * shortlist as a list you can act on, and keeps the distribution behind a
+ * disclosure for anyone who wants to see the shape rather than the answer.
+ */
+export function renderPrune(payload: UiPayload, state: AppState): string {
   const m = pruneModel(payload, state);
   const win = m.win;
   const key = "prune";
-  const title = "prune quadrant";
-
+  const title = "prune";
   const base = navBase(payload, state).length;
   const scopeWord = scopeNoun(payload, state);
 
@@ -437,18 +458,6 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
             `A cost × fires scatter needs a fire count that exists and a cost that is actually being paid. An item whose use cannot be counted either way is not a zero, and a disabled item is not a cost.`,
           ];
     return panelEmpty(key, title, "nothing to plot in this scope", why);
-  }
-
-  if (m.maxFires === 0) {
-    // No fires anywhere in the plotted set: there is no fires axis to draw.
-    // Saying so is the finding; drawing an axis of zeros would dress the same
-    // absence up as a measurement.
-    const chars = m.items.reduce((a, x) => a + x.item.injectedChars, 0);
-    return panelEmpty(key, title, "no fires to plot against", [
-      `All <b>${fmtInt(m.items.length)}</b> plotted ${esc(scopeWord)} recorded zero fires ${m.windowsDiffer ? `each in its own provider's window (${esc(m.windowList)})` : win.span ? `in the ${esc(win.span)} window` : "in the scanned history"}, so the horizontal axis has no range — every mark would sit on the same line.`,
-      `That is itself the reading: <b>${fmtInt(tokens(chars))}</b> tok/session is being paid across them with nothing recorded against it.`,
-      `<span class="cap-win">${esc(win.note)}</span>`,
-    ]);
   }
 
   // --- geometry ---
@@ -496,12 +505,12 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
       .join("") +
     svgLabel(x0, y1 + 36, m.windowsDiffer ? "fires · each row's own provider window" : win.span ? `fires · ${win.span} window` : "fires · scanned history", {
       cls: "ax-title",
-      size: 9.5,
+      size: 11,
       opacity: 0.7,
     }) +
     svgLabel(18, (y0 + y1) / 2, "tok / session", {
       cls: "ax-title",
-      size: 9.5,
+      size: 11,
       opacity: 0.7,
       anchor: "middle",
       rotate: -90,
@@ -519,14 +528,14 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
       m.medianFires === 0
         ? `median 0 fires — half these items have none`
         : `median ${fmtInt(m.medianFires)} fires`,
-      { cls: "xhair-lab", size: 9, opacity: 0.72 }
+      { cls: "xhair-lab", size: 11, opacity: 0.72 }
     ) +
     // Sat ON the line, which put it through any mark that happened to be at
     // the right-hand end of the median. Lifted clear; the stylesheet gives
     // .xhair-lab a surface halo for the cases that still graze a mark.
     svgLabel(x1 - 2, cy - 9, `median ${fmtInt(m.medianTok)} tok/session`, {
       cls: "xhair-lab",
-      size: 9,
+      size: 11,
       opacity: 0.72,
       anchor: "end",
     });
@@ -621,29 +630,122 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
       ? ` <button class="inlineclear" data-clear>clear filters</button> to plot all ${fmtInt(base)}.`
       : "";
 
-  const cap =
-    `<b>${fmtInt(m.items.length)}</b> of ${fmtInt(base)} ${esc(scopeWord)} in this scope, plotted on real units: always-in-context cost against fires recorded ${m.windowsDiffer ? `each in its own provider's window` : win.span ? `in the ${esc(win.span)} window` : "in the scanned history"}. ` +
-    (m.windowsDiffer
-      ? `Those are not one window (${esc(m.windowList)}): the stores keep different amounts of history, so a mark further right can mean a longer horizon rather than more use — each mark states the span it was counted over. ` +
-        `The medians are read off the marks as plotted, which makes them a split of this drawing, not a comparison of like with like. `
-      : "") +
-    `The crosshair is the median of each axis, drawn between the two halves it splits; an item exactly at a median counts in the lower half. ` +
-    `Amber marks dead weight, and only in the costly / quiet quadrant.` +
-    (excluded.length > 0 ? ` ${excluded.join(" · ")}.` : "") +
-    filtered +
-    `<span class="cap-win">${esc(win.note)}</span>`;
+  // --- the verdict, and then the list ---------------------------------------
+  //
+  // The shortlist IS the costly-and-quiet quadrant: above the median cost,
+  // at or below the median fire count. It is the same set the plot marks, in
+  // the same order the cost column sorts, as rows you can act on.
+  const short = m.items
+    .filter((x) => x.quad === "costly-quiet")
+    .sort((x, y) => y.tok - x.tok || x.item.name.localeCompare(y.item.name));
+  const shortTok = tokens(short.reduce((acc, x) => acc + x.item.injectedChars, 0));
+  const totalTok = tokens(payload.header.injectedChars);
+  const share = totalTok > 0 ? Math.round((shortTok / totalTok) * 100) : 0;
+  const dead = short.filter((x) => x.dead).length;
+  const silent = short.filter((x) => x.fires === 0).length;
 
-  const body = `<div class="pq-body">
-    <div class="pq-plot">${svg}</div>
-    <div class="pq-side">
-      <div class="pq-grid">${QUAD_ORDER.map(readout).join("")}</div>
-      ${legend}
-      <p class="kv-note">Summed cost is characters added first and converted once, the way the stat bar's total is — per-item rounding would drift the two apart.</p>
-      ${wholeMachine(payload)}
-    </div>
+  // What the reader came for, in one sentence at reading size. Every figure in
+  // it is one the payload already computed; none of it is new arithmetic.
+  const verdict =
+    short.length === 0
+      ? `Nothing is both expensive and unused. Every item above the median cost has fired at least ${fmtInt(m.medianFires + 1)} time${m.medianFires + 1 === 1 ? "" : "s"} in the window.`
+      : `<b>${fmtInt(short.length)}</b> ${esc(scopeWord)} cost you <b>${fmtInt(shortTok)}</b> tok every session` +
+        (silent === short.length
+          ? ` and have never fired`
+          : ` and are used less than half your inventory`) +
+        (share > 0 ? ` — <b>${fmtInt(share)}%</b> of what your whole setup costs.` : ".");
+
+  const rows = short
+    .map((x) => {
+      const it = x.item;
+      const age = it.provenance ? daysBetween(it.provenance.installedAt, win.asOf) : undefined;
+      const use =
+        x.fires > 0
+          ? `${fmtInt(x.fires)} fire${x.fires === 1 ? "" : "s"}`
+          : `never used${age !== undefined && age > 0 ? ` · ${fmtInt(age)}d old` : ""}`;
+      const on = (state.checked ?? []).includes(it.id);
+      // Only a togglable row offers the checkbox: a plugin asset or a
+      // project-scoped file cannot be turned off from here, and a control that
+      // would refuse is worse than no control. The row still lists, with its
+      // reason, because the cost is real either way.
+      return `<li class="sl-row${x.dead ? " dw" : ""}${on ? " on" : ""}" data-id="${esc(it.id)}">
+        ${
+          it.togglable && it.enabled
+            ? `<button class="sl-box" data-check="${esc(it.id)}" role="checkbox" aria-checked="${on}" aria-label="${esc(`select ${it.name} to turn off`)}"><i></i></button>`
+            : `<span class="sl-box ro" title="${esc(it.readOnlyReason ?? "read-only")}">—</span>`
+        }
+        <span class="sl-name"><i class="kg kg-${esc(it.kind)}" aria-hidden="true">${esc(KIND_GLYPH[it.kind] ?? "")}</i>${esc(it.name)}</span>
+        <span class="sl-tok">${fmtInt(x.tok)}<i>tok</i></span>
+        <span class="sl-use">${esc(use)}</span>
+      </li>`;
+    })
+    .join("");
+
+  const checked = (state.checked ?? []).filter((id) => short.some((x) => x.item.id === id));
+  const checkedTok = tokens(
+    short.filter((x) => checked.includes(x.item.id)).reduce((acc, x) => acc + x.item.injectedChars, 0)
+  );
+  // The action states exactly what it will do and what it will save, and it
+  // says where the files go — this moves directories, and a reader deserves to
+  // know that before clicking rather than after.
+  const action = `<div class="sl-act">
+    <button class="btn sl-go" data-disable-checked${checked.length === 0 || state.busy ? " disabled" : ""}>${
+      state.busy ? "turning off…" : `turn off ${fmtInt(checked.length)} selected`
+    }</button>
+    <span class="sl-save">${checked.length > 0 ? `saves <b>${fmtInt(checkedTok)}</b> tok every session` : "select rows to see what they cost you"}</span>
+    <button class="sl-all" data-check-all>${checked.length === short.length && short.length > 0 ? "clear all" : "select all"}</button>
   </div>`;
 
-  return panel(key, title, cap, body);
+  // How much of this list the action can actually reach. On a machine that is
+  // mostly agents and plugin assets that is a MINORITY of the rows, and a
+  // verdict counting 84 above a control that can move 24 would be the page
+  // promising something it cannot do.
+  const actionable = short.filter((x) => x.item.togglable && x.item.enabled).length;
+  const reach =
+    actionable === short.length
+      ? ""
+      : `<b>${fmtInt(actionable)}</b> of these can be turned off from here; the rest are agents, plugin assets or project-scoped files, which this tool measures but does not move — their cost is real either way. `;
+
+  const note =
+    reach +
+    `Nothing is deleted: a disabled skill moves to <code>~/.claude/skills-disabled</code> and its fire history is kept, so turning one back on is the same click. ` +
+    (dead > 0
+      ? `<b>${fmtInt(dead)}</b> of these are <em>dead weight</em> — at least a quarter of your priciest item's cost, nothing recorded against them, and installed before the window opened.`
+      : "");
+
+  const excludedNote = excluded.length > 0 ? `<p class="kv-note">${excluded.join(" · ")}.${filtered}</p>` : "";
+
+  // The distribution, for anyone who wants the shape rather than the answer.
+  // Closed by default: it is evidence, and evidence goes under the finding.
+  const plot = `<details class="pq-fold">
+    <summary>show the cost × use distribution</summary>
+    <p class="panel-cap">${
+      `<b>${fmtInt(m.items.length)}</b> of ${fmtInt(base)} ${esc(scopeWord)} plotted on real units: always-in-context cost against fires recorded ${m.windowsDiffer ? "each in its own provider's window" : win.span ? `in the ${esc(win.span)} window` : "in the scanned history"}. ` +
+      (m.windowsDiffer
+        ? `Those are not one window (${esc(m.windowList)}): the stores keep different amounts of history, so a mark further right can mean a longer horizon rather than more use. `
+        : "") +
+      `The crosshair is the median of each axis, drawn between the two halves it splits; an item exactly at a median counts in the lower half.`
+    }</p>
+    <div class="pq-body">
+      <div class="pq-plot">${svg}</div>
+      <div class="pq-side">
+        <div class="pq-grid">${QUAD_ORDER.map(readout).join("")}</div>
+        ${legend}
+      </div>
+    </div>
+  </details>`;
+
+  const body = `<div class="sl">
+    <p class="verdict">${verdict}</p>
+    ${short.length > 0 ? `${action}<ol class="sl-list">${rows}</ol>` : ""}
+    <p class="kv-note">${note}</p>
+    ${excludedNote}
+    ${wholeMachine(payload)}
+    ${plot}
+    <p class="kv-note cap-win">${esc(win.note)}</p>
+  </div>`;
+
+  return panel(key, title, "", body);
 }
 
 // --- 2. listing budget -----------------------------------------------------
@@ -732,11 +834,11 @@ export function renderListingBudget(payload: UiPayload, state: AppState): string
     `<line class="lb-cut" x1="${n2(cutX)}" y1="${barY - 14}" x2="${n2(cutX)}" y2="${barY + barH + 10}" stroke="currentColor" stroke-width="1" opacity="0.85"/>` +
     svgLabel(cutFlip ? cutX - 6 : cutX + 6, barY - 18, `budget ~${fmtInt(budget)} chars`, {
       cls: "lb-cutlab",
-      size: 9.5,
+      size: 11,
       opacity: 0.8,
       anchor: cutFlip ? "end" : "start",
     }) +
-    svgLabel(x0, barY - 18, `keep order · most-fired first`, { size: 9, opacity: 0.55 });
+    svgLabel(x0, barY - 18, `keep order · most-fired first`, { size: 11, opacity: 0.55 });
 
   // The end of the listing, marked where it actually falls relative to the cut.
   const endX = sx(listed);
@@ -745,18 +847,24 @@ export function renderListingBudget(payload: UiPayload, state: AppState): string
     svgNum(endX, barY + barH + 22, `${fmtInt(listed)} chars listed`, {
       anchor: endX > (x0 + x1) / 2 ? "end" : "start",
       opacity: 0.6,
-      size: 9.5,
+      size: 11,
     });
 
   const svg = `<svg class="chart lb-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(`skill listing: ${listed} characters against a ~${budget} character budget, ${dropped.length} descriptions dropped`)}">
     ${defs}${segs}${cutLine}${endMark}
   </svg>`;
 
+  // The finding, in the words a reader thinks it in — "why did Claude stop
+  // seeing my skill?" — with the LISTING BUDGET defined right here, at its
+  // first appearance in this view, rather than in a glossary at the top of the
+  // page. The percentage is still on screen; it just stops being the headline,
+  // because a percentage is not a thing you can act on.
   const verdict = over
-    ? `<span class="lb-verdict dgr"><b>${fmtInt(pct)}%</b> of budget · <b>${fmtInt(dropped.length)}</b> description${dropped.length === 1 ? "" : "s"} dropped</span>
-       <span class="lb-fix">free <b>${fmtInt(cut.headroomChars)}</b> chars and the whole listing fits</span>`
-    : `<span class="lb-verdict"><b>${fmtInt(pct)}%</b> of budget · every description loads</span>
-       <span class="lb-fix"><b>${fmtInt(Math.max(0, budget - listed))}</b> chars of slack before the first description drops</span>`;
+    ? `<b>${fmtInt(dropped.length)}</b> of your skills' description${dropped.length === 1 ? " is" : "s are"} not loading. ` +
+      `Claude Code gives every enabled skill's name and description a shared budget of about <b>${fmtInt(budget)}</b> characters, and past it drops them starting with the ones you invoke least — so ${dropped.length === 1 ? "that skill has" : "those skills have"} quietly stopped auto-triggering. ` +
+      `Free <b>${fmtInt(cut.headroomChars)}</b> characters and ${dropped.length === 1 ? "it comes" : "they all come"} back.`
+    : `Every skill's description is loading. ` +
+      `Claude Code gives them a shared budget of about <b>${fmtInt(budget)}</b> characters and drops the least-invoked past it; you are at <b>${fmtInt(pct)}%</b>, with <b>${fmtInt(Math.max(0, budget - listed))}</b> characters of slack before the first one goes.`;
 
   // Per-dropped item: the headroom IT needs — its own cumulative overflow, so
   // the list reads as "free this much and this row comes back".
@@ -784,19 +892,18 @@ export function renderListingBudget(payload: UiPayload, state: AppState): string
           <p class="kv-note">Every listed description fits inside the budget, so every skill can still auto-trigger.${kept.length > 0 ? ` The last one to fit is <b>${esc(kept[kept.length - 1].name)}</b>, at ${fmtInt(kept[kept.length - 1].cumChars)} of ~${fmtInt(budget)} chars.` : ""}</p>
         </div>`;
 
-  const cap =
-    `Claude Code budgets the skill listing — every enabled skill's name and description — in characters, and past the budget it drops descriptions starting with the skills you invoke least. ` +
-    `This replays that documented order over your real listing: one segment per skill, most-fired first, hatched past the cut. ` +
-    `A dropped skill still exists and can still be typed; it just stops auto-triggering.` +
-    (mismatch ? ` ${mismatch}` : "");
-
   const body = `<div class="lb-body">
-    <div class="lb-state">${verdict}</div>
-    ${svg}
+    <p class="verdict">${verdict}</p>
+    <p class="kv-note">A dropped skill still exists and can still be typed — it just stops auto-triggering, which looks exactly like the model ignoring you.${mismatch ? ` ${mismatch}` : ""}</p>
     ${dropList}
+    <details class="pq-fold">
+      <summary>show the listing against its budget</summary>
+      <p class="panel-cap">One segment per listed skill in the order Claude Code keeps them — most-fired first — hatched past the cut. This replays the documented drop order over your real listing.</p>
+      ${svg}
+    </details>
   </div>`;
 
-  return panel(key, title, cap, body);
+  return panel(key, title, "", body);
 }
 
 // --- 3. provider overlap ---------------------------------------------------
@@ -985,7 +1092,7 @@ export function renderProviderOverlap(
     .join("");
 
   const cap =
-    `Assets more than one provider reads or fires — <b>${fmtInt(rows.length)}</b> of ${fmtInt(navBase(payload, state).length)} in this scope. ` +
+    `<b>${fmtInt(rows.length)}</b> asset${rows.length === 1 ? " is" : "s are"} read or fired by more than one of your tools, and each harness loads and pays for its own copy. ` +
     `A cell carries that provider's recorded fires; <b>read</b> means the provider loads the file but dispatches nothing from it; an empty cell means no record that the provider touches it at all — an absent observation, never a zero. ` +
     (anyPerProvider
       ? `Each column states its own provider's window, because the stores keep different amounts of history and the counts are not like-for-like.`
@@ -1044,7 +1151,7 @@ export function renderGrowth(payload: UiPayload, state: AppState): string {
   // --- geometry: ONE axis. Both series count items, so a second y-scale would
   // be inventing a relationship between them.
   const W = 1160;
-  const H = 340;
+  const H = 210;
   const x0 = 66;
   const x1 = W - 24;
   const y0 = 26;
@@ -1073,15 +1180,15 @@ export function renderGrowth(payload: UiPayload, state: AppState): string {
             svgNum(bx(i) + band / 2, y1 + 16, i === 0 ? fmtDay(w.weekStart) : fmtMd(w.weekStart), {
               anchor: "middle",
               opacity: 0.55,
-              size: 9,
+              size: 11,
             })
           : ""
       )
       .join("") +
-    svgLabel(x0, y1 + 34, "ISO week", { cls: "ax-title", size: 9.5, opacity: 0.62 }) +
+    svgLabel(x0, y1 + 34, "ISO week", { cls: "ax-title", size: 11, opacity: 0.62 }) +
     svgLabel(18, (y0 + y1) / 2, "items", {
       cls: "ax-title",
-      size: 9.5,
+      size: 11,
       opacity: 0.62,
       anchor: "middle",
       rotate: -90,
@@ -1193,18 +1300,37 @@ export function renderGrowth(payload: UiPayload, state: AppState): string {
     <span class="gw-key"><svg class="gw-swatch" viewBox="0 0 22 12" width="22" height="12" aria-hidden="true"><rect x="3" y="3" width="6" height="9" fill="currentColor" fill-opacity="0.26"/><rect x="13" y="6" width="6" height="6" fill="currentColor" fill-opacity="0.26"/></svg>fired<i>distinct items with at least one recorded fire that week — durable ledger events</i></span>
   </div>`;
 
+  // The finding first: two counts of the same thing, and the gap between them
+  // is the whole point. A typical week is the MEDIAN of the observed weeks —
+  // a mean would be dragged by one busy fortnight.
+  const firedWeeks = weeks.map((w) => w.firedItems);
+  const typical = Math.round(median(firedWeeks));
+  const ownedNow = lastObs ? (lastObs.owned as number) : undefined;
+  const verdict =
+    ownedNow !== undefined
+      ? `You own <b>${fmtInt(ownedNow)}</b> instruction files. In a typical week <b>${fmtInt(typical)}</b> of them get used.`
+      : `In a typical week <b>${fmtInt(typical)}</b> of your instruction files get used. No scan snapshot has recorded how many you own, so the owned line has nothing to draw yet.`;
+
   const cap =
     `Both series count items, so they share one axis — a second scale would invent a relationship between them. ` +
     (observed.length === 0
       ? `No week carries an owned observation, so only the bars are drawn. `
       : gaps > 0
-        ? `The owned line starts at the first snapshot observation and breaks over the <b>${fmtInt(gaps)}</b> week${gaps === 1 ? "" : "s"} with none — ticked on the axis. Nothing is interpolated across a gap: joining them would draw a history the snapshots never recorded. `
+        ? `The owned line breaks over the <b>${fmtInt(gaps)}</b> week${gaps === 1 ? "" : "s"} with no snapshot — ticked on the axis, and never interpolated across: joining them would draw a history the snapshots never recorded. `
         : `Every week on record carries an owned observation, so the line runs unbroken. `) +
-    // ownedSource is NOT repeated here: it rides the legend, directly beside
-    // the series it qualifies, where a caption belongs.
     `Each series is captioned with the method it came from.`;
 
-  return panel(key, title, cap, `<div class="gw-body">${svg}${legend}${sinceLastScan(payload)}</div>`);
+  return panel(
+    key,
+    title,
+    "",
+    `<div class="gw-body">
+      <p class="verdict">${verdict}</p>
+      ${svg}${legend}
+      <p class="kv-note">${cap}</p>
+      ${sinceLastScan(payload)}
+    </div>`
+  );
 }
 
 /**
@@ -1263,7 +1389,7 @@ export function renderPanel(
 ): string {
   switch (key) {
     case "prune":
-      return renderPruneQuadrant(payload, state);
+      return renderPrune(payload, state);
     case "budget":
       return renderListingBudget(payload, state);
     case "overlap":
