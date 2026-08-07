@@ -105,13 +105,13 @@ export function discoverProjects(ctx: AuditContext): {
 
 `buildUiPayload` computes the floor once and each live project once:
 
-1. Run the existing engine against `{home, cwd: home}` to establish the **floor** — the user-scope cost paid in every session anywhere. `cwd === home` is precisely the condition under which `inventory.ts`'s scope test marks nothing project-scoped, so this yields user scope by construction rather than by filtering. Verified: it returns 8,697 with `{skill: 49, agent: 133}` and no instruction file, matching the two project directories that add nothing.
+1. Run the existing engine against `{home, cwd: home}` to establish the **floor** — the user-scope cost paid in every session anywhere. `cwd === home` is precisely the condition under which `inventory.ts`'s scope test marks nothing project-scoped, so this yields user scope by construction rather than by filtering. Verified on 0.6.0: it returns 8,697 with `{skill: 49, agent: 110}` and no instruction file, matching the three project directories that add nothing. (The agent count fell from 133 when Part A stopped counting files that are not agent definitions; those rows carried no injected chars, so every cost figure in this spec is unchanged and was re-measured after that shipped.)
 2. For each `live` project, run the existing engine against `{home, cwd: project.path}` and record only what that directory adds, per source.
 3. `gone` projects are carried with their recorded sessions and **no cost figure**.
 
 **No analyzer changes.** `contentFacts`, `securityScan` and the history readers are already parameterized by `SourceContext` and are called exactly as they are today. This is a loop over an existing entry point, which is why the change is tractable.
 
-**The shared work must be hoisted, and this is a requirement rather than a property that falls out.** A naive loop re-walks the 187-item user-scope tree and re-reads 391 transcripts once per project — nine to nineteen times the current 2,837 ms. The user-scope discovery pass and the transcript/ledger read happen **once** and are passed into each per-project build; only per-directory instruction files are read per project. An implementation that calls the current entry point N times unchanged does not satisfy this spec.
+**The shared work must be hoisted, and this is a requirement rather than a property that falls out.** A naive loop re-walks the 164-item user-scope tree and re-reads 391 transcripts once per project — nine to nineteen times the current 2,837 ms. The user-scope discovery pass and the transcript/ledger read happen **once** and are passed into each per-project build; only per-directory instruction files are read per project. An implementation that calls the current entry point N times unchanged does not satisfy this spec.
 
 The current directory is always processed first, so the page is useful before the fleet finishes.
 
