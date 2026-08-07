@@ -41,7 +41,12 @@ export async function auditSource(
     source: adapter.id,
     assets: assets.map((a) => ({ name: a.dirName, kind: a.kind ?? "skill", path: a.dir })),
     content: contentFacts(assets),
-    security: securityScan(assets, opts.strict),
+    // The scan reaches wider than the inventory, and only in this direction: a
+    // file that is not an asset costs nothing and can never fire, so it belongs
+    // in no count — but it is still a file in a directory the model's harness
+    // walks, and leaving it unread would make "not counted" mean "not looked
+    // at". See SourceAdapter.scanOnly.
+    security: securityScan([...assets, ...(adapter.scanOnly?.(ctx) ?? [])], opts.strict),
   };
   // Ledger-banking failures are collected here rather than pushed onto the
   // adapter's own caveats, because caveats() cannot be called until after

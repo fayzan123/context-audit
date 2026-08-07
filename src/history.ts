@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { basename, join, sep } from "node:path";
-import { LEDGER_SCHEMA_VERSION, NAME_RE } from "./ledger.js";
+import { AGENT_NAME_RE, LEDGER_SCHEMA_VERSION, NAME_RE } from "./ledger.js";
 import type { AssetKind, HistoryFacts, LedgerChannel, LedgerEvent, Skill, SkillUsage } from "./types.js";
 
 interface Invocation {
@@ -339,10 +339,15 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
           } else {
             continue;
           }
-          // Dispatch tokens only — anything shaped like args or prose is
-          // refused, the same gate the hooks writer applies. Both writers of
-          // the event stream must agree on what a name is.
-          if (!NAME_RE.test(name)) continue;
+          // The gate for THIS channel, the same pair the hooks writer applies —
+          // both writers of the event stream must agree on what a name is.
+          // A skill or command token is checked against NAME_RE: anything
+          // shaped like args or prose is refused. `subagent_type` is a
+          // structured tool parameter carrying a registered frontmatter name
+          // ("LinkedIn Content Creator"), so it is checked against
+          // AGENT_NAME_RE — under NAME_RE every real agent name failed here and
+          // `continue` discarded every agent fire on the machine.
+          if (!(kind === "agent" ? AGENT_NAME_RE : NAME_RE).test(name)) continue;
           const inv: Invocation = { name, kind, sessionId, file, lineNo, timestamp: lineTs };
           // The id exists only to be the ledger dedupe key: a block without
           // one still counts as an invocation — it just cannot yield an event.
@@ -401,13 +406,21 @@ export async function historyFacts(transcriptsDir: string, skills: Skill[]): Pro
     }
   }
 
-  // Agent launches ride the ledger only: the aggregation below feeds the
-  // skill/command usage table, and subagent types in `external` would read as
-  // uninstalled skills. Keyed (kind, name): a skill and a command sharing a
-  // dispatch name keep separate rows, so neither absorbs the other's fires.
+  // Every dispatch kind aggregates here, agents included. They were held out
+  // while a subagent type could not be matched against anything installed — an
+  // agent name in `external` then read as an uninstalled skill. That is no
+  // longer what happens: an agent's dirName IS its registered frontmatter name,
+  // so `installed` below matches it and a launch of an agent you own lands in
+  // `usage` like any other fire. The names that do fall through to `external`
+  // are the harness's own subagent types (`general-purpose`, `Explore`), which
+  // are exactly what that bucket is for — dispatches naming nothing you
+  // installed, the same place a built-in slash command lands.
+  //
+  // Keyed (kind, name): a skill and a command sharing a dispatch name keep
+  // separate rows, so neither absorbs the other's fires — and an agent sharing
+  // a name with either keeps its own for the same reason.
   const byAsset = new Map<string, { name: string; kind: AssetKind; invs: Invocation[] }>();
   for (const inv of invocations) {
-    if (inv.kind === "agent") continue;
     const key = `${inv.kind}\0${inv.name}`;
     const g = byAsset.get(key);
     if (g) g.invs.push(inv);

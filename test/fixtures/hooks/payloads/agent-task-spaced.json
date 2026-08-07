@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-1",
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Task",
+  "tool_input": { "subagent_type": "Backend Architect", "prompt": "SECRET-PROMPT must never be stored" },
+  "tool_use_id": "toolu_ba0001"
+}

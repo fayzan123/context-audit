@@ -17,6 +17,24 @@ const CHANNELS = new Set(["auto", "typed", "load"]);
  */
 export const NAME_RE = /^[A-Za-z0-9:_-]+$/;
 /**
+ * An agent's dispatch name. Separate from NAME_RE because the two channels
+ * carry different risk, not because agents deserve a laxer convention.
+ *
+ * A skill or command name can arrive with arguments appended to it — a typed
+ * line is split and stripped before it is checked, and NAME_RE is the backstop
+ * behind that stripping (unit-ledger: "impeccable teach --project ~/clients/acme"
+ * must never reach the store). An agent name arrives as `subagent_type`, a
+ * structured tool parameter the harness fills from a registered frontmatter
+ * `name:` — there is no line to split and no argument tail to strip.
+ *
+ * Control characters are banned rather than discouraged: U+0000 is the
+ * separator in the usage join key (inventory.ts joinKey and the byName group
+ * key), so a name carrying one could forge a join onto another asset's row.
+ * The 80-character cap sits 20 above the longest name observed across 110 real
+ * agents, and refuses a prose blob from a malformed transcript.
+ */
+export const AGENT_NAME_RE = /^[^\u0000-\u001F\u007F]{1,80}$/;
+/**
  * A typed dispatch as the user actually types it — the leading slash is
  * REQUIRED. Writers that see raw prompt text (history.jsonl entries, Codex's
  * UserPromptSubmit payload) see every ordinary sentence too, and "please fix
@@ -35,6 +53,17 @@ export const TYPED_TOKEN_RE = /^\/[A-Za-z][A-Za-z0-9:_-]*$/;
  * dispatch token — so they are exempt where this gate is applied.
  */
 const STORE_NAME_RE = /^[A-Za-z0-9:._-]+$/;
+/**
+ * The durable name rule for ONE event, selected by that event's own kind.
+ *
+ * Widening STORE_NAME_RE wholesale to fit `LinkedIn Content Creator` would
+ * reject nothing today and leak tomorrow: it also governs the kinds whose name
+ * arrives from a user-typed line with an argument tail behind it. The split is
+ * per channel, so an args-shaped name is still refused on a `skill` or
+ * `command` event while a registered agent's prose name is admitted on an
+ * `agent` one.
+ */
+const storeNameRe = (kind: string): RegExp => (kind === "agent" ? AGENT_NAME_RE : STORE_NAME_RE);
 
 /** Optional fields a later same-id sighting may fill in on the survivor. */
 const ENRICH_FIELDS = ["outcome", "interrupted", "src", "model", "entrypoint", "caller", "agent"] as const;
@@ -142,9 +171,10 @@ export function ledgerBase(base?: string): string {
  * Shape gate at the durable boundary, shared with `log-event` stdin
  * validation: required fields present and typed, `ts` must actually parse as
  * a date (a month-prefixed junk string would otherwise pick a junk monthly
- * file and crash date math downstream), and dispatch-channel names must be
- * tokens — content-bearing fields (skill args, prompt text) have no place in
- * the schema at all, whichever writer sends them.
+ * file and crash date math downstream), and dispatch-channel names must pass
+ * the rule for their own kind (`storeNameRe`) — content-bearing fields (skill
+ * args, prompt text) have no place in the schema at all, whichever writer
+ * sends them.
  */
 export function isLedgerEvent(x: unknown): x is LedgerEvent {
   const e = x as LedgerEvent | null;
@@ -165,7 +195,7 @@ export function isLedgerEvent(x: unknown): x is LedgerEvent {
     e.name.length > 0 &&
     typeof e.channel === "string" &&
     CHANNELS.has(e.channel) &&
-    (e.channel === "load" || STORE_NAME_RE.test(e.name)) &&
+    (e.channel === "load" || storeNameRe(e.kind).test(e.name)) &&
     typeof e.sessionId === "string" &&
     typeof e.project === "string"
   );

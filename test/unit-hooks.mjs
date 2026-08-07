@@ -6,6 +6,9 @@
 //   - corrupt settings.json refuses the edit, never clobbers
 //   - a symlinked settings.json keeps its link; edits land in the real target
 //   - log-event maps valid payloads, dedupes, and NEVER stores args/prompts
+//   - the name gate PER CHANNEL, shared with transcript ingestion: a registered
+//     agent's prose subagent_type is banked, a control character or an
+//     81-character one is not, and the typed-command site is UNCHANGED
 //   - every hook-written event is stamped hook:true, durably
 // and for the Codex writer (a different file shape, one installed event):
 //   - hooks.json is written byte-for-byte in the shape codex-cli registers,
@@ -213,6 +216,24 @@ console.log("LOG-EVENT (valid payloads):");
   );
   check("agent event is stamped hook:true", agent.hook === true);
 
+  // The hook writer applies the SAME per-channel pair transcript ingestion
+  // does — it shares the constants, so a fix to one writer is not a fix to the
+  // other. Installing hooks was never a way around the old defect: both dropped
+  // every registerable agent name.
+  const r3b = logEvent(payload("agent-spaced.json"), ledger, "PostToolUse");
+  const spaced = ledger.readEvents({ kind: "agent", name: "LinkedIn Content Creator" });
+  check(
+    "a registered agent's prose name is banked by the hook writer",
+    r3b.appended === 1 && spaced.length === 1 && spaced[0].id === "sess-1:toolu_li0001",
+    JSON.stringify(r3b) + JSON.stringify(spaced)
+  );
+  const r3c = logEvent(payload("agent-task-spaced.json"), ledger, "PostToolUse");
+  check(
+    "the older Task spelling is banked the same way",
+    r3c.appended === 1 && ledger.readEvents({ kind: "agent", name: "Backend Architect" }).length === 1,
+    JSON.stringify(r3c)
+  );
+
   const r4 = logEvent(payload("prompt.json"), ledger, "UserPromptExpansion");
   const cmd = ledger.readEvents({ kind: "command" })[0];
   check("prompt expansion appends a typed command", r4.appended === 1 && cmd?.channel === "typed");
@@ -224,6 +245,16 @@ console.log("LOG-EVENT (valid payloads):");
     openLedger(base).readEvents().every((e) => e.hook === true)
   );
 
+  // The exact line the design cites, replayed now that a laxer rule exists on
+  // the agent channel: the typed site still stores the token and nothing behind
+  // it. Applying the agent rule here would have banked a client path.
+  const r4b = logEvent(payload("prompt-client-path.json"), ledger, "UserPromptExpansion");
+  check(
+    "a typed command with args banks the token only",
+    r4b.appended === 1 && ledger.readEvents({ sessionId: "sess-3" })[0]?.name === "impeccable",
+    JSON.stringify(ledger.readEvents({ sessionId: "sess-3" }))
+  );
+
   // --- no content ever stored ----------------------------------------------
   console.log("LOG-EVENT (content never stored):");
   const usage = join(base, "usage");
@@ -232,6 +263,7 @@ console.log("LOG-EVENT (valid payloads):");
     .map((f) => readFileSync(join(usage, f), "utf8"))
     .join("");
   check("no args, prompts, or tails reach disk", stored.length > 0 && !stored.includes("SECRET"));
+  check("no client path from a typed line reaches disk", !stored.includes("clients/acme"));
 
   // --- malformed payloads never throw, never append -------------------------
   console.log("LOG-EVENT (malformed payloads):");
@@ -242,6 +274,15 @@ console.log("LOG-EVENT (valid payloads):");
     ["missing session_id", payload("missing-session.json")],
     ["tool outside the matchers", payload("wrong-tool.json")],
     ["shell metacharacters in the name", payload("args-in-name.json")],
+    // What the agent channel still refuses: U+0000 is the usage join-key
+    // separator, so a name carrying one could forge a join onto another
+    // asset's row, and 81 characters is a prose blob, not a dispatch name.
+    ["a control character in subagent_type", payload("agent-control-char.json")],
+    ["an 81-character subagent_type", payload("agent-too-long.json")],
+    // The site the privacy boundary exists for is UNCHANGED: a typed line is
+    // split to its first token and NAME_RE is the backstop behind the split,
+    // so a path-shaped token is refused rather than banked.
+    ["a path-shaped typed token", payload("prompt-path-token.json"), "UserPromptExpansion"],
     ["unknown hook event", payload("skill.json"), "Stop"],
     ["JSON scalar", "42"],
   ];

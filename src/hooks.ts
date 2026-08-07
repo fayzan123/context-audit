@@ -5,7 +5,7 @@
 // hook must never break the user's session.
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { LEDGER_SCHEMA_VERSION, NAME_RE } from "./ledger.js";
+import { AGENT_NAME_RE, LEDGER_SCHEMA_VERSION, NAME_RE } from "./ledger.js";
 import type { Ledger } from "./ledger.js";
 import type { AssetKind, LedgerEvent } from "./types.js";
 
@@ -42,8 +42,8 @@ const codexHookCommand = `context-audit log-event --codex-hook ${CODEX_HOOK_EVEN
 
 /**
  * A Codex typed dispatch: the leading slash the user types, then exactly the
- * names the ledger can durably store (ledger.ts's STORE_NAME_RE — the same
- * gate `isLedgerEvent` applies to every writer). Nothing narrower is safe
+ * names the ledger can durably store (ledger.ts's STORE_NAME_RE — the rule
+ * `isLedgerEvent` applies to every kind but `agent`). Nothing narrower is safe
  * here. Codex prompt names are bare file stems (`sources/codex.ts` derives the
  * name from the filename) and the rollout scan gates them on nothing, so a
  * leading-LETTER rule refused `/2fa` while the scan matched it — and because a
@@ -375,7 +375,13 @@ function claudeHookToEvent(payload: unknown, eventName: string): LedgerEvent | u
       // The hook was attached wider than our matchers — record nothing.
       return undefined;
     }
-    if (typeof name !== "string" || !NAME_RE.test(name)) return undefined;
+    // Gate selected by kind, exactly as transcript ingestion selects it: a
+    // Skill dispatch is a token (NAME_RE), an `Agent`/`Task` dispatch is the
+    // structured `subagent_type` the harness filled from a registered
+    // frontmatter name (AGENT_NAME_RE). Installing hooks was never a way around
+    // the old defect — both writers share these constants, so a fix to one that
+    // is not a fix to the other is not a fix.
+    if (typeof name !== "string" || !(kind === "agent" ? AGENT_NAME_RE : NAME_RE).test(name)) return undefined;
     // Same id transcript ingestion derives for this tool_use, so double-capture collapses.
     return {
       v: LEDGER_SCHEMA_VERSION,
@@ -396,6 +402,12 @@ function claudeHookToEvent(payload: unknown, eventName: string): LedgerEvent | u
     if (raw === undefined) return undefined;
     // First token only, slash stripped: the dispatch name is stored, args never are.
     const name = raw.trim().split(/\s+/)[0].replace(/^\//, "");
+    // NAME_RE, and NOT the agent rule — this is the site the privacy boundary
+    // exists for. `raw` is a line the USER TYPED, and the split above is what
+    // separates the dispatch name from arguments that may carry client paths or
+    // secrets; this test is the backstop behind that split. Applying
+    // AGENT_NAME_RE here would admit "impeccable teach --project ~/clients/acme"
+    // to a durable on-disk file.
     if (!NAME_RE.test(name)) return undefined;
     return {
       v: LEDGER_SCHEMA_VERSION,

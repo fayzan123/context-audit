@@ -342,11 +342,10 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
                 ? V1_READONLY.project
                 : V1_READONLY.kind,
           // Agents are dispatch-tracked: `Agent`/`Task` tool_use blocks name
-          // the subagent_type they launched, so the ledger has held their
-          // fires since S1 and the only thing missing was a row to join them
-          // to. Their WINDOW figures come from those events rather than from
-          // the usage table (see the item join — history.ts deliberately keeps
-          // agents out of that aggregation).
+          // the subagent_type they launched, so both the usage table and the
+          // ledger measure them. Their WINDOW figures prefer the ledger where
+          // one opened, because it also holds launches whose transcripts have
+          // since been purged (see the item join).
           tracked:
             (adapter.id === "claude" && (kind === "skill" || kind === "command" || kind === "agent")) ||
             (adapter.id === "codex" && kind === "prompt"),
@@ -821,10 +820,10 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
   };
 
   /**
-   * Window figures derived from a row's own ledger events, for the rows no
-   * usage table covers: agent launches (history.ts keeps them out of its
-   * aggregation on purpose — a subagent type in the usage list would read as
-   * an uninstalled skill) and AGENTS.md loads.
+   * Window figures derived from a row's own ledger events, for the rows the
+   * usage table cannot cover or covers less completely: AGENTS.md loads (which
+   * no transcript walk aggregates at all) and agent launches (whose ledger
+   * record outlives the transcript it was read from).
    *
    * `winStart` is the PROVIDER's own window start, never the merged one: the
    * merged minimum can describe another harness's transcripts entirely, and
@@ -1214,11 +1213,13 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
       // Which pipeline produced this row's WINDOW figure, and which window it
       // was counted against:
       //
-      //   agent  — history.ts keeps agent launches out of its usage
-      //     aggregation on purpose (a subagent type listed there would read as
-      //     an uninstalled skill), so the ledger is the ONLY thing that
-      //     measures them, and reading the usage table's miss as a measurement
-      //     would print a confident "0 in 30d" beside a lifetime count of 30.
+      //   agent  — the usage table now carries agent launches (history.ts
+      //     aggregates them like any other dispatch), but where a ledger exists
+      //     it is the better source and the SUPERSET: every launch the scan
+      //     finds is banked, so the ledger also still holds the ones whose
+      //     transcripts the harness has since purged. Counting those from the
+      //     usage table would print a confident "0 in 30d" beside a lifetime
+      //     count of 30 — the transcript is gone, the fire is not in doubt.
       //   cursor — the adapter aggregates every attachment in a GLOBAL store
       //     with no windowing at all, so its store-wide total (fifteen months
       //     on the machine this was found on) went into the window slot and was
@@ -1227,17 +1228,16 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
       //     every other row's means: fires inside the span its provider was
       //     observed over.
       //
-      // Both read the ledger, and a ledger that would not open measures
-      // nothing. `null` is this payload's "tracked, never fired" — itself a
-      // measurement — so an agent row, which has no other pipeline, gets no
-      // fires field at all and renders n/a beside the caveat that says why.
-      // A cursor row keeps the adapter's figure in that case: the store read
-      // still happened, and its total already spans exactly cursor's window.
+      // Both prefer the ledger, and a ledger that would not open falls back to
+      // what this scan itself observed. That fallback is a real measurement for
+      // an agent now: the transcript walk reads `Agent`/`Task` launches, so
+      // `null` here means "tracked, never fired" exactly as it does on a skill
+      // row. It used to mean nothing at all — an agent had no second pipeline,
+      // so the row was left with no fires field and rendered n/a. Leaving that
+      // in place would now caption an observed launch as unobservable.
       const usage = usageByKey.get(joinKey(row.source, kind, s.dirName)) ?? null;
       const fromLedger = ledger !== undefined && (kind === "agent" || row.source === "cursor");
-      if (ledger || kind !== "agent") {
-        item.fires = withLedger(fromLedger ? windowFires(evts, windowStartFor(row.source)) : usage, evts, kind);
-      }
+      item.fires = withLedger(fromLedger ? windowFires(evts, windowStartFor(row.source)) : usage, evts, kind);
     }
     if (kind === "instructions") {
       if (row.source === "agents-md") {
