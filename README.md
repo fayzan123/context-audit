@@ -2,7 +2,7 @@
 
 **The dashboard for your skills: what they cost in every session, what actually fires, what's dead weight, and what's dangerous — for Claude Code, Codex, Cursor and the cross-tool AGENTS.md standard.**
 
-![context-audit dashboard — skills view showing a listing 107% over the character budget, per-skill cost meters, fire counts and dead-weight highlighting](docs/dashboard.png)
+![context-audit dashboard — the skills view: a sidebar listing inventory by kind alongside the listing, prune and growth analyses; a stat bar reading 8,697 tokens per session and a skill listing at 153% of its character budget; and a table giving each skill one cost cell with a meter and one activity cell](docs/dashboard.png)
 
 ```
 npx context-audit ui
@@ -22,11 +22,15 @@ Claude Code skills, agents, commands and CLAUDE.md. Codex prompts and AGENTS.md.
 
 ## The dashboard
 
-The page boots to **your skills** — the layer you actually manage: togglable, usage-tracked, marketplace-installed. Everything else the inventory found (agents, commands, rules, instruction files) is one click away behind the `everything` switch, and the header totals always count all of it — a skills view that understated your real context bill would be lying with a filter.
+Navigation is a **left sidebar**, and it is the page's only navigation axis. **INVENTORY** lists what you own by kind, with live counts — skills first, because that is the layer you actually manage. **ANALYSIS** holds the questions: `listing`, `prune`, `growth`, and `providers` when more than one tool is on the machine. **SECURITY** carries `flagged` and its count. An entry appears only when it has something to show, so a machine with no Cursor rules gets no rules entry. The sidebar's foot states the scan window, when durable tracking began, and how many caveats qualify the figures.
 
-The header carries the diagnosis. **Skill listing** is the percentage of Claude Code's ~8,000-character listing budget your enabled skills occupy — over 100% it turns red and says what that costs you, because past the budget Claude Code drops descriptions starting with the skills you invoke least, and those skills stop auto-triggering. That is the answer to "why has Claude stopped firing my skill?", which is the question people actually arrive with. It counts user, project and plugin skills alike, since Claude Code lists all three — and the CLI reports the identical figure.
+Above the content, a **stat bar** carries the four headline numbers: cost per session, how many items have never fired, the listing budget, and how many recorded sessions used anything at all. Each one is clickable and takes you to the view that explains it.
 
-What the table shows per row: tokens per session (with a meter scaled to your most expensive item), fires in the usage window, last fired, and security findings. **Dead weight gets the amber** — an item that is enabled, carries a real share of the bill, and fired zero times in the window. A cheap silent skill and an expensive busy one are both fine; the intersection is what you're paying for nothing.
+**Skill listing** is the figure most people arrive for. It is the percentage of Claude Code's ~8,000-character listing budget your enabled skills occupy — past 100% Claude Code drops descriptions, starting with the skills you invoke least, and those skills stop auto-triggering. That is the real answer to *"why has Claude stopped firing my skill?"*. The `listing` view names exactly which skills were dropped, in cut order, and how many characters you'd need to free to bring each one back. It counts user, project and plugin skills alike, since Claude Code lists all three — and the CLI reports the identical figure.
+
+The table gives each row **one cost cell and one activity cell**, because those are the two questions. Cost is what the item adds to every session, with a meter scaled to your most expensive item. Activity answers "is this used?" once — `8 fires · last Aug 5`, or `never used · 123d old`. **Dead weight gets the amber**: enabled, carrying a real share of the bill, and never fired in the window. A cheap silent skill and an expensive busy one are both fine; the intersection is what you are paying for nothing. Clicking a row opens a drawer with the full description, the always-in-context and on-invoke costs stated separately, provenance, and the actions.
+
+Two analyses sit beside the inventory. **`prune`** states the dead weight in words — *"83 items cost you 5,515 tok every session and have never fired"* — and lets you select rows and turn them off in one action. **`growth`** plots what you own against what you use, week by week, from this tool's own snapshots; weeks with no scan are ticked on the axis and never interpolated across, because joining them would draw a history the snapshots never recorded.
 
 Two things the dashboard is careful about, because both are easy to get wrong:
 
@@ -35,13 +39,13 @@ Two things the dashboard is careful about, because both are easy to get wrong:
 
 And it acts, deliberately narrowly:
 
-- **Enable/disable Claude user skills** — implemented as a directory move between `~/.claude/skills` and `~/.claude/skills-disabled`, the same convention you'd use by hand. Disabled skills stay in the inventory (grayed, history intact, excluded from the injected-token total) and re-enable with one click. Project-scoped items, Codex prompts and Cursor rules are read-only — no invented disable conventions for other vendors.
+- **Enable/disable Claude user skills and agents** — implemented as a directory move between `~/.claude/skills` and `~/.claude/skills-disabled` (and the same pair for `agents`), the convention you'd use by hand. No state file to drift out of sync with disk, git sees a rename, and a fresh CLI run agrees with the dashboard for free. Disabled items stay in the inventory — grayed, history intact, excluded from the injected-token total — and re-enable with one click. Project-scoped items, Codex prompts and Cursor rules are read-only: no invented disable conventions for other vendors.
 - **Update plugins** — each plugin group has an update button that runs `claude plugin update` through the official CLI (via `execFile`, never a shell) and rescans. Where the local marketplace checkout reveals a newer version, the row says so ("2.2.0 listed"); where it can't, it makes no claim — "unknown" is not "up to date".
 - **Open in editor** — `code --goto` when the VS Code CLI exists, else the OS opener.
 
 Every action is logged in an on-page **activity strip** that mirrors the server's terminal — the exact command run, the CLI's own output, and a result line decided by data (an update that changed nothing says "already at the latest version", never "updated").
 
-Details that keep the numbers honest: filter chip counts are faceted, so a chip's number always predicts exactly what clicking it shows; columns where every row would say the same word disappear instead of repeating a fact 187 times; and a security flag outside the current view announces itself in the rail rather than being hidden by a presentation default.
+Details that keep the numbers honest: every figure appears in exactly one place, at the level where it applies, so the page states a fact rather than repeating it in four phrasings; a figure measured differently from the page-level provenance — backfilled, modelled, an upper bound, or simply absent — carries a mark that says which, and a figure that matches carries nothing; columns where every row would say the same word disappear instead of repeating a fact 187 times; and a security finding outside the current view announces itself as a count on the sidebar's own `flagged` entry rather than being hidden by a presentation default. The page renders in your system theme, with a manual light/dark toggle; neither setting changes a single figure.
 
 The server binds to `127.0.0.1` on a random port, and every request — reads included — must present a per-session token carried in the URL it opens with; Host and Origin are validated on every request. Plugins are inventoried by their *active* version from Claude Code's plugin config, so three cached versions of one plugin don't triple-count the header. No file watching, no websockets: rescan is a button (a full audit of a real setup measures under a second). In-browser editing, installs and deletes are deliberately out of scope.
 
@@ -105,11 +109,11 @@ Not all instruction text is equal, and the difference is the whole cost model:
 
 So a 32,000-token skill body is nearly free until you call it, while two hundred agent descriptions you forgot you installed are a permanent tax. context-audit separates those and reports the always-injected figure directly, per tool.
 
-It also compares you against a limit almost nobody knows exists. Claude Code budgets the skill listing in **characters** (`skillListingBudgetFraction`, ~1% of the context window — about 8,000 chars on a 200K model). Go over and it silently drops descriptions, starting with the skills you invoke least. Those skills still exist; they just stop auto-triggering, which looks exactly like the model ignoring you. On the machine above, the listing was at 353% of budget.
+It also compares you against a limit almost nobody knows exists. Claude Code budgets the skill listing in **characters** (`skillListingBudgetFraction`, ~1% of the context window — about 8,000 chars on a 200K model). Go over and it silently drops descriptions, starting with the skills you invoke least. Those skills still exist; they just stop auto-triggering, which looks exactly like the model ignoring you. On the machine above, the listing sits at 153% of budget, and 17 skills are being dropped off the end of it.
 
 ## Dead weight — what never fires
 
-The audit reads your own local transcripts, counts what actually ran, and names what didn't. On the run above: **69 of 75 skills had never fired.** Not "seem unused" — never appeared in 99 transcript files across six weeks.
+The audit reads your own local transcripts, counts what actually ran, and names what didn't. On the run above: **39 of 54 skills have never fired.** Not "seem unused" — never appeared in 391 transcript files across the whole surviving window.
 
 That number is the point of this tool. It converts "I should clean this up someday" into a specific list, and it pairs with the cost figure to tell you what the cleanup is worth. A real example from testing: the audit showed 105 duplicate-description groups, which turned out to be one agent pack installed twice (once flat, once in category subfolders). Removing the duplicates took the agent count from 272 to 135 and the always-injected cost from ~18,563 to ~12,797 tokens — about 5,800 tokens back in *every* session, from one reversible `mv`.
 
@@ -127,7 +131,7 @@ That turns "6 fires in 42d" into "142 fires since tracking began 2026-03-01" ove
 - **`context-audit backfill`** — one-time import of typed `/commands` from `~/.claude/history.jsonl`, which survives the transcript purge and typically reaches months further back. Automation-polluted sessions are filtered, and imported events are labeled: "typed-channel history extends to 2026-02-26 (backfilled)". Claude Code's own built-ins (`/usage`, `/model`, …) are dropped by every writer, not just this one — `--include-builtins` sets a durable ledger preference rather than a one-run flag, because a CLI flag cannot reach a hook firing inside a live session.
 - **`context-audit hooks install`** — opt-in real-time capture. `--provider claude` wires Claude Code's `settings.json`; `--provider codex` wires `~/.codex/hooks.json` (Codex will ask you to review and trust it on next start, and it records nothing until you do). Either way it prints the exact diff and writes nothing without confirmation; `hooks uninstall` removes exactly what install added. Hook and scan events converge on the same ids where the harness gives them one, so double-capture collapses.
 
-The dashboard's fires cells show both figures ("42 · 6 in 41d"), the drawer gains provenance (install date with the evidence chain that produced it — manifest, file birthtime, git first-add, or ledger first-seen, each labeled), channel/provider/outcome splits, a per-week trend strip, and a drill-down that opens the transcript at the exact line — rows whose transcript was already purged say "transcript deleted (event retained)". The CLI's `--json` gains a per-source `lifetime` block with the same figures, diffable like everything else.
+The dashboard's activity cell states the lifetime figure and its last-fired date, the drawer gains provenance (install date with the evidence chain that produced it — manifest, file birthtime, git first-add, or ledger first-seen, each labeled), channel/provider/outcome splits, a per-week trend strip, and a drill-down that opens the transcript at the exact line — rows whose transcript was already purged say "transcript deleted (event retained)". The CLI's `--json` gains a per-source `lifetime` block with the same figures, diffable like everything else.
 
 ## Dispatch — descriptions competing for the same trigger
 
