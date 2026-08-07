@@ -354,6 +354,107 @@ if (ready === true) {
     `${themes.dark.scheme} / ${themes.light.scheme}`
   );
 
+  // --- contrast, computed from what the browser actually paints -------------
+  // "AA" written in a comment beside a colour is not a measurement. This reads
+  // the resolved rgb of every text token against every surface it can land on,
+  // in BOTH calibrations, and does the WCAG arithmetic — so a palette tweak
+  // that quietly drops a token under 4.5:1 fails here rather than in someone's
+  // eyes. Light-mode amber on the lifted surface measured 4.42 before this
+  // existed.
+  const contrast = await evaluate(`(() => {
+    // Chrome serialises computed colours in the space they were authored in,
+    // so getComputedStyle().color on an oklch token comes back as oklch — and
+    // parsing that as rgb yields nonsense. Rasterising one pixel through a
+    // canvas asks the browser for the sRGB it will actually paint.
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 1;
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    const rgb = (s) => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = s;
+      ctx.fillRect(0, 0, 1, 1);
+      const d = ctx.getImageData(0, 0, 1, 1).data;
+      return [d[0] / 255, d[1] / 255, d[2] / 255];
+    };
+    const lum = (c) => {
+      const f = (v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    };
+    const ratio = (a, b) => {
+      const x = Math.max(lum(a), lum(b)), y = Math.min(lum(a), lum(b));
+      return (x + 0.05) / (y + 0.05);
+    };
+    const probe = document.createElement("span");
+    document.body.appendChild(probe);
+    const read = (v) => {
+      probe.style.color = "var(" + v + ")";
+      return rgb(getComputedStyle(probe).color);
+    };
+    const root = document.documentElement;
+    const was = root.getAttribute("data-theme");
+    const out = {};
+    for (const theme of ["dark", "light"]) {
+      root.setAttribute("data-theme", theme);
+      const surfaces = ["--bg", "--bg-lift", "--bg-drawer"].map(read);
+      const inks = ["--ink", "--ink-dim", "--ink-faint", "--signal", "--signal-text", "--danger"];
+      out[theme] = {};
+      for (const ink of inks) {
+        const c = read(ink);
+        out[theme][ink] = Math.min(...surfaces.map((s) => ratio(c, s)));
+      }
+    }
+    if (was === null) root.removeAttribute("data-theme"); else root.setAttribute("data-theme", was);
+    probe.remove();
+    return out;
+  })()`);
+  for (const theme of ["dark", "light"]) {
+    const failing = Object.entries(contrast[theme]).filter(([, r]) => r < 4.5);
+    check(
+      `every ${theme} text token clears WCAG AA on every surface it can land on`,
+      failing.length === 0,
+      failing.map(([k, r]) => `${k} ${r.toFixed(2)}:1`).join(", ")
+    );
+  }
+
+  // --- one committed type scale, in rem -------------------------------------
+  const scale = await evaluate(`(() => {
+    const sizes = [...document.querySelectorAll("#page *")]
+      .filter((el) => el.textContent && el.textContent.trim() && !el.querySelector("*"))
+      .filter((el) => !el.closest("[aria-hidden='true']"))
+      .map((el) => Math.round(parseFloat(getComputedStyle(el).fontSize) * 100) / 100);
+    const cs = getComputedStyle(document.documentElement);
+    return {
+      distinct: [...new Set(sizes)].sort((a, b) => a - b),
+      tokens: ["--text-micro", "--text-small", "--text-base", "--text-lead", "--text-figure"]
+        .map((t) => cs.getPropertyValue(t).trim()),
+      rootPx: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    };
+  })()`);
+  check(
+    "the page renders a handful of committed sizes, not a spread of near-identical ones",
+    scale.distinct.length <= 6,
+    `${scale.distinct.length} distinct: ${scale.distinct.join(", ")}`
+  );
+  check(
+    "the scale is declared in rem, so a reader's own default size still wins",
+    scale.tokens.length === 5 && scale.tokens.every((t) => t.endsWith("rem")),
+    scale.tokens.join(" · ")
+  );
+  // The proof that rem is doing something: double the root size and the page
+  // has to follow. A px scale would sit there unchanged.
+  const zoom = await evaluate(`(() => {
+    const before = parseFloat(getComputedStyle(document.querySelector(".inv tbody td.c-name")).fontSize);
+    document.documentElement.style.fontSize = "32px";
+    const after = parseFloat(getComputedStyle(document.querySelector(".inv tbody td.c-name")).fontSize);
+    document.documentElement.style.fontSize = "";
+    return { before, after };
+  })()`);
+  check(
+    "…and raising the reader's default size actually scales the table",
+    zoom.after > zoom.before * 1.8,
+    `${zoom.before}px → ${zoom.after}px at a 32px root`
+  );
+
   // --- the prune view answers before it draws -------------------------------
   const prune = await evaluate(`(async () => {
     document.querySelector('[data-nav="prune"]').click();
@@ -385,6 +486,26 @@ if (ready === true) {
       prune.actionTop < prune.listTop &&
       prune.actionTop < prune.viewport,
     JSON.stringify(prune)
+  );
+
+  // The footer carries payload-length content — a legend, two counts and an
+  // absolute path — and it is the one band that can push the document sideways
+  // if nothing in it is allowed to give.
+  const feet = await evaluate(`(async () => {
+    const out = [];
+    for (const w of [1512, 1324, 1024]) {
+      document.documentElement.style.width = w + "px";
+      await new Promise((r) => requestAnimationFrame(r));
+      const foot = document.querySelector(".foot");
+      out.push({ w, over: foot.scrollWidth - foot.clientWidth });
+    }
+    document.documentElement.style.width = "";
+    return out;
+  })()`);
+  check(
+    "the footer gives before the document does, at every width",
+    feet.every((f) => f.over === 0),
+    feet.map((f) => `${f.w}: +${f.over}px`).join(", ")
   );
 
   // One narrow width, because a fixed sidebar plus a table is exactly the

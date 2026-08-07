@@ -954,12 +954,12 @@ function statBar(payload: UiPayload, state: AppState): string {
     fig(
       "cost",
       fmtInt(h.injectedTokens),
-      `tok / session · ${((h.injectedTokens / 200_000) * 100).toFixed(1)}% of a 200K context`,
+      `tok/session · ${((h.injectedTokens / 200_000) * 100).toFixed(1)}% of 200K`,
       "prune view"
     )
   );
   figs.push(
-    fig("never", fmtInt(h.neverFired), `never fired · of ${fmtInt(h.tracked)} tracked`, "never-fired inventory")
+    fig("never", fmtInt(h.neverFired), `never fired of ${fmtInt(h.tracked)} tracked`, "never-fired inventory")
   );
   // Absent on machines the listing does not apply to, rather than shown as a
   // zero — a budget nothing is subject to is not a fact about this setup.
@@ -983,7 +983,7 @@ function statBar(payload: UiPayload, state: AppState): string {
       fig(
         "used",
         `${fmtInt(p.sessionsWithFires)}/${fmtInt(p.sessions)}`,
-        "ledger sessions used anything",
+        "ledger sessions with a fire",
         "growth view"
       )
     );
@@ -1441,7 +1441,8 @@ function tableHead(state: AppState, cols: typeof COLS): string {
       // cut every cell loose from its header in the accessibility tree. The
       // sort state is announced by aria-sort, which is what it is for.
       const sorted = active ? ` aria-sort="${state.sort.dir === 1 ? "ascending" : "descending"}"` : "";
-      return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}" data-sort="${c.key}" tabindex="0"${sorted}><span class="thlab">${esc(c.label)}<s aria-hidden="true">${arrow}</s></span>${c.def ? `<span class="thdef">${esc(c.def)}</span>` : ""}</th>`;
+      const def = c.def;
+      return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}" data-sort="${c.key}" tabindex="0"${sorted}><span class="thlab">${esc(c.label)}<s aria-hidden="true">${arrow}</s></span>${def ? `<span class="thdef">${esc(def)}</span>` : ""}</th>`;
     })
     .join("");
   return `<tr>${cells}<th class="c-act"><span class="sr">actions</span></th></tr>`;
@@ -2716,7 +2717,8 @@ export function renderResults(payload: UiPayload, state: AppState): string {
   <div class="foot">
     <span class="live"><i></i>127.0.0.1 — local only, nothing leaves the machine</span>
     ${analysis ? "" : `<span>${fmtInt(shown)} / ${fmtInt(base)} ${esc(noun)} shown</span>`}
-    ${anyDead ? `<span class="footdw">amber = <em>dead weight</em>, a cost paid with nothing recorded against it</span>` : ""}
+    ${anyDead ? `<span class="footdw">amber = dead weight, paid with nothing recorded against it</span>` : ""}
+
     ${state.error && !state.selected ? `<span class="footerr" role="alert">${esc(state.error)}</span>` : ""}
     <span class="dim">${esc(payload.root)}</span>
   </div>`;

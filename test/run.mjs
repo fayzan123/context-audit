@@ -2208,8 +2208,8 @@ console.log("UI FRONTEND tier (fixture render):");
   // to go and read.
   check(
     "the cost figure avoids jargon, and 'cost / session' is defined under its own column head",
-    html.includes('class="statlab">tok / session · 0.2% of a 200K context</span>') &&
-      /data-sort="injected"[^>]*>[\s\S]*?<span class="thdef">loaded before you type, every session<\/span>/.test(html) &&
+    html.includes('class="statlab">tok/session · 0.2% of 200K</span>') &&
+      /data-sort="injected"[^>]*>[\s\S]*?<span class="thdef">loaded before you type, every session/.test(html) &&
       !/>[^<]*injected/.test(html),
     "cost definition missing from the column head, or the jargon is back in the text"
   );
@@ -2436,7 +2436,7 @@ console.log("UI FRONTEND tier (fixture render):");
     check("dead weight marks enabled+silent+expensive rows only", dwRows === 2, `dw rows: ${dwRows}`);
     check(
       "dead weight is DEFINED where it is reported, and the cell that earns it says so",
-      dwHtml.includes("amber = <em>dead weight</em>, a cost paid with nothing recorded against it") &&
+      dwHtml.includes("amber = dead weight, paid with nothing recorded against it") &&
         dwHtml.includes("Dead weight: this cost is being paid with nothing recorded against it."),
       "dead-weight definition or mark missing"
     );
@@ -2603,8 +2603,8 @@ console.log("UI FRONTEND tier (fixture render):");
     "meter scaling wrong"
   );
   check(
-    "the header states cost as a share of a 200K context",
-    html.includes("% of a 200K context"),
+    "the cost figure carries the scale that makes it readable — a share of a 200K context",
+    html.includes("% of 200K"),
     "context share missing"
   );
   check(

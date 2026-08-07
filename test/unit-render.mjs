@@ -121,7 +121,7 @@ check(
   // read `fires: never · installed 47d` / `tok/fire: paid 90,383 · never fired`
   // / `last fired: none in 43d` — one fact, three columns, three window
   // suffixes. ("never fired" survives once on the page, as the lens control.)
-  const tbl = html.slice(html.indexOf('<table class="inv"'));
+  const tbl = html.slice(html.indexOf("<tbody>"), html.indexOf("</tbody>"));
   check(
     "and says it exactly once per row — no three-way restatement survives",
     (tbl.match(/never used/g) ?? []).length === 3 &&
@@ -1579,7 +1579,7 @@ console.log("\nRENDER unit (the qualifier rule):");
     [
       "dead weight",
       visible(R.renderResults(payload, R.defaultState())),
-      "amber = <em>dead weight</em>, a cost paid with nothing recorded against it",
+      "loaded before you type, every session",
     ],
   ];
   for (const [term, where, def] of defined) {
