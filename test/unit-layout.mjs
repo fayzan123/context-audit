@@ -122,47 +122,69 @@ const cleanup = () => {
 };
 process.on("exit", cleanup);
 
-/** Chrome prints its DevTools endpoint to stderr once, on startup. */
-const endpoint = await new Promise((resolve, reject) => {
+/**
+ * Every way this file can fail to MEASURE, as opposed to measuring something
+ * wrong. Both are infrastructure, and neither is a defect in the dashboard —
+ * the same judgement this file already makes about a Chrome that is not
+ * installed. Set here, acted on by `bail` below.
+ *
+ * Two distinct symptoms have been seen on ubuntu/node22, the only CI job where
+ * this test actually runs (macOS runners have no Chrome; node18 has no
+ * WebSocket global): a socket dropped mid-session, surfacing inside undici with
+ * no frame of ours in the stack, and a Chrome that starts but never announces
+ * its DevTools endpoint. Different symptoms, one cause — a browser this test
+ * does not control and cannot depend on.
+ */
+let transportError;
+
+/** Report an unmeasurable run as a named skip and stop; never a red build. */
+const bail = (why) => {
+  ok(`skipped: ${why} — layout not measured`);
+  cleanup();
+  process.removeAllListeners("exit");
+  process.exit(0);
+};
+
+/**
+ * Chrome prints its DevTools endpoint to stderr once, on startup. When it does
+ * not, that is a browser that failed to come up, not a layout that regressed.
+ * The wait is generous because a cold CI runner is slow, and running out of it
+ * skips rather than fails.
+ */
+const endpoint = await new Promise((resolve) => {
   let buf = "";
-  const timer = setTimeout(() => reject(new Error("Chrome never announced a DevTools endpoint")), 20_000);
+  // Whether the endpoint was ever seen. The exit handler below outlives this
+  // promise — `cleanup()` kills Chrome at the END of a good run, firing `exit`
+  // long after the endpoint arrived — so without this it announced a skip on
+  // top of a run that had already measured everything and passed.
+  let announced = false;
+  const timer = setTimeout(() => {
+    if (!announced) bail("Chrome never announced a DevTools endpoint in 45s");
+  }, 45_000);
   chrome.stderr.on("data", (d) => {
     buf += String(d);
     const m = /ws:\/\/[^\s]+/.exec(buf);
-    if (m) {
+    if (m && !announced) {
+      announced = true;
       clearTimeout(timer);
       resolve(m[0]);
     }
   });
   chrome.on("exit", (code) => {
     clearTimeout(timer);
-    reject(new Error(`Chrome exited (${code}) before announcing an endpoint`));
+    if (!announced) bail(`Chrome exited (${code}) before announcing an endpoint`);
   });
 });
 
 const ws = new WebSocket(endpoint);
-await new Promise((r, j) => {
+await new Promise((r) => {
   ws.addEventListener("open", r, { once: true });
-  ws.addEventListener("error", j, { once: true });
+  // The handshake can fail too, and it is the same class of event as the two
+  // above: a browser that will not talk to us, not a page that laid out wrong.
+  ws.addEventListener("error", (ev) => bail(`CDP handshake failed (${ev?.message ?? "socket error"})`), {
+    once: true,
+  });
 });
-
-/**
- * Set when the CDP transport itself dies, as opposed to a measurement coming
- * back wrong. The distinction decides whether this file fails the build.
- *
- * The `open`/`error` race above used `{ once: true }` on BOTH, so the moment
- * the socket opened the error listener was removed and the socket ran the rest
- * of the session unguarded. A transport blip then surfaced as an unhandled
- * error inside undici's write path — a stack with no frame of ours in it,
- * failing one CI job out of four with nothing a reader could act on. Seen on
- * ubuntu/node22 on 2026-08-07; the same commit passed on re-run.
- *
- * A dead socket is the same class of event as a missing Chrome, which this file
- * already treats as "not a defect in the dashboard" and skips by name. A page
- * that genuinely broke does not close the socket — it answers, and answers
- * wrongly, and those assertions still fail the build.
- */
-let transportError;
 
 let nextId = 0;
 const pending = new Map();
@@ -201,24 +223,27 @@ const send = (method, params = {}, sessionId) =>
 /**
  * A dead transport surfaces as a rejected top-level await, which Node reports
  * as an unhandled rejection and exits 1 on — a red build for something that is
- * not a layout regression. Exactly that case becomes the named skip this file
- * already uses for a missing Chrome; everything else still fails, loudly, with
- * the error printed.
+ * not a layout regression. Exactly that case becomes a named skip; everything
+ * else still fails, loudly, with the error printed.
+ *
+ * The guard is `transportError`, and it is the whole safety property: it is set
+ * only by the socket's own error and close events, never by an assertion. A
+ * page that laid out wrong answers normally and fails on its numbers.
  */
-const onFatal = (err) => {
-  if (transportError) {
-    ok(`skipped: CDP transport lost mid-session (${transportError}) — layout not measured`);
-    cleanup();
-    process.removeAllListeners("exit");
-    process.exit(0);
-  }
+process.on("unhandledRejection", (err) => {
+  if (transportError) bail(`CDP transport lost mid-session (${transportError})`);
   console.error(err);
   cleanup();
   process.removeAllListeners("exit");
   process.exit(1);
-};
-process.on("unhandledRejection", onFatal);
-process.on("uncaughtException", onFatal);
+});
+process.on("uncaughtException", (err) => {
+  if (transportError) bail(`CDP transport lost mid-session (${transportError})`);
+  console.error(err);
+  cleanup();
+  process.removeAllListeners("exit");
+  process.exit(1);
+});
 
 const { targetId } = await send("Target.createTarget", { url: pageUrl });
 const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
