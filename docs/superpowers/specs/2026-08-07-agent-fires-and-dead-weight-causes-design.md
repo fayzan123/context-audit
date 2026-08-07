@@ -116,19 +116,23 @@ A file under `agents/` with no frontmatter `name` is not an agent and does not b
 
 ### The number today
 
-172 of 187 items have never fired. Bucketed against the causes the payload can already establish, plus the two this spec adds:
+**Re-measured on 2026-08-07, after Part A shipped in 0.6.0.** The table this section carried before was taken while the name gate was still discarding every agent fire, and its prediction was wrong in a way worth recording: it assumed the 110 agents would become measurable *and firing*, so the residual would fall to 16 skills. They became measurable and confirmed **never firing**. The real table:
+
+148 of 164 items have never fired:
 
 | cause | count | share |
 |---|---|---|
-| unmeasurable (Part A) | 110 | 64% |
-| dropped from the listing | 17 | 10% |
-| disabled | 5 | 3% |
+| no cause found | 125 | 84% |
+| dropped from the listing | 17 | 11% |
+| disabled | 4 | 3% |
+| unmeasurable | 1 | 1% |
 | collision | 1 | 1% |
-| no cause found | 39 | 23% |
 
-**77% of the product's loudest number has a nameable cause, and none of them are shown.** The dashboard renders all 172 identically, as `never used · Nd old`, which reads as one verdict — *you do not need this* — over five different situations, one of which is a bug and three of which are fixable without deleting anything.
+**Only 16% of the number gets a cause, not the 77% this spec previously claimed.** Part A did not reveal hidden usage; it converted "we cannot see it" into "you genuinely do not use these". The residual is 109 agents and 16 skills costing **6,640 tok every session**, and it is the honest answer rather than a gap in the analysis.
 
-After Part A, the same table reads: 23 phantoms cease to be rows, 110 become measurable, and the residual "no cause found" falls to **16 skills costing 1,085 tok**. That residual is the honest dead weight, and it is the number `prune` should have been acting on all along.
+That changes what Part B is for, and the change is worth stating plainly before anyone builds it. It is **not** an explanation for most of the number. It is a separator: 23 items whose silence has a fixable cause are currently mixed into 148 that read identically, and 17 of those 23 need no deletion at all — they are skills the listing budget cut, which come back when characters are freed. Today `prune` offers one bulk action over the whole pile, so the 17 recoverable ones and the 125 genuinely-unused ones are one undifferentiated list.
+
+The residual staying large is not a failure of this work. A tool that said "84% of what you own is unused, and here are the 23 that are silent for a reason you can fix" is telling the truth twice.
 
 ### The causes, in resolution order
 
@@ -179,7 +183,7 @@ Merging, rewriting or deleting a colliding description — that is skillet's job
 1. **Widening the wrong gate deletes a privacy boundary.** The first draft of this spec proposed replacing `NAME_RE` outright, which would have admitted `"impeccable teach --project ~/clients/acme"` to a durable on-disk ledger — the exact string `unit-ledger.mjs:451` exists to refuse. The channel split above is the mitigation, and the six existing `NAME_RE` assertions must survive the change untouched. If an implementer finds themselves editing those assertions, the implementation is wrong, not the test.
 2. **Fixing measurement changes the headline number, and users will notice.** Agents that read as never-used may start showing fires. This is the fix working. The growth view already renders a per-scan delta, and the change should be legible there rather than appearing as unexplained drift.
 3. **Part B's causes could become a scoring system by accretion.** Each is a cited fact today. Any future cause that cannot cite a source or needs a tuned threshold does not belong in the list.
-4. **The residual is the real product.** If `prune` keeps leading with 172 rather than the 16-item residual, the diagnosis has been added without the benefit being delivered.
+4. **The separation is the product, not the shrinkage.** The residual does not get small — it is 125 of 148 — so the win cannot be "look how the number dropped". It is that the 17 skills the listing cut, which come back for free, stop being listed beside 125 you would have to actually delete. If `prune` still offers one bulk action over one undifferentiated pile, the diagnosis has been added without the benefit being delivered.
 
 ## Testing
 
