@@ -32,9 +32,9 @@ Verified against the one live test case on the machine. `LinkedIn Content Creato
 
 Only one real agent dispatch exists in 391 transcripts, so the *count* is wrong by one. That is not the problem. The problem is that **"133 agents, never fired" is presented as a measurement and is a detector that cannot return anything else**, and the product's one rule is that every line of output is a fact the user can verify in ten seconds. The `prune` view then recommends disabling those agents and offers a bulk control to do it, on evidence that does not exist.
 
-### The rule that replaces it
+### The fix, and the boundary it must not break
 
-The gate's real job is to refuse a hostile or malformed transcript's attempt to bank prose — or a separator — as a name. It is not to enforce a naming convention, and it must not, because the harness sets the convention and the harness allows spaces.
+The obvious repair — widen `NAME_RE` so agent names fit — is wrong, and the first draft of this spec proposed it. The gate guards a durable on-disk store against banking a typed command's *arguments*, which is a privacy boundary rather than a naming convention. What is actually true is narrower: the gate is applied to a channel it was never designed for.
 
 Empirically derived from the 110 real agent names on the design machine:
 
@@ -42,26 +42,47 @@ Empirically derived from the 110 real agent names on the design machine:
 - longest observed name: **60** characters
 - names containing a control character: **none**
 
-```ts
-/**
- * A dispatch name as the harness hands it to us. Deliberately permissive about
- * spelling and strict about shape: the harness owns the naming convention —
- * Claude Code registers subagents by a human-readable frontmatter `name:`, so
- * "LinkedIn Content Creator" is a real dispatch token and refusing it discards
- * a real fire. What this refuses is a value that cannot be a name at all.
- *
- * Control characters are banned rather than merely discouraged. U+0000 is the
- * separator in the usage join key (`inventory.ts` joinKey and the byName group
- * key), so a name carrying one could forge a join onto another asset's row.
- * The 80-character cap is 20 above the longest name observed across 110 real
- * agents, and exists so a prose blob in a malformed transcript is refused.
- */
-export const NAME_RE = /^[^\u0000-\u001F\u007F]{1,80}$/;
+**The gate is not widened. A second, channel-scoped gate is added beside it.**
+
+`NAME_RE` is a privacy boundary, not a naming convention, and `test/unit-ledger.mjs:451` pins it as one:
+
+```js
+check("NAME_RE refuses args-shaped strings",
+      !NAME_RE.test("impeccable teach --project ~/clients/acme"));
+check("args-shaped name fails the gate on dispatch channels",
+      !isLedgerEvent(ev("g7", …, { name: "impeccable SECRET-ARG never store me" })));
 ```
 
-`STORE_NAME_RE` (`src/ledger.ts:37`) is widened the same way and for the same reason. Leaving it narrow rejects the events at the store layer even once extraction is fixed, which would present as the bug being half-fixed.
+A typed command carries arguments — client paths, secrets — and `hooks.ts:397` strips them to the first token *and then* checks `NAME_RE` as a backstop before anything reaches a durable on-disk file. Widening that constant would bank `~/clients/acme` into the ledger. **`NAME_RE` is therefore left exactly as it is**, and keeps governing the `skill` and `command` kinds.
 
-**Both writers must continue to agree.** `history.ts` and `hooks.ts` import this constant; neither grows its own copy.
+What is added is a separate rule for the one kind whose name never passes through a user-typed line:
+
+```ts
+/**
+ * An agent's dispatch name. Separate from NAME_RE because the two channels
+ * carry different risk, not because agents deserve a laxer convention.
+ *
+ * A skill or command name can arrive with arguments appended to it — a typed
+ * line is split and stripped before it is checked, and NAME_RE is the backstop
+ * behind that stripping (unit-ledger: "impeccable teach --project ~/clients/acme"
+ * must never reach the store). An agent name arrives as `subagent_type`, a
+ * structured tool parameter the harness fills from a registered frontmatter
+ * `name:` — there is no line to split and no argument tail to strip.
+ *
+ * Control characters are banned rather than discouraged: U+0000 is the
+ * separator in the usage join key (inventory.ts joinKey and the byName group
+ * key), so a name carrying one could forge a join onto another asset's row.
+ * The 80-character cap sits 20 above the longest name observed across 110 real
+ * agents, and refuses a prose blob from a malformed transcript.
+ */
+export const AGENT_NAME_RE = /^[^\u0000-\u001F\u007F]{1,80}$/;
+```
+
+**Residual risk, stated rather than papered over.** Because `subagent_type` is a tool parameter, a malformed or hostile caller can put an arbitrary string in it, and `AGENT_NAME_RE` will accept anything short and control-character-free — including something argument-shaped. This is materially narrower than the typed-command case (there is no user-typed line feeding it) and the stored value is inert: it is joined against the discovered inventory at read time, so an unregistered name attaches to no asset. It is **not** zero risk, and the alternative — enumerating argument spellings — is the approach `ABOUT.md` records as losing every time.
+
+`STORE_NAME_RE` (`src/ledger.ts:37`) gains the same split at the durable boundary: `isLedgerEvent` selects the rule from the event's own `kind`, so an args-shaped name is still refused on a `skill` or `command` event while `LinkedIn Content Creator` is admitted on an `agent` one. Widening `STORE_NAME_RE` wholesale would reject nothing today and leak tomorrow.
+
+**Both writers must continue to agree.** `history.ts` and `hooks.ts` import both constants and select by kind; neither grows its own copy.
 
 ### Compatibility
 
@@ -145,7 +166,7 @@ Merging, rewriting or deleting a colliding description — that is skillet's job
 
 ## Risks
 
-1. **Widening the name gate weakens a security boundary.** It is the reason the control-character ban and the length cap are specified rather than left to a permissive `.+`. The U+0000 case is the concrete one: it is the join-key separator, so a name carrying it could attach a fire to an asset that never ran. A test asserts a name containing U+0000 is refused by both writers.
+1. **Widening the wrong gate deletes a privacy boundary.** The first draft of this spec proposed replacing `NAME_RE` outright, which would have admitted `"impeccable teach --project ~/clients/acme"` to a durable on-disk ledger — the exact string `unit-ledger.mjs:451` exists to refuse. The channel split above is the mitigation, and the six existing `NAME_RE` assertions must survive the change untouched. If an implementer finds themselves editing those assertions, the implementation is wrong, not the test.
 2. **Fixing measurement changes the headline number, and users will notice.** Agents that read as never-used may start showing fires. This is the fix working. The growth view already renders a per-scan delta, and the change should be legible there rather than appearing as unexplained drift.
 3. **Part B's causes could become a scoring system by accretion.** Each is a cited fact today. Any future cause that cannot cite a source or needs a tuned threshold does not belong in the list.
 4. **The residual is the real product.** If `prune` keeps leading with 172 rather than the 16-item residual, the diagnosis has been added without the benefit being delivered.
@@ -156,7 +177,8 @@ Merging, rewriting or deleting a colliding description — that is skillet's job
 
 - A fixture agent named `LinkedIn Content Creator` dispatched via `Agent` with `subagent_type` produces exactly one usage row and one event. Pinned against **both** writers — transcript extraction and the hook path — because they share the constant and a fix to one is not a fix to both.
 - The same, dispatched via `Task`, for the older CLI spelling.
-- A name containing U+0000 is refused by both writers; a name of 81 characters is refused; a 60-character name with spaces, `&`, `,` and `/` is accepted.
+- A name containing U+0000 is refused by both writers; a name of 81 characters is refused; a 60-character name with spaces, `&`, `,` and `/` is accepted on the agent channel.
+- **The privacy boundary is unchanged and re-pinned:** `NAME_RE` still refuses `"impeccable teach --project ~/clients/acme"`, and `isLedgerEvent` still refuses an args-shaped name on a `skill` or `command` event. A test asserts the same string is refused on those channels *after* `AGENT_NAME_RE` exists — the regression this spec came closest to causing.
 - A pre-existing ledger written under the old narrow rule still loads, and no migration runs.
 - A file under `agents/` with no frontmatter `name` produces **no item**, and the "not counted here" caveat is emitted — the two assertions are made together, since today they contradict each other.
 - The 62% cost figure is unchanged by the phantom-row fix: those rows carry 0 injected chars, and a regression here would mean the fix removed real cost.
