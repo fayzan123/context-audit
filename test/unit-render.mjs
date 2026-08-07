@@ -24,6 +24,16 @@ const check = (name, cond, detail = "") => {
   }
 };
 
+/**
+ * What the page actually SHOWS: markup with every attribute value stripped.
+ *
+ * The qualifier rule is about rendered text — a window repeated in 40 visible
+ * cells is the crowding it deletes, while the same window inside one cell's
+ * own title is the method behind that cell's figure. Substring-counting raw
+ * markup cannot tell those apart, so the "said once" assertions run over this.
+ */
+const visible = (h) => h.replace(/\s(?:title|data-tip|aria-label|alt)="[^"]*"/g, "");
+
 const payload = JSON.parse(
   readFileSync(join(root, "test", "fixtures", "render", "payload.json"), "utf8")
 );
@@ -41,22 +51,42 @@ console.log("RENDER unit (ledger surface):");
 check("fixture window measures 41d", win.span === "41d", `span: ${win.span}`);
 check("window carries the scan stamp as its clock", win.asOf === "2026-08-04T12:00:00.000Z");
 
-// --- fires cell: lifetime · window ------------------------------------------
+// --- the activity cell: one cell, one phrasing ------------------------------
+// Four columns became one. `fires`, `tok / fire` and `last fired` stated one
+// fact in three phrasings, each with its own window suffix; a never-fired row
+// said "never" three times. Everything below pins that it is said ONCE.
 check(
-  "fired cell leads with lifetime and keeps the window share beside it",
-  html.includes(`42 <span class="winpart">· 6 in 41d</span>`),
-  "lifetime · window cell missing"
+  "a fired row leads with its lifetime count and the date it last fired, once",
+  html.includes(`<span class="afig">42 fires</span> <span class="dim">· last Aug 1</span>`),
+  "activity cell wrong"
 );
 check(
-  "a lifetime-bearing cell's title names both methods and the trackedSince date",
-  /<td[^>]*title="[^"]*42 lifetime[^"]*since tracking began 2026-03-01[^"]*different method/.test(html),
+  "the window count is not a second figure in the cell — it is the cell's own title",
+  /<td class="c-act-col" title="[^"]*42 lifetime[^"]*since tracking began 2026-03-01[^"]*6 in the 41d window[^"]*separate pass/.test(html) &&
+    !html.includes("winpart"),
   "two-window title missing"
 );
 check(
-  "window count can exceed lifetime without either being hidden",
-  html.includes(`0 <span class="winpart">· 2 in 41d</span>`),
+  "the cell leads with the LARGER of the two counts — never a lifetime 0 over a window 2",
+  html.includes(`<span class="afig">2 fires</span>`) &&
+    /<td class="c-act-col" title="0 lifetime[^"]*2 in the 41d window/.test(html),
   "mirror-count cell wrong"
 );
+{
+  // Two visible occurrences on the whole page, both earned: the sidebar foot
+  // (which leads to the statement) and the statement itself. It used to caption
+  // three column headers and every usage cell under them.
+  const vis = visible(html);
+  const hits = (vis.match(/41d/g) ?? []).length;
+  check(
+    "the window is stated once, in the provenance line — never as a column or cell suffix",
+    !/·\s*41d<\/th>/.test(html) &&
+      /class="provlink" data-prov>41d · /.test(vis) &&
+      /class="provline"[\s\S]*?\(<b>41d<\/b>\)/.test(vis) &&
+      hits === 2,
+    `visible 41d occurrences: ${hits}`
+  );
+}
 
 // --- trend glyphs -----------------------------------------------------------
 for (const [name, glyph] of [["rising", "↗"], ["flat", "→"], ["quiet", "↘"], ["new", "∗"]]) {
@@ -76,100 +106,124 @@ for (const [name, glyph] of [["rising", "↗"], ["flat", "→"], ["quiet", "↘"
   check("trendOf: no verdict without bins", R.trendOf([], payload.generatedAt) === undefined && R.trendOf(undefined, payload.generatedAt) === undefined);
 }
 
-// --- never-fired age fact ---------------------------------------------------
+// --- the zero case, said once -----------------------------------------------
 check(
-  "a never-fired cell with provenance states the age inline",
-  html.includes(">never · installed 62d</td>"),
+  "a never-fired row says it in plain words, with the age that makes it actionable",
+  html.includes(`never used <span class="dim">· 62d old</span>`),
   "age-inline cell missing"
 );
+{
+  // Three never-fired rows, three cells, one phrasing each. The row used to
+  // read `fires: never · installed 47d` / `tok/fire: paid 90,383 · never fired`
+  // / `last fired: none in 43d` — one fact, three columns, three window
+  // suffixes. ("never fired" survives once on the page, as the lens control.)
+  const tbl = html.slice(html.indexOf('<table class="inv"'));
+  check(
+    "and says it exactly once per row — no three-way restatement survives",
+    (tbl.match(/never used/g) ?? []).length === 3 &&
+      !tbl.includes("never fired") &&
+      !/none in 41d/.test(tbl) &&
+      !/paid \d/.test(tbl),
+    `never-used cells in the table: ${(tbl.match(/never used/g) ?? []).length}`
+  );
+}
 check(
   "an mtime date is called an edit, never an install",
-  html.includes(">never · edited 20d</td>") && !html.includes("never · installed 20d"),
+  /title="edited 2026-07-15[^"]*">never used/.test(html) && !/installed[^"]*">never used <span class="dim">· 20d/.test(html),
   "mtime verb wrong"
 );
 check(
-  "without provenance the cell stays a plain window-qualified 0",
-  /<td class="c-num zero" title="[^"]*deleted by Claude Code[^"]*">0<\/td>/.test(html),
-  "plain zero cell missing"
+  "without provenance the cell claims no age it cannot support",
+  html.includes(`<td class="c-act-col zero">never used</td>`),
+  "plain never cell missing"
 );
 check(
   "the age cell's title names the provenance chain link",
-  /<td[^>]*title="[^"]*file creation time on this machine[^"]*">never/.test(html),
+  /title="installed 2026-06-03, date from file creation time on this machine\."/.test(html),
   "provenance source missing from title"
 );
-
-// --- tok/fire column --------------------------------------------------------
 check(
-  "tok/fire header is sortable and window-labeled",
-  html.includes(`data-sort="tokPerFire"`) && html.includes(">tok / fire · 41d<"),
-  "tok/fire header missing"
+  "no zero-fire row carries the window in its own text — the provenance line has it",
+  !/never used[^<]*41d/.test(html),
+  "window repeated on a zero cell"
+);
+
+// --- tok / fire: a derived ratio, no longer a column -------------------------
+check(
+  "the tok/fire column is gone from the table entirely",
+  !html.includes(`data-sort="tokPerFire"`) && !html.includes("tok / fire"),
+  "tok/fire column survived"
 );
 check(
-  "tok/fire = (ambient × sessions + body × fires) ÷ fires",
-  R.tokPerFire(byName("hot"), 87) === 2450 && html.includes(`>2,450</td>`),
+  "the ratio itself is unchanged, and now lives in the drawer where cost is the subject",
+  R.tokPerFire(byName("hot"), 87) === 2450 &&
+    drawerFor("hot").includes(`<b>2,450</b> tok`) &&
+    drawerFor("hot").includes("window figures on both sides of the division"),
   `got ${R.tokPerFire(byName("hot"), 87)}`
 );
 check(
-  "zero-fire tok/fire states what was paid instead",
-  html.includes("paid 17,400 · never fired"),
-  "paid-never cell missing"
+  "a row with nothing to divide by states what WAS paid, never a sentinel",
+  drawerFor("cold").includes(`<b>17,400</b> tok`) &&
+    drawerFor("cold").includes("with nothing recorded against it"),
+  "paid-so-far block missing"
 );
 check(
-  "in-window-silent tok/fire stays window-qualified, distinct from never",
-  html.includes("paid 6,525 · none in 41d"),
-  "paid-none cell missing"
+  "an in-window-silent row is distinguished from a never-fired one",
+  drawerFor("typedonly").includes("no fires recorded in the 41d window"),
+  "paid-none wording missing"
 );
 check("no cell ever renders Infinity or NaN", !/NaN|Infinity/.test(html));
 {
-  const asc = R.visibleItems(payload, { ...R.defaultState(), sort: { key: "tokPerFire", dir: 1 } });
-  const desc = R.visibleItems(payload, { ...R.defaultState(), sort: { key: "tokPerFire", dir: -1 } });
-  const fireless = new Set(["typedonly", "cold", "edited", "plainzero", "style-rule", "AGENTS.md"]);
-  const tailNames = (list) => list.slice(-5).map((i) => i.name);
+  const asc = R.visibleItems(payload, { ...R.defaultState(), sort: { key: "activity", dir: 1 } });
+  const desc = R.visibleItems(payload, { ...R.defaultState(), sort: { key: "activity", dir: -1 } });
+  const untracked = new Set(["style-rule", "AGENTS.md"]);
   check(
-    "zero-fire and n/a rows sort last ascending, untracked n/a very last",
-    tailNames(asc).every((n) => fireless.has(n)) && asc[asc.length - 1].name === "style-rule",
-    tailNames(asc).join(",")
+    "one activity column means one activity sort: untracked n/a rows sort last ascending",
+    asc.slice(-2).every((i) => untracked.has(i.name)),
+    asc.slice(-3).map((i) => i.name).join(",")
   );
   check(
-    "zero-fire and n/a rows sort last descending too",
-    tailNames(desc).every((n) => fireless.has(n)) && desc[desc.length - 1].name === "style-rule",
-    tailNames(desc).join(",")
+    "…and last descending too — an absent measurement is never a low count",
+    desc.slice(-2).every((i) => untracked.has(i.name)),
+    desc.slice(-3).map((i) => i.name).join(",")
   );
   check(
-    "ratio rows order by the ratio itself",
-    asc.findIndex((i) => i.name === "hot") > -1 &&
-      asc.filter((i) => !fireless.has(i.name)).length === 5,
-    "ratio partition wrong"
+    "tracked rows order by the count the cell actually leads with",
+    desc[0].name === "hot" && desc[1].name === "typedonly",
+    desc.slice(0, 3).map((i) => i.name).join(",")
   );
 }
 
-// --- findings badge fire count ----------------------------------------------
+// --- flags column: the count and the severity, and nothing restated ----------
 check(
-  "the findings badge carries the fire count when both facts exist",
-  html.includes("▲ 1 · 42 fires"),
-  "badge fire count missing"
+  "the flags cell carries the count and the severity tone",
+  html.includes(`<span class="badge danger">▲ 1</span>`),
+  "flags badge wrong"
 );
 check(
-  "the badge's qualifier names the trackedSince date",
-  /<span class="badge[^>]*title="[^"]*since tracking began 2026-03-01[^"]*">▲ 1/.test(html),
-  "badge qualifier missing"
+  "it does not restate the fire count the activity cell states one column left",
+  !html.includes("▲ 1 · 42 fires"),
+  "fire count printed twice on one row"
 );
 
-// --- header dead-weight rent ------------------------------------------------
-check(
-  "the quiet readout gains the dead-weight rent sub-line",
-  html.includes("~31k tok/session on silent items"),
-  "rent sub-line missing"
-);
-check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k" && R.fmtK(7750) === "7.8k" && R.fmtK(480) === "480" && R.fmtK(9960) === "10k");
+// --- the silent-item rent moved behind the view it belongs to ----------------
+check("fmtK compacts figures the way the rehoused rent line needs", R.fmtK(31000) === "31k" && R.fmtK(7750) === "7.8k" && R.fmtK(480) === "480" && R.fmtK(9960) === "10k");
 {
-  const noLedger = {
-    ...payload,
-    header: { ...payload.header, deadWeightChars: undefined },
-  };
+  const prune = R.renderResults(payload, { ...R.defaultState(), nav: "prune" });
+  check(
+    "the rent is stated under the prune plot, where cost meets silence",
+    prune.includes("<b>31k</b> tok/session is paid on items with nothing recorded against them"),
+    "rent line not rehoused"
+  );
+  check(
+    "and no longer sits in the page chrome",
+    !html.includes("tok/session on silent items"),
+    "rent still in the header"
+  );
+  const noLedger = { ...payload, header: { ...payload.header, deadWeightChars: undefined } };
   check(
     "no rent line without the ledger's figure — absent, not zero",
-    !R.renderApp(noLedger, R.defaultState()).includes("tok/session on silent items"),
+    !R.renderResults(noLedger, { ...R.defaultState(), nav: "prune" }).includes("tok/session is paid on items"),
     "rent rendered from nothing"
   );
 }
@@ -178,9 +232,16 @@ check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k
 {
   const d = drawerFor("hot");
   check(
-    "provenance section states date, age and origin",
-    d.includes(">provenance<") && d.includes("2026-03-22") && d.includes("135d ago") && d.includes("claude-plugins-official"),
-    "provenance section incomplete"
+    "the drawer is organised by QUESTION, not by data source",
+    [">what it is<", ">what it costs<", ">is it used<", ">where it came from<", ">is it flagged<"].every(
+      (s) => d.includes(s)
+    ) && !d.includes(`<span class="engr">provenance</span>`),
+    "question headings missing"
+  );
+  check(
+    "where-it-came-from states the date, the age and the origin",
+    d.includes(">first seen<") && d.includes("2026-03-22") && d.includes("135d ago") && d.includes("claude-plugins-official"),
+    "provenance block incomplete"
   );
   check(
     "provenance names which chain link produced the date",
@@ -338,7 +399,7 @@ check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k
   );
   check(
     "the table badge is tonal and names the trackedSince qualifier",
-    /badge fact" title="every recorded fire was user-typed since tracking began 2026-03-01[^"]*">never auto-fired/.test(html),
+    /badge fact" title="Every recorded fire was user-typed since tracking began 2026-03-01[^"]*">never auto-fired/.test(html),
     "badge qualifier missing"
   );
   const shadowedTyped = R.renderApp(
@@ -394,19 +455,19 @@ check("fmtK compacts figures the way the sub-line needs", R.fmtK(31000) === "31k
   );
 }
 
-// --- backfilled drill-down rows labeled (#17) --------------------------------
+// --- backfilled drill-down rows carry the deviation mark (#17) ---------------
 {
   const d = drawerFor("typedonly");
   check(
-    "a backfilled row is chip-labeled and opens history.jsonl honestly",
+    "a backfilled row carries the page's ONE deviation mark and opens history.jsonl honestly",
     /data-open-event="ev-typed-0"[^>]*title="open history.jsonl at this imported entry"/.test(d) &&
-      /data-open-event="ev-typed-0"[\s\S]*?<span class="evmark">backfilled<\/span>/.test(d),
-    "backfill labeling missing"
+      /data-open-event="ev-typed-0"[\s\S]*?<b class="dev" data-dev="backfilled" title="backfilled — imported rather than observed[^"]*">°<\/b>/.test(d),
+    "backfill deviation mark missing"
   );
   const observed = d.slice(d.indexOf("ev-typed-1"), d.indexOf("ev-typed-0"));
   check(
-    "an observed row keeps its transcript title and gains no chip",
-    observed.includes("open the transcript at this invocation") && !observed.includes("backfilled"),
+    "an observed row keeps its transcript title and gains no mark",
+    observed.includes("open the transcript at this invocation") && !observed.includes("data-dev"),
     "observed row mislabeled"
   );
   check(
@@ -541,14 +602,16 @@ const rowOf = (html, id) => {
   const i = t.indexOf(`data-id="${id}"`);
   return i < 0 ? "" : t.slice(i, t.indexOf("</tr>", i));
 };
-/** One engraved drawer section, by its label. */
+/** One engraved drawer block, by its label — a question section or a sub-block. */
 const sectionOf = (html, label) => {
-  const i = html.indexOf(`<span class="engr">${label}</span>`);
-  return i < 0 ? "" : html.slice(i, html.indexOf("</section>", i));
+  const i = html.indexOf(`<span class="engr sub">${label}</span>`);
+  if (i >= 0) return html.slice(i, html.indexOf("</div>", i));
+  const j = html.indexOf(`<span class="engr">${label}</span>`);
+  return j < 0 ? "" : html.slice(j, html.indexOf("</section>", j));
 };
-/** A panel rendered through the real results path, exactly as the page does. */
+/** A view rendered through the real results path, exactly as the page does. */
 const panelOf = (payload, key, extra = {}) =>
-  R.renderResults(payload, { ...R.defaultState(), panel: key, ...extra });
+  R.renderResults(payload, { ...R.defaultState(), nav: key, ...extra });
 /** Just the panel's own box, so "no axis" assertions can't be fooled by chrome. */
 const panelBox = (html) => {
   const i = html.indexOf(`<section class="panelbox`);
@@ -714,63 +777,65 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   );
 }
 
-// --- delta: an unrecorded previous version is said in words (#S2) ------------
+// --- the portfolio strip is dissolved; its facts moved behind their views ----
 {
   check(
+    "no portfolio band survives on the page",
+    !app2.includes(`class="rollup`) && !app2.includes(`class="rstat`) && !app2.includes("portfolio"),
+    "the strip is still drawn"
+  );
+  const gw = panelOf(p2, "growth");
+  check(
+    "the since-last-scan delta moved under the chart that plots change over time",
+    gw.includes(">since the previous scan · 2026-07-28<"),
+    "delta not rehoused"
+  );
+  check(
     "a pluginsUpdated entry with no `from` states that the previous version was not recorded",
-    app2.includes("superpowers updated to 6.2.0 (previous version not recorded)"),
+    gw.includes("superpowers updated to 6.2.0 (previous version not recorded)"),
     "no-from wording missing"
   );
   check(
     "no sentinel is printed where a version would go",
-    !/unknown\s*→/i.test(app2) && !/undefined/.test(app2) && !/\?\s*→\s*6\.2\.0/.test(app2),
+    !/unknown\s*→/i.test(gw) && !/undefined/.test(gw) && !/\?\s*→\s*6\.2\.0/.test(gw),
     "a sentinel reads as a version"
   );
   check(
     "an entry that HAS a from still renders the real transition",
-    app2.includes("impeccable 1.2.0 → 1.3.0"),
+    gw.includes("impeccable 1.2.0 → 1.3.0"),
     "from → to missing"
   );
   check(
     "the delta names the snapshot it was measured against and why `from` can be absent",
-    app2.includes("snapshots record no plugin versions, which is why a previous version can be unrecorded"),
+    gw.includes("snapshots record no plugin versions, which is why a previous version can be unrecorded"),
     "delta method missing"
   );
-}
 
-// --- portfolio: concentration counts dispatch names, not rows ----------------
-{
+  const pq = panelOf(p2, "prune");
   check(
-    "concentration prints the dispatch-name count",
-    app2.includes(`<span class="rfig">2<i>names</i></span>`) &&
-      app2.includes("account for 84% of every recorded fire"),
+    "concentration moved under the plot that asks the same question, printing dispatch NAMES",
+    pq.includes("<b>2</b> names account for <b>84%</b> of every recorded fire"),
     "name count missing"
   );
   check(
     "it never prints ids.length as the count",
-    !/<span class="rfig">3<i>names?<\/i>/.test(app2),
+    !/<b>3<\/b> names? account/.test(pq),
     "row count printed as a name count"
   );
   check(
-    "the row count is stated separately, with the reason the two differ",
-    app2.includes("opens 3 rows — one name is installed at two scopes"),
-    "row-count note missing"
-  );
-  const f = R.focusSet(p2, "concentration");
-  check(
-    "the proof view's label carries the name count and its set carries every row",
-    f?.label === "top 2 by fires" && f.ids.length === 3,
-    JSON.stringify(f)
+    "the counting rule rides the line rather than a strip of its own",
+    pq.includes("two rows sharing a name hold the same events, and summing rows would count those fires twice"),
+    "concentration method missing"
   );
   check(
     "a top-spend entry whose row is not in this payload renders as text, not a dead button",
-    app2.includes(`<span class="rlink">ghost `) && !app2.includes(`data-id="id-ghost"`),
+    pq.includes(`<span class="wm-link">ghost `) && !pq.includes(`data-id="id-ghost"`),
     "unresolvable stat offered a click"
   );
   check(
     "the two rent figures are held apart by unit — window total vs per-session",
-    app2.includes("a WINDOW TOTAL over the observed history") &&
-      app2.includes("The header&#39;s silent-item rent is a PER-SESSION figure"),
+    pq.includes("a WINDOW TOTAL over the observed history, a different unit from the per-session cost") &&
+      pq.includes("A PER-SESSION figure"),
     "spend/rent units conflated"
   );
 }
@@ -929,7 +994,7 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   );
   check(
     "the badge's title states the span, the silence and the record it was measured over",
-    /all 4 recorded fires landed within one 3-day span \(2026-05-05 → 2026-05-08\), and nothing since — 88d ago\. Measured over the ledger&#39;s record since 2026-03-01\./.test(app2),
+    /All 4 recorded fires landed within one 3-day span \(2026-05-05 → 2026-05-08\), and nothing since — 88d ago\. Measured over the ledger&#39;s record since 2026-03-01\./.test(app2),
     "burst title incomplete"
   );
   check(
@@ -961,7 +1026,7 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
   );
   check(
     "its title states the asymmetry: paid everywhere, used in one place",
-    app2.includes("Its always-in-context cost is paid in every session in every project; its recorded use is in that one."),
+    app2.includes("Its cost is paid in every session in every project; its recorded use is in that one."),
     "scope asymmetry not stated"
   );
   check(
@@ -993,10 +1058,9 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
     "disable date wording wrong"
   );
   check(
-    "the ctime source is named, with what else moves it",
-    d.includes("That date is the directory&#39;s ctime: moving a skill into skills-disabled is a rename, which leaves mtime alone but bumps ctime") &&
-      d.includes("Treat it as an upper bound on the date"),
-    "ctime caveat missing"
+    "a ctime-derived date carries the upper-bound deviation mark, and the mark says why",
+    /data-dev="bound" title="an upper bound, not a reading — Nothing logs a disable\. That date is the directory&#39;s ctime: moving a skill into skills-disabled is a rename, which leaves mtime alone but bumps ctime[^"]*">°<\/b>/.test(d),
+    "bound deviation mark missing"
   );
   check(
     "attempts since are counted, and what an attempt means is stated",
@@ -1047,34 +1111,42 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
 
 // --- payload caveats: degraded reads state themselves ------------------------
 {
+  // They qualify the FIGURES, so they live inside the provenance statement
+  // that describes those figures — an inline disclosure, read in full in the
+  // layout, never a tooltip and never a wall of amber prose.
+  const opened = R.renderApp(p2, { ...R.defaultState(), provOpen: true });
   check(
-    "payload caveats are counted and read in full on hover",
-    app2.includes(">2 caveats<") &&
-      app2.includes("Cursor&#39;s local conversation store could not be opened (SQLITE_CANTOPEN)") &&
-      app2.includes("3 ledger lines were unreadable and were skipped."),
-    "caveat strip wrong"
+    "caveats are read IN THE LAYOUT, inside the provenance statement they qualify",
+    /<section class="prov"[\s\S]*?<ul class="cav">/.test(opened) &&
+      opened.includes("<li>Cursor&#39;s local conversation store could not be opened (SQLITE_CANTOPEN); cursor rules show no readable history.</li>") &&
+      opened.includes("<li>3 ledger lines were unreadable and were skipped.</li>"),
+    "caveat list wrong"
   );
-  // They qualify the SCAN, not the current filter, so they sit in the masthead
-  // plate beside the scan stamp and window rather than in the filter rail.
   check(
-    "caveats sit in the masthead plate, beside the scan facts they qualify",
-    /<div class="plate">[\s\S]*?>2 caveats<[\s\S]*?<\/div>/.test(app2) &&
-      !/<div class="rail">[\s\S]*?>2 caveats<[\s\S]*?<\/div>/.test(app2),
-    "caveats not in the plate"
+    "the sidebar foot states the window and the caveat count, and is the control that opens them",
+    /<button class="provlink" data-prov>41d · 2 caveats<\/button>/.test(app2),
+    "sidebar foot wrong"
+  );
+  check(
+    "the list is not drawn until asked for — a collapsed summary is still a row of the table's height",
+    !app2.includes('class="cav"'),
+    "caveat list drawn unasked"
   );
   const one = clone(p2);
   one.caveats = ["one thing went wrong"];
   check(
     "one caveat is singular",
-    R.renderApp(one, R.defaultState()).includes(">1 caveat<"),
+    R.renderApp(one, R.defaultState()).includes("data-prov>41d · 1 caveat<"),
     "plural wrong"
   );
   const none = clone(p2);
   delete none.caveats;
+  delete none.ledgerCaveat;
+  none.pluginResolution = "config";
   check(
-    "no caveat strip when the payload states none — absent, not a zero",
-    !R.renderApp(none, R.defaultState()).includes("caveat on these figures") &&
-      !R.renderApp(none, R.defaultState()).includes("caveats on these figures"),
+    "a payload that states no caveats says zero, and draws no list either way",
+    R.renderApp(none, { ...R.defaultState(), provOpen: true }).includes("data-prov>41d · 0 caveats<") &&
+      !R.renderApp(none, { ...R.defaultState(), provOpen: true }).includes('class="cav"'),
     "empty caveat chrome"
   );
 }
@@ -1130,12 +1202,6 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
     "a Claude-only mechanic was offered to a machine without it"
   );
 
-  teaches(
-    "overlap: shared assets outside the current scope say so and offer the scope",
-    panelOf(p2, "overlap", { mode: "skills" }),
-    ["shared assets sit outside this scope", "An AGENTS.md read by two harnesses is the usual case", `data-mode="all"`]
-  );
-
   const unshared = clone(p2);
   unshared.items = unshared.items.map((i) => {
     const c = { ...i };
@@ -1161,12 +1227,17 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
     "empty state still over-claims"
   );
 
+  // A single-provider machine never reaches this panel at all: the sidebar
+  // entry appears only when it has something to show, and with one harness
+  // there is nothing to cross. The empty state that used to explain that is
+  // gone with it — an unreachable branch is worse than no branch.
   const solo = clone(unshared);
   solo.items = solo.items.filter((i) => i.source === "claude");
-  teaches(
-    "overlap: one provider on the machine explains what would fill the panel",
-    panelOf(solo, "overlap"),
-    ["one provider on this machine", "An overlap matrix compares what two or more harnesses read"]
+  check(
+    "overlap: a single-provider machine is never offered the door",
+    !R.renderPage(solo, R.defaultState()).includes(`data-nav="overlap"`) &&
+      panelOf(solo, "overlap").includes(`<table class="inv"`),
+    "a one-provider machine was offered a matrix with nothing to cross"
   );
 
   const noGrowth = clone(p2);
@@ -1346,6 +1417,188 @@ check("second fixture measures the same 41d window", win2.span === "41d", win2.s
     panelOf(h, "overlap").includes(`class="ovl-prov"`) &&
       !panelOf(h, "overlap").includes("panel-void"),
     "hostile overlap fell through to an empty state"
+  );
+}
+
+// ============================================================================
+// The qualifier rule, stated as tests.
+//
+// Invariant 6 is restated as: no figure may be presentable as something it is
+// not. That is satisfied by ONE provenance statement plus a deviation mark on
+// any figure it does not describe — never by repetition. These pin both halves.
+// ============================================================================
+console.log("\nRENDER unit (the qualifier rule):");
+
+{
+  const prov = app2.slice(app2.indexOf(`<section class="prov"`), app2.indexOf("</section>", app2.indexOf(`<section class="prov"`)));
+  check(
+    "the provenance statement is complete: what was read, the window, when tracking began, what a fire is",
+    /<b>11<\/b> instruction files scanned/.test(prov) &&
+      /counted from <b>87<\/b> transcripts covering 2026-06-24 → 2026-08-04 \(<b>41d<\/b>\)/.test(prov) &&
+      /the durable ledger since <b>2026-03-01<\/b>/.test(prov) &&
+      prov.includes("A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"),
+    "provenance statement incomplete"
+  );
+  check(
+    "…and it carries the retention rule that makes a zero readable",
+    prov.includes("Older sessions are deleted, so nothing inside that window means <em>not used lately</em>, not never used."),
+    "retention rule missing"
+  );
+
+  // Each of the six is a real deviation with a real detail, and the mark is
+  // ONE glyph everywhere — two marks would be a second colour rule in disguise.
+  const surfaces = [
+    R.renderApp(p2, { ...R.defaultState(), selected: "id-off" }),
+    R.renderApp(p2, { ...R.defaultState(), selected: "id-agent-priced" }),
+    R.renderApp(p2, { ...R.defaultState(), selected: "id-blind" }),
+    R.renderApp(p2, { ...R.defaultState(), nav: "all" }),
+  ].join("\n");
+  for (const [kind, term] of [
+    ["window", "measured over a different provider&#39;s window"],
+    ["backfilled", "backfilled — imported rather than observed"],
+    ["modelled", "modelled — our reconstruction of something the harness keeps to itself"],
+    ["unmeasured", "unmeasured — absent, which is not zero"],
+    ["bound", "an upper bound, not a reading"],
+    ["approx", "approximate, by a stated method"],
+  ]) {
+    check(
+      `the ${kind} deviation renders the page's one mark, with its own sentence`,
+      new RegExp(`<b class="dev" data-dev="${kind}" title="${term.replace(/[.*+?^$()|[\]\\]/g, "\\$&")} — [^"]+">°</b>`).test(surfaces),
+      `no ${kind} mark`
+    );
+  }
+  // The dead-weight verdict is reached in the ROW's window, not the page's, so
+  // an amber cell judged elsewhere has to say so. This is asserted separately
+  // because the comparison is easy to write against the already-resolved
+  // window, where it can never be true and the mark silently never appears.
+  {
+    const elsewhere = clone(payload);
+    // Installed before CURSOR's window opened, which is the gate the verdict
+    // actually uses — the merged transcript window would not have caught it.
+    elsewhere.items = [
+      {
+        ...byName("cold"),
+        source: "cursor",
+        kind: "rule",
+        provenance: { installedAt: "2025-05-01T00:00:00Z", source: "birthtime" },
+      },
+    ];
+    elsewhere.providerWindows = { cursor: { start: "2025-09-01T00:00:00Z", end: "2026-08-04T00:00:00Z" } };
+    const h = R.renderApp(elsewhere, R.defaultState());
+    check(
+      "an amber cost cell judged in another provider's window carries the mark on the FIGURE",
+      /<td class="c-num c-cost dw"[^>]*>[\s\S]*?data-dev="window" title="[^"]*judged in cursor&#39;s own 337d window, not the page&#39;s[^"]*">°<\/b><\/td>/.test(h),
+      "dead-weight window deviation not marked on the cost cell"
+    );
+    const same = clone(payload);
+    same.items = [byName("cold")];
+    check(
+      "…and carries nothing at all when the page's own window is the one it was judged in",
+      /<td class="c-num c-cost dw"/.test(R.renderApp(same, R.defaultState())) &&
+        !R.renderApp(same, R.defaultState()).includes('data-dev="window"'),
+      "a matching figure was qualified anyway"
+    );
+  }
+  check(
+    "there is exactly one mark glyph on the page, not one per deviation kind",
+    [...surfaces.matchAll(/<b class="dev"[^>]*>(.)<\/b>/g)].every((m) => m[1] === "°"),
+    "more than one glyph is in use"
+  );
+  check(
+    "the legend names every kind actually present, and only those",
+    R.deviationsPresent(p2).length === 6 &&
+      prov.includes(
+        "marks a figure this does not describe — its own note says how: another provider&#39;s window · backfilled · modelled · unmeasured · an upper bound · approximate."
+      ),
+    JSON.stringify(R.deviationsPresent(p2))
+  );
+
+  // The other half of the rule, and the one that licenses the deletions: a
+  // figure the statement DOES describe carries nothing at all.
+  const plain = clone(p2);
+  delete plain.providerWindows;
+  delete plain.budgetCut;
+  delete plain.history.backfilledSince;
+  for (const i of plain.items) {
+    delete i.disabledSafety;
+    delete i.agentCost;
+    if (i.fires === undefined) i.fires = null;
+  }
+  delete plain.ledgerCaveat;
+  const plainHtml = R.renderApp(plain, R.defaultState());
+  check(
+    "a page whose every figure matches the statement carries no mark and no legend",
+    R.deviationsPresent(plain).length === 0 &&
+      !plainHtml.includes('class="dev"') &&
+      !plainHtml.includes("marks a figure this does not describe"),
+    `deviations still present: ${JSON.stringify(R.deviationsPresent(plain))}`
+  );
+  check(
+    "…and no usage cell on it repeats the window, the method or the tracking date",
+    !/<td class="c-act-col"[^>]*>[^<]*41d/.test(plainHtml) &&
+      (plainHtml.match(/<th[^>]*data-tip/g) ?? []).length === 0,
+    "a cell is still carrying the page's own provenance"
+  );
+}
+
+// --- every defined term is defined IN THE LAYOUT ----------------------------
+// A definition that only exists on hover does not exist for a first-time
+// reader, and one that must be dismissed is one they dismiss before reading.
+{
+  const vis = visible(app2);
+  const defined = [
+    ["fire", "A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"],
+    ["cost / session", "<b>cost / session</b>tokens loaded into the model&#39;s context before you type, every session, used or not"],
+    ["window", "counted from <b>87</b> transcripts covering 2026-06-24 → 2026-08-04 (<b>41d</b>)"],
+    ["tracked since", "the durable ledger since <b>2026-03-01</b>"],
+    ["listing budget", "<b>listing budget</b>the ~8,000 characters Claude Code allows every enabled skill&#39;s name and description"],
+  ];
+  for (const [term, def] of defined) {
+    check(`"${term}" is defined in the rendered layout, not in an attribute`, vis.includes(def), `definition of ${term} missing`);
+  }
+  const dw = R.renderApp(payload, R.defaultState());
+  check(
+    `"dead weight" is defined where the amber first appears, and only when it does`,
+    visible(dw).includes(
+      "<b>dead weight</b>at least a quarter of your priciest item&#39;s cost, nothing recorded against it, and installed before the window opened"
+    ) && !vis.includes("<b>dead weight</b>"),
+    "dead-weight definition missing, or shown with nothing to define"
+  );
+}
+
+// --- the sidebar, against the hard-ban list ---------------------------------
+// The single highest-risk element in this overhaul: a left sidebar is the most
+// common shape of an AI-generated dashboard, and `.impeccable.md`'s acceptance
+// test fails on sight of one. So it is checked against that list explicitly.
+{
+  const side = app2.slice(app2.indexOf(`<nav class="side"`), app2.indexOf("</nav>"));
+  check(
+    "the sidebar carries no icon, image, avatar or decorative glyph",
+    !/<(?:svg|img|picture|figure)\b/.test(side) &&
+      !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(side),
+    "an icon reached the sidebar"
+  );
+  check(
+    "its structure is engraved labels and hairlines — no cards, no panels, no fills",
+    (side.match(/class="engr"/g) ?? []).length === 3 &&
+      !/class="[^"]*(?:card|panel|badge|pill|chip)/.test(side),
+    "the sidebar grew a card grammar"
+  );
+  check(
+    "counts are tabular figures in their own compartment, never glued to the label",
+    /<span>skills<\/span><b>\d+<\/b>/.test(side),
+    "label and count read as one string"
+  );
+  check(
+    "exactly one entry is lit, and the caret is the only thing in the gutter",
+    (side.match(/class="nav on"/g) ?? []).length === 1 &&
+      (side.match(/<s aria-hidden="true">▸<\/s>/g) ?? []).length === 1,
+    "sidebar active state wrong"
+  );
+  check(
+    "the foot carries the window span and the caveat count, both on one control",
+    /<button class="provlink" data-prov>41d · 2 caveats<\/button>/.test(side),
+    "sidebar foot wrong"
   );
 }
 

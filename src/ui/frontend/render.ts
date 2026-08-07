@@ -2,7 +2,6 @@
 // bearing constraint, not a style choice: the frontend smoke test imports this
 // module into Node and renders fixture payloads without a browser rig.
 import type {
-  ListingBudget,
   Provenance,
   ProvenanceSource,
   SecurityFinding,
@@ -16,19 +15,9 @@ import type {
 // this module, which makes the pair a cycle — safe because neither side
 // touches the other at module-evaluation time: every cross-module reference
 // lives inside a function body.
-import { PANELS, renderPanel } from "./views.js";
+import { renderPanel } from "./views.js";
 
-export type SortKey =
-  | "name"
-  | "source"
-  | "kind"
-  | "scope"
-  | "injected"
-  | "fires"
-  | "tokPerFire"
-  | "lastFired"
-  | "findings"
-  | "state";
+export type SortKey = "name" | "source" | "scope" | "injected" | "activity" | "findings" | "state";
 
 /**
  * One line of the on-page activity log — the same lines the server prints to
@@ -43,28 +32,30 @@ export interface LogEntry {
 
 export interface AppState {
   /**
-   * Master scope, not a filter: the skills layer alone, or the whole
-   * inventory. Sits outside isFiltered/clear/esc on purpose — clearing your
-   * filters should not silently widen what kind of thing you are looking at.
-   */
-  mode: "skills" | "all";
-  /**
-   * Which analysis surface the results region is showing — the inventory table
-   * (the default; nobody should have to click back to the thing the tool is
-   * for) or one of the panels in `PANELS`.
+   * The sidebar selection, and the page's ONE navigation axis: an inventory
+   * entry ("all" or a kind key), an analysis view (a PANELS key), or
+   * "flagged".
    *
-   * Deliberately NOT called a view: the rail's "view" bank is already the lens
-   * filter, and one word covering two axes is how a scope gets mistaken for a
-   * filter. A panel is not a filter either — it never changes which items are
-   * in play, only which reading of them is drawn — so it sits outside
-   * isFiltered/clear/esc, exactly like `mode`.
+   * It replaces the old mode / kinds / panel triple, which was three controls
+   * answering one question — what am I looking at — spread across three bands
+   * of chrome. Navigation is not a filter: it sits outside isFiltered, clear
+   * and esc, because clearing your filters must never silently change what
+   * kind of thing you are looking at.
    */
-  panel: string;
+  nav: string;
   /**
-   * An explicit id set the table is narrowed to: what a quadrant click and the
-   * portfolio strip's proof links produce. It carries its own label because it
-   * is rendered as a chip in the rail — a filter with nothing on screen to
-   * turn off is the one thing the rail must never hold.
+   * Draw the headline figures above the content. Ordinary view state, held
+   * here like every other — it does not survive a reload, and toggling it
+   * changes only whether the figures are drawn, never what they say.
+   */
+  statBar: boolean;
+  /** The caveat list inside the provenance statement, opened from the sidebar foot. */
+  provOpen?: boolean;
+  /**
+   * An explicit id set the table is narrowed to: what a prune-quadrant click
+   * produces. It carries its own label because it is rendered as a chip in the
+   * view controls — a filter with nothing on screen to turn off is the one
+   * thing this page must never hold.
    */
   focus?: { label: string; ids: string[] };
   /** Activity log lines, oldest first; the panel renders only when non-empty. */
@@ -72,10 +63,10 @@ export interface AppState {
   logOpen?: boolean;
   /** Active provider filters; empty means all. */
   providers: string[];
-  kinds: string[];
   /** Free-text match over name, description and path. */
   query: string;
-  lens: "all" | "fired" | "never-fired" | "enabled" | "disabled" | "flagged";
+  /** The activity lens. "off" is the disabled set; flagged is a destination now. */
+  lens: "all" | "fired" | "never-fired" | "off";
   sort: { key: SortKey; dir: 1 | -1 };
   selected?: string;
   /** Toggle failure to render in the drawer — never a silent no-op. */
@@ -94,11 +85,10 @@ export interface AppState {
 
 export function defaultState(): AppState {
   return {
-    mode: "all",
-    panel: "inventory",
+    nav: "all",
+    statBar: true,
     log: [],
     providers: [],
-    kinds: [],
     query: "",
     lens: "all",
     sort: { key: "injected", dir: -1 },
@@ -110,23 +100,41 @@ export function defaultState(): AppState {
 /**
  * The state the app actually boots with: skills-first. Skills are the layer
  * you act on — togglable, auto-triggering, the thing this dashboard manages —
- * so they are the default view; everything else sits one click away behind
- * the mode control. A payload with no skills at all (a Codex-only or
- * Cursor-only machine) boots to the full inventory instead of an empty table.
+ * so the sidebar opens on them; everything else is one entry away. A payload
+ * with no skills at all (a Codex-only or Cursor-only machine) boots to the
+ * full inventory instead of an empty table.
  */
 export function initialState(payload: UiPayload): AppState {
   const s = defaultState();
-  if (payload.items.some((i) => i.kind === "skill")) s.mode = "skills";
+  if (payload.items.some((i) => i.kind === "skill")) s.nav = "skill";
   return s;
 }
 
-/** Any filter narrowing the table, which is what a "clear" control acts on. */
+/** Any filter narrowing the content, which is what a "clear" control acts on. */
 export const isFiltered = (s: AppState): boolean =>
   s.providers.length > 0 ||
-  s.kinds.length > 0 ||
   s.lens !== "all" ||
   s.query.trim() !== "" ||
   (s.focus?.ids.length ?? 0) > 0;
+
+/**
+ * The inventory kinds, in the order the sidebar lists them: the layer you act
+ * on first, then what the model dispatches, then what you type, then what is
+ * simply always there.
+ */
+export const KIND_ORDER = ["skill", "agent", "command", "prompt", "rule", "instructions"];
+
+/** Sidebar wording. `fires` stays the product's noun; kinds get plain plurals. */
+export const KIND_LABEL: Record<string, string> = {
+  skill: "skills",
+  agent: "agents",
+  command: "commands",
+  prompt: "prompts",
+  rule: "rules",
+  instructions: "instructions",
+};
+
+const isKindNav = (n: string): boolean => KIND_ORDER.includes(n);
 
 /**
  * Everything interpolated into markup goes through here. The payload carries
@@ -152,6 +160,24 @@ export function fmtInt(n: number): string {
 
 export const tokens = (chars: number): number => Math.ceil(chars / 4);
 const fmtDay = (iso?: string): string => (iso ? iso.slice(0, 10) : "");
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A date for reading, not for filing: "Aug 5" inside the scan's own year,
+ * "Aug 5 2025" outside it. The year is not dropped silently — a bare "Aug 5"
+ * that is really eleven months old would be the same class of overclaim as a
+ * fire count with no window on it. Both parts come from the ISO string, never
+ * from the viewer's clock, so the same payload reads the same tomorrow.
+ */
+function fmtMon(iso?: string, asOf?: string): string {
+  if (!iso) return "";
+  const d = fmtDay(iso);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (!m) return d;
+  const day = `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}`;
+  return asOf && asOf.slice(0, 4) === m[1] ? day : `${day} ${m[1]}`;
+}
 
 const DAY = 86_400_000;
 
@@ -437,6 +463,68 @@ const firesCount = (f: UiFires): number => f.lifetime?.invocations ?? f.invocati
 /** "1 fire" / "2 fires" — `s` alone is a variable name three functions here use. */
 const plural = (n: number): string => (n === 1 ? "" : "s");
 
+// --- the qualifier rule -----------------------------------------------------
+//
+// Invariant 6 restated: no figure may be presentable as something it is not.
+// That is satisfied by TWO mechanisms and not by repetition — one provenance
+// statement covering the page, and a deviation mark on any figure the
+// statement does not describe.
+//
+// The page used to satisfy it the other way: every element carried its full
+// derivation, 21,357 words across 490 elements. Because everything was equally
+// explained, nothing was learnable. A figure that matches the page-level
+// provenance now carries NOTHING; the six deviations below are the complete
+// list of things that earn a mark, and they are not negotiable.
+
+export type Deviation = "window" | "backfilled" | "modelled" | "unmeasured" | "bound" | "approx";
+
+/** The legend's index: which kinds are on this page, in one word each. */
+export const DEVIATION_LABEL: Record<Deviation, string> = {
+  window: "another provider's window",
+  backfilled: "backfilled",
+  modelled: "modelled",
+  unmeasured: "unmeasured",
+  bound: "an upper bound",
+  approx: "approximate",
+};
+
+/** What each mark MEANS, worded identically wherever it is read. */
+export const DEVIATION_TERM: Record<Deviation, string> = {
+  window: "measured over a different provider's window",
+  backfilled: "backfilled — imported rather than observed",
+  modelled: "modelled — our reconstruction of something the harness keeps to itself",
+  unmeasured: "unmeasured — absent, which is not zero",
+  bound: "an upper bound, not a reading",
+  approx: "approximate, by a stated method",
+};
+
+/**
+ * ONE mark, everywhere. Its own sentence rides it for the detail; the
+ * provenance statement carries the legend naming every kind present on the
+ * page. Two marks would be a second colour rule in disguise.
+ */
+export function dev(kind: Deviation, detail: string): string {
+  return `<b class="dev" data-dev="${kind}" title="${esc(`${DEVIATION_TERM[kind]} — ${detail}`)}">°</b>`;
+}
+
+/**
+ * Which deviations this payload actually contains. The legend lists only
+ * these: naming a kind that appears nowhere would teach a reader to look for
+ * something that is not on the page — the same failure as a chip counting
+ * zero rows.
+ */
+export function deviationsPresent(payload: UiPayload): Deviation[] {
+  const win = usageWindow(payload);
+  const out: Deviation[] = [];
+  if (otherWindows(win, payload.items)) out.push("window");
+  if (payload.history?.backfilledSince) out.push("backfilled");
+  if (payload.budgetCut && payload.budgetCut.order.length > 0) out.push("modelled");
+  if (payload.ledgerCaveat || payload.items.some((i) => i.fires === undefined)) out.push("unmeasured");
+  if (payload.items.some((i) => i.disabledSafety?.disabledAtSource === "ctime")) out.push("bound");
+  if (payload.items.some((i) => i.agentCost)) out.push("approx");
+  return out;
+}
+
 /**
  * Kind identity. One calibrated signal color means kinds cannot be color-coded,
  * so shape does the work: a filled marker for skills (the primary, togglable
@@ -573,28 +661,73 @@ const matchQuery = (i: UiItem, q: string): boolean =>
   i.path.toLowerCase().includes(q);
 const matchProviders = (i: UiItem, providers: string[]): boolean =>
   providers.length === 0 || providers.includes(i.source);
-const matchKinds = (i: UiItem, kinds: string[]): boolean =>
-  kinds.length === 0 || kinds.includes(i.kind);
 const matchLens = (i: UiItem, lens: AppState["lens"]): boolean => {
   switch (lens) {
     case "never-fired":
       return i.fires === null;
     case "fired":
       return !!i.fires;
-    case "enabled":
-      return i.enabled;
-    case "disabled":
+    case "off":
       return !i.enabled;
-    case "flagged":
-      return flagCount(i) > 0;
     default:
       return true;
   }
 };
 
-/** What the current mode can show at all — the base every filter works within. */
-export function modeBase(payload: UiPayload, state: AppState): UiItem[] {
-  return state.mode === "skills" ? payload.items.filter((i) => i.kind === "skill") : payload.items;
+/**
+ * Every analysis view this MACHINE has a question for.
+ *
+ * An entry appears only when it has something to show — the same rule that has
+ * always governed panels with no data, applied to navigation. The listing is a
+ * Claude Code mechanic and a Codex- or Cursor-only setup is not subject to it;
+ * an overlap matrix needs two harnesses to cross; growth needs a week on
+ * record; the prune scatter needs at least one item with both coordinates.
+ * Offering a door onto a blank room is the same claim as printing a 0 for a
+ * measurement nothing took.
+ */
+export function analysisApplies(key: string, payload: UiPayload): boolean {
+  switch (key) {
+    case "prune":
+      return payload.items.some((i) => i.enabled && i.fires !== undefined);
+    case "budget":
+      return !!payload.header.listing || !!payload.budgetCut;
+    case "overlap":
+      return new Set(payload.items.map((i) => i.source)).size > 1;
+    // A delta with no weekly series still belongs here: it is the same
+    // question — is the pile growing — measured over one scan interval instead
+    // of over ISO weeks, and the view states both.
+    case "growth":
+      return (payload.growth?.weeks.length ?? 0) > 0 || !!payload.delta;
+    default:
+      return false;
+  }
+}
+
+const ANALYSIS_KEYS = ["prune", "budget", "overlap", "growth"];
+
+/**
+ * The nav entry actually in play, falling back to the whole inventory for
+ * anything this payload cannot render — a kind that no longer exists after a
+ * rescan, an analysis view whose evidence disappeared. Resolved in one place so
+ * the sidebar's lit entry and the drawn view can never disagree.
+ */
+export function navKey(payload: UiPayload, state: AppState): string {
+  const n = state.nav;
+  if (n === "flagged") return n;
+  if (isKindNav(n)) return payload.items.some((i) => i.kind === n) ? n : "all";
+  if (ANALYSIS_KEYS.includes(n)) return analysisApplies(n, payload) ? n : "all";
+  return "all";
+}
+
+export const isAnalysisNav = (payload: UiPayload, state: AppState): boolean =>
+  ANALYSIS_KEYS.includes(navKey(payload, state));
+
+/** What the current nav entry can show at all — the base every filter works within. */
+export function navBase(payload: UiPayload, state: AppState): UiItem[] {
+  const n = navKey(payload, state);
+  if (n === "flagged") return payload.items.filter((i) => flagCount(i) > 0);
+  if (isKindNav(n)) return payload.items.filter((i) => i.kind === n);
+  return payload.items;
 }
 
 /**
@@ -604,40 +737,6 @@ export function modeBase(payload: UiPayload, state: AppState): UiItem[] {
  */
 const focusIds = (state: AppState): Set<string> | undefined =>
   state.focus && state.focus.ids.length > 0 ? new Set(state.focus.ids) : undefined;
-
-/**
- * A portfolio stat's proof view, resolved to ids that actually exist in this
- * payload. Held here rather than in main.ts so the number the strip PRINTS and
- * the set the click SHOWS are computed once: a stat that says "3" and opens 4
- * rows is the kind of small disagreement that costs a page its credibility.
- *
- * `concentration.items` counts DISPATCH KEYS and `.ids` can be longer — one
- * name installed at two scopes is one key and two rows — so the label states
- * the key count and the set carries every row behind it.
- */
-export function focusSet(
-  payload: UiPayload,
-  key: string
-): { label: string; ids: string[] } | undefined {
-  const p = payload.portfolio;
-  if (!p) return undefined;
-  const known = new Set(payload.items.map((i) => i.id));
-  const keep = (ids: string[]): string[] => [...new Set(ids)].filter((id) => known.has(id));
-  const make = (label: string, ids: string[]): { label: string; ids: string[] } | undefined =>
-    ids.length > 0 ? { label, ids } : undefined;
-  switch (key) {
-    case "concentration": {
-      const c = p.concentration;
-      return c ? make(`top ${fmtInt(c.items)} by fires`, keep(c.ids)) : undefined;
-    }
-    case "spend":
-      return make("top window spend", keep((p.topSpend ?? []).map((s) => s.id)));
-    case "flagged":
-      return make("flagged · by activity", keep((p.flaggedByActivity ?? []).map((f) => f.id)));
-    default:
-      return undefined;
-  }
-}
 
 /**
  * The activity-log verdict for a plugin update, decided by DATA — the
@@ -654,33 +753,26 @@ export function pluginUpdateSummary(name: string, before?: string, after?: strin
 }
 
 /**
- * Called on every mode change: filters must obey the same rule as the banks
- * that display them. A dimension with one distinct value in the new base has
- * no bank on screen — so it must hold no filter either, or an INVISIBLE
- * active filter empties the table with nothing on screen to turn off. The
- * size>1 guard mirrors the bank-rendering rule exactly: values are pruned to
- * the base only while the bank still exists to show them.
+ * Called on every nav change: a filter must never outlive the control that
+ * shows it. The provider bank only renders where more than one provider is in
+ * the base, so a provider filter surviving into a nav entry that holds one
+ * would be an INVISIBLE narrowing with nothing on screen to turn off. The
+ * size>1 guard mirrors the bank-rendering rule exactly.
  */
-export function pruneFiltersForMode(payload: UiPayload, state: AppState): void {
-  const base = modeBase(payload, state);
-  const prune = (vals: string[], get: (i: UiItem) => string): string[] => {
-    const present = new Set(base.map(get));
-    return present.size > 1 ? vals.filter((v) => present.has(v)) : [];
-  };
-  state.providers = prune(state.providers, (i) => i.source);
-  state.kinds = prune(state.kinds, (i) => i.kind);
+export function pruneFiltersForNav(payload: UiPayload, state: AppState): void {
+  const present = new Set<string>(navBase(payload, state).map((i) => i.source));
+  state.providers = present.size > 1 ? state.providers.filter((v) => present.has(v)) : [];
 }
 
 export function visibleItems(payload: UiPayload, state: AppState): UiItem[] {
   const q = state.query.trim().toLowerCase();
   const pinned = focusIds(state);
   return sortItems(
-    modeBase(payload, state).filter(
+    navBase(payload, state).filter(
       (i) =>
         (!pinned || pinned.has(i.id)) &&
         matchQuery(i, q) &&
         matchProviders(i, state.providers) &&
-        matchKinds(i, state.kinds) &&
         matchLens(i, state.lens)
     ),
     state.sort,
@@ -689,85 +781,71 @@ export function visibleItems(payload: UiPayload, state: AppState): UiItem[] {
 }
 
 /**
- * Every chip's faceted count: computed against the items narrowed by all the
- * OTHER dimensions, so a chip's number always predicts exactly what clicking
- * it will show. Exported on its own because the query is one of those
- * dimensions: typing must update the counts WITHOUT rebuilding the rail (the
- * search input is the node the caret lives in), so main.ts patches the count
- * nodes in place from this list.
+ * Every live count on the chrome: sidebar entries and provider chips.
+ *
+ * Faceted, so a number always predicts exactly what clicking it will show —
+ * a sidebar entry counts the items that survive the current lens, search and
+ * provider filters, and a provider chip counts within the current nav entry.
+ * Exported on its own because the query is one of those dimensions: typing
+ * must update the counts WITHOUT rebuilding the controls (the search input is
+ * the node the caret lives in), so main.ts patches the count nodes in place.
+ *
+ * `flagged` is the one exception, and deliberately: security is never reduced
+ * by a presentation default, so it counts the whole payload — and clicking it
+ * clears the lens and query, so the number it printed is the number it shows.
  */
-export function chipCounts(
+export function liveCounts(
   payload: UiPayload,
   state: AppState
-): { group: string; value: string; count: number }[] {
-  // A pinned id set is one more dimension no chip toggles, so it narrows every
-  // facet: with a quadrant pinned, "fired 12" must still predict what clicking
-  // "fired" shows, which is 12 items INSIDE the pin.
-  const pinned = focusIds(state);
-  const base = pinned
-    ? modeBase(payload, state).filter((i) => pinned.has(i.id))
-    : modeBase(payload, state);
+): { group: "nav" | "provider"; key: string; count: number }[] {
   const q = state.query.trim().toLowerCase();
-  const forProviders = base.filter(
-    (i) => matchQuery(i, q) && matchKinds(i, state.kinds) && matchLens(i, state.lens)
-  );
-  const forKinds = base.filter(
-    (i) => matchQuery(i, q) && matchProviders(i, state.providers) && matchLens(i, state.lens)
-  );
-  const forLens = base.filter(
-    (i) => matchQuery(i, q) && matchProviders(i, state.providers) && matchKinds(i, state.kinds)
-  );
-  const counts: { group: string; value: string; count: number }[] = [];
-  for (const s of [...new Set(base.map((i) => i.source))].sort()) {
-    counts.push({ group: "provider", value: s, count: forProviders.filter((i) => i.source === s).length });
+  const pinned = focusIds(state);
+  const filtered = (items: UiItem[]): UiItem[] =>
+    items.filter((i) => (!pinned || pinned.has(i.id)) && matchQuery(i, q) && matchLens(i, state.lens));
+  const forNav = filtered(payload.items).filter((i) => matchProviders(i, state.providers));
+  const out: { group: "nav" | "provider"; key: string; count: number }[] = [
+    { group: "nav", key: "all", count: forNav.length },
+  ];
+  for (const k of KIND_ORDER) {
+    if (payload.items.some((i) => i.kind === k)) {
+      out.push({ group: "nav", key: k, count: forNav.filter((i) => i.kind === k).length });
+    }
   }
-  for (const k of [...new Set(base.map((i) => i.kind))].sort()) {
-    counts.push({ group: "kind", value: k, count: forKinds.filter((i) => i.kind === k).length });
+  out.push({
+    group: "nav",
+    key: "flagged",
+    count: payload.items.filter((i) => flagCount(i) > 0).length,
+  });
+  const forProviders = filtered(navBase(payload, state));
+  for (const s of [...new Set(navBase(payload, state).map((i) => i.source))].sort()) {
+    out.push({ group: "provider", key: s, count: forProviders.filter((i) => i.source === s).length });
   }
-  counts.push({ group: "lens", value: "fired", count: forLens.filter((i) => !!i.fires).length });
-  counts.push({ group: "lens", value: "never-fired", count: forLens.filter((i) => i.fires === null).length });
-  counts.push({ group: "lens", value: "enabled", count: forLens.filter((i) => i.enabled).length });
-  counts.push({ group: "lens", value: "disabled", count: forLens.filter((i) => !i.enabled).length });
-  counts.push({ group: "lens", value: "flagged", count: forLens.filter((i) => flagCount(i) > 0).length });
-  return counts;
+  return out;
 }
 
 function sortItems(items: UiItem[], sort: AppState["sort"], sessions: number): UiItem[] {
+  void sessions;
   const key = (i: UiItem): string | number => {
     switch (sort.key) {
       case "name":
         return i.name.toLowerCase();
       case "source":
         return i.source;
-      case "kind":
-        return i.kind;
       case "scope":
         return i.scope;
       case "injected":
         return i.injectedChars;
-      // "n/a — no history for this provider" is not a low fire count; it is
-      // the absence of the measurement. It sorts to the BOTTOM either way,
-      // so a tracked zero — the row that actually means "never fired" — is
-      // never buried under rows the data cannot speak to.
-      case "fires":
-        // Sort follows the cell's leading figure: lifetime when the ledger
-        // join supplied one, the window count otherwise.
+      // One activity column, so one activity sort — on the figure the cell
+      // actually leads with. "n/a — no dispatch record" is not a low fire
+      // count, it is the absence of the measurement, so it sorts to the BOTTOM
+      // in BOTH directions: a tracked zero — the row that really does mean
+      // never used — is never buried under rows the data cannot speak to.
+      case "activity":
         return i.fires === undefined
           ? sort.dir === 1
             ? Number.MAX_SAFE_INTEGER
             : -1
           : i.fires?.lifetime?.invocations ?? i.fires?.invocations ?? 0;
-      case "tokPerFire": {
-        const r = tokPerFire(i, sessions);
-        if (r !== undefined) return r;
-        // Nothing to divide by. Tracked-but-fireless rows sort last, and
-        // untracked n/a rows after them — in BOTH directions, without ever
-        // manufacturing an Infinity or NaN key.
-        const rank = i.fires === undefined ? 2 : 1;
-        return sort.dir === 1 ? Number.MAX_SAFE_INTEGER - 2 + rank : -rank;
-      }
-      case "lastFired":
-        return i.fires?.lastFired ?? "";
       case "findings":
         return flagCount(i) * 10 + (hasHigh(i) ? 5 : 0);
       case "state":
@@ -824,143 +902,96 @@ function graticule(): string {
   return `<svg class="grat" viewBox="0 0 2400 24" preserveAspectRatio="xMinYMax slice" aria-hidden="true">${parts.join("")}</svg>`;
 }
 
-function readout(
-  label: string,
-  value: string,
-  unit: string,
-  sub: string,
-  idx: number,
-  animate?: boolean,
-  tone = "",
-  note = "",
-  sub2 = "",
-  key = ""
-): string {
-  const style = animate ? ` style="animation-delay:${180 + idx * 70}ms"` : "";
-  const title = note ? ` data-tip="${esc(note)}"` : "";
-  // `data-readout` is main.ts's handle on a specific readout — the live
-  // what-if total appends a projection line to the always-in-context one while
-  // a toggle is being acted on, and finding it by position would break the
-  // moment a machine has no skill listing to render.
-  const k = key ? ` data-readout="${esc(key)}"` : "";
-  return `<div class="readout${animate ? " settle" : ""}${tone}"${style}${title}${k}>
-    <span class="engr">${label}${note ? `<b class="why">?</b>` : ""}</span>
-    <span class="num">${value}<i>${unit}</i></span>
-    <span class="sub">${esc(sub)}</span>
-    ${sub2 ? `<span class="sub sub2">${esc(sub2)}</span>` : ""}
-  </div>`;
+/**
+ * The stat bar: one shallow row of headline figures above the content.
+ *
+ * It replaces a 130px band of five hero readouts, each with a sub-line and a
+ * paragraph in its tooltip. Four figures, each carrying its own denominator
+ * inline, each a link to the view that EXPLAINS it — which is the mechanism
+ * that let the explanations go: a figure whose derivation is a click away does
+ * not need its derivation attached.
+ *
+ * Flagged is deliberately absent: it is a sidebar section with its own count,
+ * and a security total in two places is a security total that can disagree.
+ */
+function statBar(payload: UiPayload, state: AppState): string {
+  if (!state.statBar) return "";
+  const h = payload.header;
+  const p = payload.portfolio;
+  const figs: string[] = [];
+  let idx = 0;
+  const fig = (key: string, value: string, label: string, to: string, tone = "", mark = ""): string => {
+    const style = state.animate ? ` style="animation-delay:${140 + idx * 60}ms"` : "";
+    idx++;
+    // `data-readout` is main.ts's handle on a specific figure — the live
+    // what-if total appends a projection line to the cost one while a toggle is
+    // being acted on, and finding it by position would break the moment a
+    // machine has no skill listing to render.
+    return `<button class="stat${tone}${state.animate ? " settle" : ""}" data-stat="${esc(key)}" data-readout="${esc(key)}"${style} title="${esc(`opens the ${to}`)}">
+      <span class="statfig">${value}${mark ? `<s aria-hidden="true">${mark}</s>` : ""}</span>
+      <span class="statlab">${esc(label)}</span>
+    </button>`;
+  };
+  // A raw token count has no scale until it is a slice of the window the model
+  // actually has, so the share rides the label — the denominator, attached to
+  // the figure it makes readable, the way every figure on this page carries its
+  // own.
+  figs.push(
+    fig(
+      "cost",
+      fmtInt(h.injectedTokens),
+      `tok / session · ${((h.injectedTokens / 200_000) * 100).toFixed(1)}% of a 200K context`,
+      "prune view"
+    )
+  );
+  figs.push(
+    fig("never", fmtInt(h.neverFired), `never fired · of ${fmtInt(h.tracked)} tracked`, "never-fired inventory")
+  );
+  // Absent on machines the listing does not apply to, rather than shown as a
+  // zero — a budget nothing is subject to is not a fact about this setup.
+  if (h.listing) {
+    figs.push(
+      fig(
+        "listing",
+        `${fmtInt(h.listing.pct)}%`,
+        "of listing budget",
+        "listing view",
+        h.listing.over ? " dgr" : "",
+        h.listing.over ? "▲" : ""
+      )
+    );
+  }
+  if (p && p.sessions > 0) {
+    // The denominator is the sessions the LEDGER has seen, which is not every
+    // session on this machine — named in the label, because a share whose
+    // denominator is unstated is not readable at all.
+    figs.push(
+      fig(
+        "used",
+        `${fmtInt(p.sessionsWithFires)}/${fmtInt(p.sessions)}`,
+        "ledger sessions used anything",
+        "growth view"
+      )
+    );
+  }
+  return `<div class="statbar">${figs.join("")}</div>`;
 }
 
-function headerReadouts(payload: UiPayload, state: AppState): string {
-  const h = payload.header;
-  const win = usageWindow(payload);
-  const providers = `across ${h.providers} provider${h.providers === 1 ? "" : "s"}`;
-  const flaggedSub =
-    h.flagged === 0
-      ? "none on this machine"
-      : `${h.flaggedHigh} critical/high · ${h.flagged - h.flaggedHigh} other`;
-  const quietSub =
-    h.tracked > 0
-      ? `of ${fmtInt(h.tracked)} tracked · ${win.span || "no"} window`
-      : "no dispatch-tracked items";
-  // Rent is stated per SESSION because that is what the payload's figure is:
-  // Σ always-in-context chars over age-gated silent items. Tone unchanged —
-  // amber stays reserved for dead-weight cost cells and severity.
-  const rent =
-    h.deadWeightChars !== undefined && h.deadWeightChars > 0
-      ? `~${fmtK(tokens(h.deadWeightChars))} tok/session on silent items`
-      : "";
-  // What this number CONTAINS, derived from the same rows the engine counted
-  // rather than named by hand. S2 made agent launches dispatch-tracked, and on
-  // a machine with many agents they are most of this figure — a note listing
-  // the kinds from memory went stale the moment that changed, and told the
-  // reader the headline excluded exactly the rows making it up.
-  const silent = payload.items.filter((i) => i.fires === null);
-  const kinds = [...new Set(silent.map((i) => i.kind))]
-    .map((k) => ({ kind: k, n: silent.filter((i) => i.kind === k).length }))
-    .sort((a, b) => b.n - a.n || a.kind.localeCompare(b.kind))
-    .map((c) => `${fmtInt(c.n)} ${c.kind}${c.n === 1 ? "" : "s"}`)
-    .join(" · ");
-  // The headline is the engine's count; the composition is counted here off
-  // the same rows. They can only differ on a payload that disagrees with
-  // itself — and then BOTH are stated, the way the listing panel does it,
-  // rather than one quietly winning.
-  const composition =
-    kinds === ""
-      ? ""
-      : silent.length === h.neverFired
-        ? `; the ${fmtInt(h.neverFired)} with nothing recorded against them are ${kinds}.`
-        : `; the rows with nothing recorded against them are ${kinds} — ${fmtInt(silent.length)} in this payload's item list against the ${fmtInt(h.neverFired)} the headline counted, and both are shown rather than one quietly winning.`;
-  // Rows counted over a store of their own: the span in the sub-line is the
-  // merged transcript window, and it does not describe them.
-  const others = otherWindows(win, payload.items);
-  return [
-    readout("inventory", fmtInt(h.items), "files", providers, 0, state.animate, "",
-      "Every instruction file found: skills, agents, commands, instruction files and plugin assets, enabled or not."),
-    readout(
-      "always in context",
-      fmtInt(h.injectedTokens),
-      "tok",
-      // "% of a 200K context" is the framing that lands: a raw token count has
-      // no scale until it is a slice of the window the model actually has.
-      `every session before you type · ≈ ${((h.injectedTokens / 200_000) * 100).toFixed(1)}% of a 200K context`,
-      1,
-      state.animate,
-      "",
-      `What your setup costs on every single session, whether or not you use any of it (≈ ${fmtInt(h.injectedChars)} characters). Skills and agents pay their name + description; CLAUDE.md and always-apply rules pay their whole body. Skill bodies are NOT counted here — those load only when the skill runs. Disabled items are excluded.`,
-      "",
-      "injected"
-    ),
-    readout(
-      "no fires in window",
-      fmtInt(h.neverFired),
-      "",
-      quietSub,
-      2,
-      state.animate,
-      "",
-      `${win.note} Counted over the ${fmtInt(h.tracked)} items this machine keeps a dispatch record for` +
-        (composition || ".") +
-        ` Agents are in that count: the model launches a subagent through the Agent/Task tool and the ledger banks every launch, so a never-launched agent is a measured silence rather than a missing measurement. Instruction files (CLAUDE.md / AGENTS.md) are read rather than dispatched — they leave no dispatch record at all, are not tracked, and are never called unused.` +
-        (others ? ` Rows from another store are judged in that store's own window (${others}), not the ${win.span || "merged"} one in the sub-line.` : "") +
-        (rent
-          ? ` Silent-item rent: the summed always-in-context cost of enabled items that predate their provider's window start yet recorded no fires in it — paid every session either way.`
-          : ""),
-      rent
-    ),
-    // The listing budget. Absent on machines it does not apply to (no Claude
-    // skills) rather than shown as a zero — a budget nothing is subject to is
-    // not a fact about this setup.
-    ...(h.listing
-      ? [
-          readout(
-            "skill listing",
-            `${fmtInt(h.listing.pct)}%`,
-            "",
-            h.listing.over
-              ? `over the ~${fmtInt(h.listing.budgetChars)}-char budget · descriptions dropped`
-              : `of the ~${fmtInt(h.listing.budgetChars)}-char budget · all descriptions load`,
-            3,
-            state.animate,
-            h.listing.over ? " danger" : "",
-            (h.listing.over
-              ? `Claude Code budgets the skill LISTING — every enabled skill's name and description — in characters (skillListingBudgetFraction, ~1% of the context window). Yours is ${fmtInt(h.listing.chars)} chars, past the ~${fmtInt(h.listing.budgetChars)} budget, so Claude Code is dropping descriptions starting with the skills you invoke least. Those skills still exist; they just stop auto-triggering, which looks exactly like the model ignoring you. Filter to "no fires" to see which go first. Fix it by removing or shortening descriptions, or raise skillListingBudgetFraction.`
-              : `Claude Code budgets the skill LISTING — every enabled skill's name and description — in characters (skillListingBudgetFraction, ~1% of the context window). Yours is ${fmtInt(h.listing.chars)} of ~${fmtInt(h.listing.budgetChars)} chars, so every description loads and every skill can still auto-trigger. Past 100%, Claude Code drops them starting with the skills you invoke least.`) +
-              ` Counts user, project and plugin skills alike, since Claude Code lists all three. The \`context-audit\` CLI reports the same figure.`
-          ),
-        ]
-      : []),
-    readout(
-      "flagged",
-      fmtInt(h.flagged),
-      "",
-      flaggedSub,
-      4,
-      state.animate,
-      h.flaggedHigh > 0 ? " danger" : h.flagged > 0 ? " signal" : "",
-      "Items carrying at least one security flag. Open the row to read the evidence line and verify it at the cited file before acting."
-    ),
-  ].join("");
+/**
+ * Every qualifier this payload states about its own figures, as sentences.
+ * Counted in the sidebar foot and read in full inside the provenance
+ * statement — a degraded read is never left silent.
+ */
+function caveatList(payload: UiPayload): string[] {
+  const out: string[] = [];
+  if (payload.pluginResolution === "newest-fallback") {
+    out.push(
+      "Plugin versions came from a newest-cached fallback: installed_plugins.json was missing or unreadable."
+    );
+  }
+  if (payload.ledgerCaveat) out.push(payload.ledgerCaveat);
+  out.push(...(payload.caveats ?? []));
+  return out;
 }
 
 /**
@@ -968,439 +999,314 @@ function headerReadouts(payload: UiPayload, state: AppState): string {
  * page are typeset, and "-1,204" beside "−205 tok" would be two characters
  * doing one job.
  */
-const signed = (n: number): string => (n > 0 ? `+${fmtInt(n)}` : n < 0 ? `−${fmtInt(-n)}` : "0");
+export const signed = (n: number): string => (n > 0 ? `+${fmtInt(n)}` : n < 0 ? `−${fmtInt(-n)}` : "0");
 
 /** Chars → tokens keeping the sign: a diff of −812 chars is −203 tok, not −204. */
-const signedTokens = (chars: number): number => (chars < 0 ? -tokens(-chars) : tokens(chars));
+export const signedTokens = (chars: number): number => (chars < 0 ? -tokens(-chars) : tokens(chars));
 
 /** The earliest date any row's ledger figures are counted from. */
-function trackedSince(payload: UiPayload): string | undefined {
+export function trackedSince(payload: UiPayload): string | undefined {
   return payload.items
     .map((i) => i.fires?.trackedSince)
     .filter((t): t is string => typeof t === "string")
     .sort()[0];
 }
 
+// --- sidebar ----------------------------------------------------------------
+
+/** The analysis views, in the order the sidebar lists them. */
+const ANALYSIS_ORDER = ["budget", "prune", "overlap", "growth"];
 /**
- * The portfolio rollup: does the whole system earn its rent? It is the
- * header's companion — payload-wide facts that do NOT follow the rail's
- * filters — so it sits with the readouts, above the filter rail, and is drawn
- * as a low annunciator strip rather than a second row of hero numbers.
- *
- * Every stat carries the denominator it was measured against, and each one
- * that a filter can express opens its own pre-filtered proof view.
+ * What the sidebar calls each one. `listing` and `providers` read as questions
+ * about this machine; `budget` and `overlap` were the internal keys, and the
+ * keys stay so the panel registry and the payload fields do not have to move.
  */
-function portfolioStrip(payload: UiPayload, state: AppState): string {
-  const p = payload.portfolio;
-  const d = payload.delta;
-  if (!p && !d) return "";
-  const since = trackedSince(payload);
-  const stats: string[] = [];
-
-  // One line per stat, and the METHOD note rides the tooltip rather than a
-  // second and third rendered line. Five stats each three lines tall wrapped
-  // the strip onto two rows and pushed the table under 36% of the viewport —
-  // the header is meant to be an instrument panel, not the page. What stays
-  // inline is the denominator ("33 of 119", "84% of every recorded fire"),
-  // because a share is unreadable without it; what moves is the explanation of
-  // how it was measured, which is exactly what every readout above already
-  // keeps in `data-tip`.
-  const stat = (fig: string, unit: string, txt: string, note: string, cls = ""): string =>
-    `<span class="rstat${cls ? ` ${cls}` : ""}"${note ? ` data-tip="${esc(note)}"` : ""}><span class="rfig">${fig}${unit ? `<i>${esc(unit)}</i>` : ""}</span><span class="rtxt">${esc(txt)}</span></span>`;
-  const statLink = (
-    focus: string,
-    fig: string,
-    unit: string,
-    txt: string,
-    note: string,
-    tip: string,
-    cls = ""
-  ): string =>
-    `<button class="rstat rlinked${cls ? ` ${cls}` : ""}" data-focus="${esc(focus)}" data-tip="${esc(note ? `${note}\n\n${tip}` : tip)}"><span class="rfig">${fig}${unit ? `<i>${esc(unit)}</i>` : ""}</span><span class="rtxt">${esc(txt)}</span></button>`;
-
-  if (p && p.sessions > 0) {
-    // The denominator is the sessions the LEDGER has seen, which is not every
-    // session on the machine — said in the caption, not only in the tooltip,
-    // because a share is only readable if its denominator is.
-    const pct = Math.round((p.sessionsWithFires / p.sessions) * 100);
-    stats.push(
-      stat(
-        fmtInt(p.sessionsWithFires),
-        `of ${fmtInt(p.sessions)}`,
-        `sessions used a tracked item · ${fmtInt(pct)}%`,
-        `ledger-seen sessions${since ? ` since ${fmtDay(since)}` : ""} — not every session on this machine`
-      )
-    );
-  }
-
-  const conc = p?.concentration;
-  const concFocus = focusSet(payload, "concentration");
-  if (conc && conc.items > 0) {
-    const rows = concFocus?.ids.length ?? 0;
-    // `items` counts dispatch names; `ids` can be longer, because one name
-    // installed at two scopes is one dispatch key and two rows. The count
-    // printed is the key count, always — the row count is stated separately.
-    const spread =
-      rows > conc.items
-        ? `opens ${fmtInt(rows)} rows — one name is installed at two scopes`
-        : `fewest names making up ≥80% of fires${since ? ` since ${fmtDay(since)}` : ""}`;
-    const tip =
-      `The fewest dispatch names whose fires add up to at least 80% of every fire on record${since ? `, counted since tracking began ${fmtDay(since)}` : ""}. ` +
-      `Counted per dispatch name — provider + kind + name — because two rows sharing a name hold the same events, and summing rows would count those fires twice. ` +
-      `Click to pin ${fmtInt(rows)} row${plural(rows)} in the table.`;
-    stats.push(
-      concFocus
-        ? statLink(
-            "concentration",
-            fmtInt(conc.items),
-            conc.items === 1 ? "name" : "names",
-            `account for ${fmtInt(conc.pct)}% of every recorded fire`,
-            spread,
-            tip
-          )
-        : stat(
-            fmtInt(conc.items),
-            conc.items === 1 ? "name" : "names",
-            `account for ${fmtInt(conc.pct)}% of every recorded fire`,
-            spread
-          )
-    );
-  }
-
-  const spend = (p?.topSpend ?? []).filter((s) => s.chars > 0).slice(0, 3);
-  if (spend.length > 0) {
-    const known = new Map(payload.items.map((i) => [i.id, i]));
-    const method =
-      `Always-in-context characters multiplied by the sessions the provider that loads them was observed in — a WINDOW TOTAL over the observed history. ` +
-      `The header's silent-item rent is a PER-SESSION figure: different unit, different denominator, never to be read side by side as one number.`;
-    const links = spend
-      .map((s) => {
-        const item = known.get(s.id);
-        const fig = `<b>${fmtK(tokens(s.chars))}<i>tok</i></b>`;
-        const label = `${esc(s.name)} ${fig}`;
-        return item
-          ? `<button class="rlink" data-id="${esc(s.id)}" title="${esc(`${s.name} — ≈ ${fmtInt(tokens(s.chars))} tok paid across every observed session of its provider (${fmtInt(s.chars)} chars × observed sessions). Open the row.`)}">${label}</button>`
-          : `<span class="rlink">${label}</span>`;
-      })
-      .join("");
-    stats.push(
-      `<span class="rstat rspend">
-        <button class="rlab" data-focus="spend" data-tip="${esc(
-          `chars × that provider's observed sessions — a window total, not the header's per-session figure.\n\n${method} Click to pin these rows in the table.`
-        )}">top window spend</button>
-        <span class="rlinks">${links}</span>
-      </span>`
-    );
-  }
-
-  const fl = p?.flaggedByActivity ?? [];
-  if (fl.length > 0) {
-    const top = fl[0];
-    // Severity is one of the two things amber is for, and the tone follows the
-    // header's flagged readout exactly so the two cannot disagree.
-    const tone = payload.header.flaggedHigh > 0 ? " dgr" : " sig";
-    const note =
-      `${top.name} — ${fmtInt(top.fires)} fire${plural(top.fires)}` +
-      (top.lastFired ? ` · last ${fmtDay(top.lastFired)}` : " · none recorded") +
-      (top.projects > 0 ? ` · ${fmtInt(top.projects)} project${plural(top.projects)}` : "");
-    const tip =
-      `Flagged items ordered by recorded activity — a flag on something that runs daily outranks a flag on a dormant file. ` +
-      `Fires are this row's own ledger events${since ? ` since tracking began ${fmtDay(since)}` : ""}; a row the ledger cannot speak to counts 0 here and says n/a in its drawer. ` +
-      `Click to pin them in the table. Verify every flag at its cited line before acting on it.`;
-    const f = focusSet(payload, "flagged");
-    stats.push(
-      f
-        ? statLink("flagged", fmtInt(fl.length), "flagged", "ranked by activity", note, tip, tone.trim())
-        : stat(fmtInt(fl.length), "flagged", "ranked by activity", note, tone.trim())
-    );
-  }
-
-  if (d) {
-    const ups = d.pluginsUpdated ?? [];
-    // No `from` on disk means the previous version was never recorded. Said in
-    // those words: a sentinel in that slot would read as a version number.
-    const upText = (u: { name: string; from?: string; to: string }): string =>
-      u.from
-        ? `${u.name} ${u.from} → ${u.to}`
-        : `${u.name} updated to ${u.to} (previous version not recorded)`;
-    const shownUps = ups.slice(0, 2).map(upText);
-    const restUps = ups.length - shownUps.length;
-    const tok = signedTokens(d.injectedChars);
-    const quiet = d.items === 0 && d.injectedChars === 0 && ups.length === 0;
-    const tip =
-      `Measured against the previous scan's snapshot, taken ${fmtStamp(d.since)}. Item and cost diffs are that snapshot's own figures subtracted from this one. ` +
-      (ups.length > 0
-        ? `Plugin moves come from each plugin manifest's "current version since" date, not from the snapshot — snapshots record no plugin versions, which is why a previous version can be unrecorded.\n\n${ups.map(upText).join("\n")}`
-        : `Snapshots record no plugin versions, so a plugin move is read from the manifest's "current version since" date; none moved between these two scans.`);
-    const note =
-      `${fmtDay(d.since)}` +
-      (quiet ? "" : ` · ${signed(tok)} tok/session`) +
-      (shownUps.length > 0 ? ` · ${shownUps.join(" · ")}` : "") +
-      (restUps > 0 ? ` · +${fmtInt(restUps)} more` : "");
-    stats.push(
-      `<span class="rstat rdelta" data-tip="${esc(`${note}\n\n${tip}`)}">
-        <span class="rfig">${quiet ? "—" : esc(signed(d.items))}<i>${esc(quiet ? "no change" : "items")}</i></span>
-        <span class="rtxt">since the previous scan</span>
-      </span>`
-    );
-  }
-
-  if (stats.length === 0) return "";
-  const style = state.animate ? ` style="animation-delay:${560}ms"` : "";
-  return `<div class="rollup${state.animate ? " settle" : ""}"${style}>
-    <span class="engr rollup-lab" data-tip="${esc(
-      "Portfolio: one pass over the durable ledger, each figure carrying the denominator it was measured against. These describe the whole machine and do not follow the filters below — the stats that a filter can express open their own pre-filtered view of the table."
-    )}">portfolio</span>
-    ${stats.join("")}
-  </div>`;
-}
-
-function chip(
-  group: string,
-  value: string,
-  label: string,
-  count: number,
-  active: boolean,
-  note = ""
-): string {
-  const title = note ? ` data-tip="${esc(note)}"` : "";
-  const empty = count === 0 ? " empty" : "";
-  // Label and count live in separate compartments split by a hairline — the
-  // two must never read as one string ("agent 133" is not a thing).
-  return `<button class="chip${active ? " on" : ""}${empty}" data-chip="${esc(group)}" data-value="${esc(value)}" aria-pressed="${active}"${title}><span>${esc(label)}</span><b>${fmtInt(count)}</b></button>`;
-}
+const ANALYSIS_LABEL: Record<string, string> = {
+  budget: "listing",
+  prune: "prune",
+  overlap: "providers",
+  growth: "growth",
+};
 
 /**
- * Filters read as labeled instrument banks rather than one undifferentiated
- * run of chips: without the group labels there was nothing to say that `agent`
- * and `skill` are a kind while `flagged` is a view, and no way back to the full
- * inventory once something was clicked.
+ * Navigation, drawn as an instrument's function selector.
  *
- * Every chip count is FACETED: computed against the items narrowed by all the
- * OTHER dimensions, so a chip's number always predicts exactly what clicking
- * it will show. Global counts looked right until one filter was active, then
- * quietly stopped matching the table.
+ * This is the highest-risk element on the page: a left sidebar is the most
+ * common shape of an AI-generated dashboard, and the acceptance test in
+ * `.impeccable.md` fails on sight of one. So it is built out of the page's
+ * existing grammar and nothing else — engraved section labels, hairline
+ * separators, tabular counts, one amber for the lit entry, a caret in the
+ * gutter. No icons, no pills, no rounded cards, no nested panels, no accent
+ * bars, no background fills.
+ *
+ * Counts are faceted by the lens and search below, so an entry's number always
+ * predicts what clicking it shows. `flagged` is the exception, stated where it
+ * is made: security is never reduced by a presentation default.
  */
-function filterRail(payload: UiPayload, state: AppState): string {
-  const base = modeBase(payload, state);
+function sidebar(payload: UiPayload, state: AppState): string {
+  const active = navKey(payload, state);
+  const counts = new Map(liveCounts(payload, state).map((c) => [`${c.group}\0${c.key}`, c.count]));
+  const n = (k: string): number => counts.get(`nav\0${k}`) ?? 0;
   const win = usageWindow(payload);
-  const counts = new Map(chipCounts(payload, state).map((c) => [`${c.group}\0${c.value}`, c.count]));
-  const n = (group: string, value: string): number => counts.get(`${group}\0${value}`) ?? 0;
+  const cav = caveatList(payload);
 
-  const bank = (label: string, chips: string, note = ""): string =>
-    `<span class="bank"><span class="engr"${note ? ` data-tip="${esc(note)}"` : ""}>${label}</span><span class="chipset">${chips}</span></span>`;
+  // A mark rides an entry only where the page already treats that state as
+  // one, in the tone that fact already carries: the listing readout's
+  // over-budget --danger, and the findings severity tone. No new colour rule,
+  // and no other entry is ever marked.
+  const listingMark = payload.header.listing?.over ? `<i class="navmark dgr" aria-hidden="true">▲</i>` : "";
+  const flaggedMark =
+    payload.header.flaggedHigh > 0
+      ? `<i class="navmark dgr" aria-hidden="true">▲</i>`
+      : payload.header.flagged > 0
+        ? `<i class="navmark sig" aria-hidden="true">▲</i>`
+        : "";
 
-  // The master scope: what layer of the inventory the whole page is looking
-  // at. Deliberately not a filter — esc and "clear" never touch it.
-  const skillCount = payload.items.filter((i) => i.kind === "skill").length;
-  const modes = `<div class="modes" role="group" aria-label="inventory scope">
-    <button class="mode-btn${state.mode === "skills" ? " on" : ""}" data-mode="skills" aria-pressed="${state.mode === "skills"}"
-      data-tip="Just your skills — the togglable, auto-triggering layer this dashboard manages. Commands, agents, rules and instruction files live under everything."><span>◆ skills</span><b>${fmtInt(skillCount)}</b></button>
-    <button class="mode-btn${state.mode === "all" ? " on" : ""}" data-mode="all" aria-pressed="${state.mode === "all"}"
-      data-tip="The whole instruction inventory: skills plus commands, agents, rules and instruction files, across every provider found."><span>everything</span><b>${fmtInt(payload.items.length)}</b></button>
-  </div>`;
+  const entry = (key: string, label: string, count: string, mark = "", note = ""): string =>
+    `<button class="nav${key === active ? " on" : ""}" data-nav="${esc(key)}"${
+      key === active ? ` aria-current="page"` : ""
+    }${note ? ` title="${esc(note)}"` : ""}><s aria-hidden="true">${
+      key === active ? "▸" : ""
+    }</s><span>${esc(label)}</span>${mark}<b>${count}</b></button>`;
 
-  // Banks list the values present in the MODE BASE (so the vocabulary is
-  // stable while filtering) and count within the faceted subset. A bank whose
-  // dimension has one value filters nothing — it disappears entirely, which
-  // is also what makes the kind bank vanish in skills mode.
-  const sourcesInBase = [...new Set(base.map((i) => i.source))].sort();
-  const providerBank =
-    sourcesInBase.length > 1
-      ? bank(
-          "provider",
-          sourcesInBase
-            .map((s) => chip("provider", s, s, n("provider", s), state.providers.includes(s)))
-            .join("")
-        )
+  const kinds = KIND_ORDER.filter((k) => payload.items.some((i) => i.kind === k))
+    .map((k) => entry(k, KIND_LABEL[k], fmtInt(n(k)), "", KIND_NOTE[k] ?? ""))
+    .join("");
+
+  const analysis = ANALYSIS_ORDER.filter((k) => analysisApplies(k, payload))
+    .map((k) => entry(k, ANALYSIS_LABEL[k], "", k === "budget" ? listingMark : "", ANALYSIS_NOTE[k]))
+    .join("");
+
+  return `<nav class="side" aria-label="views">
+    <div class="sidehead">
+      <span class="brand">context-audit</span>
+      <span class="sidesub">instruction inventory</span>
+    </div>
+    <div class="navgroup">
+      <span class="engr">inventory</span>
+      ${entry("all", "all", fmtInt(n("all")))}
+      ${kinds}
+    </div>
+    ${analysis ? `<div class="navgroup"><span class="engr">analysis</span>${analysis}</div>` : ""}
+    <div class="navgroup">
+      <span class="engr">security</span>
+      ${entry(
+        "flagged",
+        "flagged",
+        fmtInt(n("flagged")),
+        flaggedMark,
+        "Items carrying at least one security flag, counted across the whole inventory. Opening this clears the lens and the search, so the count you see here is the set you get."
+      )}
+    </div>
+    <div class="sidefoot">
+      <button class="provlink" data-prov>${esc(win.span || "no window")} · ${fmtInt(cav.length)} caveat${plural(cav.length)}</button>
+      <span class="sidestamp">rev ${esc(payload.version)} · ${esc(fmtStamp(payload.generatedAt).slice(11))} · ${fmtInt(payload.tookMs)} ms</span>
+      <div class="sideacts">
+        <button class="btn rescan" data-rescan${state.busy ? " disabled" : ""}>${state.busy ? "scanning…" : "rescan"}</button>
+        <button class="btn vstat${state.statBar ? " on" : ""}" data-statbar aria-pressed="${state.statBar}" title="${esc(
+          "Draw the headline figures above the content. Every figure stays exactly what it was either way — this decides only whether they are drawn."
+        )}">stats</button>
+      </div>
+    </div>
+  </nav>`;
+}
+
+/** What each analysis view answers — the sidebar's own one-line note. */
+const ANALYSIS_NOTE: Record<string, string> = {
+  budget:
+    "Claude Code's skill listing against its character budget, in the order it drops descriptions — least-invoked first.",
+  prune: "Always-in-context cost against recorded fires, split at both medians. The costly-and-quiet quadrant is the shortlist.",
+  overlap: "Assets more than one provider reads or fires, with each provider's own counts held apart.",
+  growth: "Instruction files owned against instruction files that actually fired, per ISO week.",
+};
+
+// --- view controls ----------------------------------------------------------
+
+/**
+ * One compact row above the content: the activity lens, the provider filter
+ * where more than one provider is on the machine, and search. Kind and scope
+ * are gone from here entirely — they are the sidebar.
+ *
+ * The whole row is withheld on views it cannot act on: the listing bar and the
+ * growth series are payload-level readings, and a band of controls that cannot
+ * change what sits under them is a band lying about being one. (The stat-bar
+ * switch is a page-level display preference, so it lives with the other one —
+ * rescan — in the sidebar foot, and stays reachable from every view.)
+ */
+function viewBar(payload: UiPayload, state: AppState): string {
+  const nav = navKey(payload, state);
+  if (nav === "budget" || nav === "growth") return "";
+  const counts = new Map(liveCounts(payload, state).map((c) => [`${c.group}\0${c.key}`, c.count]));
+  const base = navBase(payload, state);
+
+  const lens = (value: AppState["lens"], label: string): string =>
+    `<button class="lens${state.lens === value ? " on" : ""}" data-lens="${esc(value)}" aria-pressed="${state.lens === value}">${esc(label)}</button>`;
+
+  const sources = [...new Set(base.map((i) => i.source))].sort();
+  const providerChips =
+    sources.length > 1
+      ? `<span class="vgroup">${sources
+          .map(
+            (s) =>
+              `<button class="chip${state.providers.includes(s) ? " on" : ""}" data-provider="${esc(s)}" aria-pressed="${state.providers.includes(s)}"><span>${esc(s)}</span><b>${fmtInt(counts.get(`provider\0${s}`) ?? 0)}</b></button>`
+          )
+          .join("")}</span>`
       : "";
 
-  const kindsInBase = [...new Set(base.map((i) => i.kind))].sort();
-  const kindBank =
-    kindsInBase.length > 1
-      ? bank(
-          "kind",
-          kindsInBase
-            .map((k) =>
-              chip(
-                "kind",
-                k,
-                `${KIND_GLYPH[k] ?? ""} ${k}`.trim(),
-                n("kind", k),
-                state.kinds.includes(k),
-                KIND_NOTE[k] ?? ""
-              )
-            )
-            .join("")
-        )
-      : "";
-
-  // Complementary pairs: used/silent, on/off, plus flagged. Single-select —
-  // clicking an active chip returns to all. The usage window qualifies the
-  // whole bank, so it lives once in the bank label ("view · 42d") instead of
-  // being repeated inside chip labels, where it collided with the counts.
-  //
-  // The span in that label is the merged transcript window; a base holding
-  // rows from a store with its own retention is filtered over more than one
-  // window, and each chip's note says which.
-  const lensOthers = otherWindows(win, base);
-  const lensNote = `${win.note}${lensOthers ? ` Rows from another provider's store are counted in that store's own window instead (${lensOthers}), so this bank spans more than the ${win.span || "scanned"} one in its label.` : ""}`;
-  const lensBank = bank(
-    win.span ? `view · ${win.span}` : "view",
-    [
-      chip(
-        "lens",
-        "fired",
-        "fired",
-        n("lens", "fired"),
-        state.lens === "fired",
-        `Items with at least one recorded invocation in the window its own provider's store covers. ${lensNote}`
-      ),
-      chip(
-        "lens",
-        "never-fired",
-        "no fires",
-        n("lens", "never-fired"),
-        state.lens === "never-fired",
-        lensNote
-      ),
-      chip("lens", "enabled", "active", n("lens", "enabled"), state.lens === "enabled",
-        "Items currently live: their always-in-context cost is being paid every session."),
-      chip("lens", "disabled", "off", n("lens", "disabled"), state.lens === "disabled",
-        "Items sitting in ~/.claude/skills-disabled. They cost nothing until re-enabled."),
-      chip("lens", "flagged", "flagged", n("lens", "flagged"), state.lens === "flagged",
-        "Items carrying at least one security flag."),
-    ].join(""),
-    lensNote
-  );
-
-  // A pinned id set — a quadrant, or a portfolio stat's proof view. It is a
-  // filter like any other, so it takes a bank of its own with the count it
-  // will actually show and one click to release it. An id filter with nothing
-  // on screen to turn off would be an invisible narrowing, which is the exact
-  // failure pruneFiltersForMode exists to prevent.
+  // A pinned id set — a prune quadrant, brought back to the table. It is a
+  // filter like any other, so it takes a control of its own with the count it
+  // will actually show and one click to release it.
   const pinned = focusIds(state);
-  const focusBank =
+  const focusChip =
     state.focus && pinned
-      ? bank(
-          "focus",
-          `<button class="chip on" data-unfocus aria-pressed="true" data-tip="${esc(
-            `${fmtInt(state.focus.ids.length)} row${plural(state.focus.ids.length)} pinned from a panel or a portfolio stat; the count is how many of them this view can show. Click to release the pin — the rest of your filters stay as they are.`
-          )}"><span>${esc(state.focus.label)} ✕</span><b>${fmtInt(base.filter((i) => pinned.has(i.id)).length)}</b></button>`
-        )
+      ? `<button class="chip on" data-unfocus aria-pressed="true" title="${esc(
+          `${fmtInt(state.focus.ids.length)} row${plural(state.focus.ids.length)} pinned from the prune plot; the count is how many of them this view can show. Click to release the pin — your other filters stay as they are.`
+        )}"><span>${esc(state.focus.label)} ✕</span><b>${fmtInt(base.filter((i) => pinned.has(i.id)).length)}</b></button>`
       : "";
 
-  // Security findings are never silently hidden by a presentation default: a
-  // flag sitting outside the current mode announces itself, and the announce-
-  // ment is the way there.
-  const hiddenFlagged =
-    payload.items.filter((i) => flagCount(i) > 0).length - base.filter((i) => flagCount(i) > 0).length;
-  // tip-r: these sit against the rail's right edge, so their tooltips anchor
-  // right or they overflow the viewport and grow a horizontal scrollbar.
-  const flaggedElsewhere =
-    hiddenFlagged > 0
-      ? `<button class="caveat caveat-act tip-r" data-mode="all" data-lens="flagged" data-tip="Flagged items outside the skills view. Click to see them.">▲ ${fmtInt(hiddenFlagged)} flagged outside this view</button>`
-      : "";
+  // Always in the DOM, shown by class: typing must never rebuild this row, and
+  // the search field is the node the caret lives in.
+  const clear = `<button class="clear${isFiltered(state) ? "" : " gone"}" data-clear title="show all ${fmtInt(base.length)} (esc)">clear</button>`;
 
-  // Always present, shown by class. Typing must not rebuild the rail — the
-  // search field is the node the caret lives in, and replacing it mid-keystroke
-  // is how a search box eats the second character you type.
-  const clear = `<button class="clear${isFiltered(state) ? "" : " gone"}" data-clear title="show all ${fmtInt(base.length)} items (esc)">clear</button>`;
-
-
-  return `<div class="rail">
-    ${modes}
+  return `<div class="viewbar">
+    <span class="vgroup vlens">${lens("fired", "fired")}${lens("never-fired", "never fired")}${lens("off", "off")}</span>
+    ${providerChips}
+    ${focusChip}
     <label class="find">
       <span class="engr">find</span>
       <input type="search" data-search value="${esc(state.query)}" placeholder="name or description"
              spellcheck="false" autocomplete="off" aria-label="filter by name, description or path">
     </label>
-    ${providerBank}
-    ${kindBank}
-    ${lensBank}
-    ${focusBank}
-    ${panelBank(payload, state)}
     ${clear}
-    ${flaggedElsewhere}
   </div>`;
 }
 
+// --- the provenance statement -----------------------------------------------
+
 /**
- * Qualifiers on the whole page's figures, shown in the masthead plate beside
- * the scan stamp and the window.
+ * The one statement that licenses deleting the rest of the page's text.
  *
- * They sit there rather than in the filter rail for two reasons. They describe
- * the SCAN, not the current filter — the same class of fact as "390
- * transcripts" and the window range already printed next to them. And in the
- * rail they were the widest tail element, pushing the row onto a second line
- * that carried nothing else, which cost the inventory more height than the
- * chips occupy.
+ * It covers, in one place: how many transcripts were read, the window they
+ * cover, when durable tracking began, and what a FIRE is. Every figure that
+ * matches it carries nothing at all; every figure that does not carries the
+ * one deviation mark, and the legend here names the kinds actually present.
+ *
+ * The terms strip beside it defines each word at its first appearance IN THE
+ * LAYOUT. A definition that only exists on hover does not exist for a
+ * first-time reader, and one that must be dismissed is one they will dismiss
+ * before reading it.
  */
-function caveatChips(payload: UiPayload): string {
-  const out: string[] = [];
-  if (payload.pluginResolution === "newest-fallback") {
-    out.push(
-      `<span class="caveat tip-r" data-tip="installed_plugins.json was missing or unreadable">plugin versions: newest-cached fallback</span>`
-    );
-  }
-  // A broken ledger must degrade loudly: lifetime, provenance and dead-weight
-  // are absent from this payload, and the page says so instead of quietly
-  // rendering window-only figures as if they were the whole story.
-  if (payload.ledgerCaveat) {
-    out.push(
-      `<span class="caveat tip-r" data-tip="${esc(payload.ledgerCaveat)}">usage ledger unavailable — window figures only</span>`
-    );
-  }
-  // Every other qualifier the payload states about its own figures: a provider
-  // store that would not open, unreadable ledger lines, a snapshot append that
-  // failed, provenance that could not be resolved. Counted here and read in
-  // full on hover rather than printed as a wall of amber prose — but a
-  // degraded read is never left silent while the payload carries the sentence.
-  const cav = payload.caveats ?? [];
-  if (cav.length > 0) {
-    out.push(
-      `<span class="caveat tip-r" data-tip="${esc(`Qualifiers on the figures on this page:\n\n${cav.join("\n\n")}`)}">${fmtInt(cav.length)} caveat${plural(cav.length)}</span>`
-    );
-  }
-  return out.join("");
+function provenanceBlock(payload: UiPayload, state: AppState): string {
+  const win = usageWindow(payload);
+  const h = payload.history;
+  const since = trackedSince(payload);
+  const cav = caveatList(payload);
+  const devs = deviationsPresent(payload);
+  const onInventory = !isAnalysisNav(payload, state);
+
+  const counted = h?.windowStart && h?.windowEnd
+    ? `counted from <b>${fmtInt(h.transcriptFiles)}</b> transcript${plural(h.transcriptFiles)} covering ${esc(fmtDay(h.windowStart))} → ${esc(fmtDay(h.windowEnd))} (<b>${esc(win.span)}</b>)`
+    : `not countable here — no local transcripts were scanned`;
+  const tracking = since
+    ? `, and the durable ledger since <b>${esc(fmtDay(since))}</b>`
+    : payload.ledgerCaveat
+      ? `; the durable ledger could not be read for this scan`
+      : "";
+  // The backfill horizon is itself a figure this statement carries, and it is
+  // a deviation from it: imported, not observed. So it takes the mark rather
+  // than a clause — which also means the legend can never name a kind that
+  // appears nowhere on the page.
+  const backfill = h?.backfilledSince
+    ? ` Typed history reaches back to <b>${esc(fmtDay(h.backfilledSince))}</b>${dev(
+        "backfilled",
+        "Imported from ~/.claude/history.jsonl rather than observed as it happened, and only for the typed channel — no transcript survives that far back."
+      )}.`
+    : "";
+  const retention = win.span
+    ? ` Older sessions are deleted, so nothing inside that window means <em>not used lately</em>, not never used.`
+    : "";
+  const legend =
+    devs.length > 0
+      ? ` <span class="devlegend"><b class="dev">°</b> marks a figure this does not describe — its own note says how: ${devs
+          .map((d) => esc(DEVIATION_LABEL[d]))
+          .join(" · ")}.</span>`
+      : "";
+
+  // "inventory: 187 files" is not a headline figure — it is context, and this
+  // is where context belongs.
+  const statement = `<p class="provline"><b>${fmtInt(payload.header.items)}</b> instruction file${plural(payload.header.items)} scanned${payload.header.providers > 1 ? ` across <b>${fmtInt(payload.header.providers)}</b> providers` : ""}. A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name — ${counted}${tracking}.${backfill}${retention}${legend}</p>`;
+
+  const term = (t: string, d: string): string =>
+    `<span class="term"><b>${esc(t)}</b>${esc(d)}</span>`;
+  const anyDead = payload.items.some((i) =>
+    isDeadWeight(i, Math.max(...payload.items.map((x) => x.injectedChars), 0), win)
+  );
+  const terms = onInventory
+    ? `<p class="terms">${
+        term("cost / session", "tokens loaded into the model's context before you type, every session, used or not") +
+        (payload.header.listing
+          ? term(
+              "listing budget",
+              `the ~${fmtInt(payload.header.listing.budgetChars)} characters Claude Code allows every enabled skill's name and description; past it the least-invoked stop loading`
+            )
+          : "") +
+        (anyDead
+          ? term(
+              "dead weight",
+              "at least a quarter of your priciest item's cost, nothing recorded against it, and installed before the window opened"
+            )
+          : "")
+      }</p>`
+    : "";
+
+  const lede = onInventory
+    ? `<p class="lede">What your AI tools load before you type — what it costs, what never fires, and what is flagged.</p>`
+    : "";
+
+  // The caveats are part of this statement, not a strip of their own — but a
+  // collapsed disclosure still costs the inventory a row of height for a
+  // summary line the sidebar foot already prints. So the foot IS the control:
+  // it announces the count at all times, and opening it renders the list here,
+  // where the figures it qualifies are.
+  const caveats =
+    cav.length > 0 && state.provOpen
+      ? `<ul class="cav">${cav.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`
+      : "";
+
+  return `<section class="prov" aria-label="provenance">${lede}${statement}${terms}${caveats}</section>`;
 }
 
-const COLS: { key: SortKey; label: string; cls?: string; note?: string }[] = [
-  { key: "state", label: "state", note: "Enabled or disabled. Only Claude user skills can be toggled here." },
-  { key: "name", label: "name", cls: "c-name", note: "The name the harness dispatches on." },
+/**
+ * Five columns, because there are five questions. Cost and activity are two of
+ * them and get one cell each: `fires`, `tok / fire` and `last fired` used to
+ * state one fact in three phrasings, each with its own window suffix, and the
+ * never-fired row said "never" three times over.
+ *
+ * `kind` is gone entirely — it is the sidebar, and the glyph rides the name.
+ * `provider` and `scope` survive as discriminators the sidebar does not
+ * absorb, and appear only where they vary.
+ */
+const COLS: { key: SortKey; label: string; cls?: string; def?: string }[] = [
+  { key: "state", label: "state" },
+  { key: "name", label: "name", cls: "c-name" },
   { key: "source", label: "provider" },
-  { key: "kind", label: "kind" },
-  { key: "scope", label: "scope", note: "user = your home directory · proj = this project directory" },
-  {
-    key: "injected",
-    label: "tok / session",
-    cls: "c-num",
-    note: "What this item costs you in EVERY session: tokens loaded into the model's context before you type anything, used or not. Not the size of the file — just the always-loaded part (name + description for skills, whole body for instruction files).",
-  },
-  { key: "fires", label: "fires", cls: "c-num" },
-  {
-    key: "tokPerFire",
-    label: "tok / fire",
-    cls: "c-num",
-    note: "What one fire cost over the window: (always-in-context cost × sessions + body cost × fires) ÷ fires. An item that never fired shows what was paid for it instead, and sorts last in either direction.",
-  },
-  { key: "lastFired", label: "last fired" },
-  { key: "findings", label: "findings" },
+  { key: "scope", label: "scope" },
+  { key: "injected", label: "cost / session", cls: "c-num" },
+  { key: "activity", label: "activity", cls: "c-act-col" },
+  { key: "findings", label: "flags" },
 ];
 
 /**
  * A column where every row would print the same word is a fact about the
- * machine, not a discriminator — the same rule that hides the one-provider
- * filter bank. Uniformity is judged against the MODE's base inventory, not
- * the filtered view: columns must not appear and vanish as filters are
- * clicked, but the kind column rightly disappears in skills mode.
+ * machine, not a discriminator. Uniformity is judged against the NAV entry's
+ * base inventory, not the filtered view: columns must not appear and vanish as
+ * the lens is clicked.
  */
 function activeCols(base: UiItem[]): typeof COLS {
   const varies = (get: (i: UiItem) => string): boolean => new Set(base.map(get)).size > 1;
   return COLS.filter((c) => {
     if (c.key === "source") return varies((i) => i.source);
     if (c.key === "scope") return varies((i) => i.scope);
-    if (c.key === "kind") return varies((i) => i.kind);
     return true;
   });
 }
@@ -1412,7 +1318,7 @@ function activeCols(base: UiItem[]): typeof COLS {
  * single number. Data-bearing, right-anchored against the aligned figures;
  * tonal ink, because amber is reserved for state and severity.
  */
-function costCell(item: UiItem, maxInjected: number, win: Window): string {
+function costCell(item: UiItem, maxInjected: number, mergedWin: Window): string {
   const tok = tokens(item.injectedChars);
   const pct =
     item.injectedChars > 0 && maxInjected > 0
@@ -1423,16 +1329,21 @@ function costCell(item: UiItem, maxInjected: number, win: Window): string {
   // fires. Only this earns amber in the cost column; a cheap silent item and
   // an expensive busy one are both fine. The predicate itself is the shared
   // one — see isDeadWeight — so this cell, the prune quadrant's amber marks
-  // and the header's rent total cannot disagree about the same item.
-  const deadWeight = isDeadWeight(item, maxInjected, win);
-  // The window the verdict was reached in is THIS row's, which is not the
-  // merged one for a provider whose store keeps its own history.
-  const w = windowFor(win, item);
-  const note = item.enabled
-    ? `This item costs ${fmtInt(tok)} tokens in every session — loaded into the model's context before you type anything, whether or not it is used. The bar compares that cost against the most expensive item in your inventory.` +
-      (deadWeight ? `\n\nDead weight: that cost is being paid with zero fires in the ${w.span} window.` : "")
-    : `Off — costs nothing right now. Re-enabled, it would add ${fmtInt(tok)} tokens to every session.`;
-  return `<td class="c-num c-cost${deadWeight ? " dw" : ""}" title="${esc(note)}"><span class="meter" aria-hidden="true"><i style="width:${pct}%"></i></span>${fmtInt(tok)}</td>`;
+  // and the stat bar's figures cannot disagree about the same item.
+  const deadWeight = isDeadWeight(item, maxInjected, mergedWin);
+  // The term is defined once, in the terms strip above the table. What rides
+  // the cell is only what the strip cannot say: which window THIS row's
+  // verdict was reached in, and only where that is not the page's own. The
+  // MERGED window has to be the one threaded in for that comparison — handed
+  // the row's own window, `windowFor` is idempotent and the test could never
+  // be true, so the mark would never appear on the rows that need it.
+  const w = windowFor(mergedWin, item);
+  const off = w.span !== mergedWin.span || w.start !== mergedWin.start;
+  const mark =
+    deadWeight && off ? dev("window", `judged in ${item.source}'s own ${w.span || "undated"} window, not the page's`) : "";
+  return `<td class="c-num c-cost${deadWeight ? " dw" : ""}"${
+    deadWeight ? ` title="${esc("Dead weight: this cost is being paid with nothing recorded against it.")}"` : ""
+  }><span class="meter" aria-hidden="true"><i style="width:${pct}%"></i></span>${fmtInt(tok)}${mark}</td>`;
 }
 
 /**
@@ -1494,39 +1405,24 @@ function fmtBytes(b: number): string {
   return `${fmtInt(b)} B`;
 }
 
-function tableHead(state: AppState, win: Window, cols: typeof COLS, items?: UiItem[]): string {
-  // The span in a column label is the merged transcript window. Rows counted
-  // out of another store are counted over ITS window, and each cell says so —
-  // the header has to say that they do, or the label reads as the window every
-  // figure under it was measured in.
-  const others = otherWindows(win, items);
-  const perRow = others
-    ? `\n\nRows whose evidence comes from another provider's store are counted over that store's own window instead (${others}); every such cell states its window in its own tooltip.`
-    : "";
-  const noteFor = (key: SortKey, fallback?: string): string => {
-    if (key === "fires" || key === "lastFired") return `${win.note}${perRow}`;
-    if (key === "tokPerFire") return `${fallback ?? ""}${win.note ? `\n\n${win.note}${perRow}` : ""}`;
-    return fallback ?? "";
-  };
-  // Tooltips on the right-hand columns anchor right, or they would push the
-  // scrollport wider and put a horizontal scrollbar under the whole table.
-  const RIGHT_TIPPED = new Set<SortKey>(["injected", "fires", "tokPerFire", "lastFired", "findings"]);
-  const cells = cols.map((c) => {
-    const active = state.sort.key === c.key;
-    const arrow = active ? (state.sort.dir === 1 ? "▴" : "▾") : "";
-    // No role="button": that would override the th's columnheader role and
-    // cut every cell loose from its header in the accessibility tree. The
-    // sort state is announced by aria-sort, which is what it is for.
-    const sorted = active ? ` aria-sort="${state.sort.dir === 1 ? "ascending" : "descending"}"` : "";
-    const note = noteFor(c.key, c.note);
-    const title = note ? ` data-tip="${esc(note)}"` : "";
-    const tipR = note && RIGHT_TIPPED.has(c.key) ? " tip-r" : "";
-    const label =
-      win.span && (c.key === "lastFired" || c.key === "fires" || c.key === "tokPerFire")
-        ? `${c.label} · ${win.span}`
-        : c.label;
-    return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}${tipR}" data-sort="${c.key}" tabindex="0"${sorted}${title}>${esc(label)}<s aria-hidden="true">${arrow}</s></th>`;
-  }).join("");
+/**
+ * Column heads carry the label and nothing else — no `· 43d` suffix, no
+ * paragraph in a tooltip. The window is stated once, in the provenance
+ * statement above the table, and a row measured over a different one carries
+ * the deviation mark on its own cell.
+ */
+function tableHead(state: AppState, cols: typeof COLS): string {
+  const cells = cols
+    .map((c) => {
+      const active = state.sort.key === c.key;
+      const arrow = active ? (state.sort.dir === 1 ? "▴" : "▾") : "";
+      // No role="button": that would override the th's columnheader role and
+      // cut every cell loose from its header in the accessibility tree. The
+      // sort state is announced by aria-sort, which is what it is for.
+      const sorted = active ? ` aria-sort="${state.sort.dir === 1 ? "ascending" : "descending"}"` : "";
+      return `<th class="${c.cls ?? ""}${active ? " sorted" : ""}" data-sort="${c.key}" tabindex="0"${sorted}>${esc(c.label)}<s aria-hidden="true">${arrow}</s></th>`;
+    })
+    .join("");
   return `<tr>${cells}<th class="c-act"><span class="sr">actions</span></th></tr>`;
 }
 
@@ -1542,25 +1438,14 @@ function switchCell(item: UiItem): string {
   return `<button class="sw${item.enabled ? " on" : ""}" data-toggle="${item.id}"${saving} role="switch" aria-checked="${item.enabled}" aria-label="${item.enabled ? "disable" : "enable"} ${esc(item.name)}" title="${item.enabled ? `disable — stops paying ${fmtInt(tokens(item.injectedChars))} tok every session` : "enable"}"><i></i></button>`;
 }
 
-function findingsCell(item: UiItem, win: Window): string {
+function findingsCell(item: UiItem): string {
   const flags = flagCount(item);
   const parts: string[] = [];
   if (flags > 0) {
-    // The fire count rides on the badge only when both facts exist — a flag
-    // on something that actually runs is a different fact from a flag on a
-    // dormant file, and the qualifier says which count this is.
-    const f = item.fires;
-    const n = f ? f.lifetime?.invocations ?? f.invocations : 0;
-    const fireTag = f && n > 0 ? ` · ${fmtInt(n)} fires` : "";
-    const qual =
-      f && n > 0
-        ? f.lifetime && f.trackedSince
-          ? `the flagged item has ${fmtInt(n)} recorded fires since tracking began ${fmtDay(f.trackedSince)}`
-          : `the flagged item has ${fmtInt(n)} recorded fires in the ${win.span || "scanned"} window`
-        : "";
-    parts.push(
-      `<span class="badge ${hasHigh(item) ? "danger" : "signal"}"${qual ? ` title="${esc(qual)}"` : ""}>▲ ${flags}${fireTag}</span>`
-    );
+    // The count and the severity tone, and nothing else: how much the flagged
+    // item is USED is the activity cell's fact, one column to the left, and
+    // restating it here was the same figure printed twice on one row.
+    parts.push(`<span class="badge ${hasHigh(item) ? "danger" : "signal"}">▲ ${flags}</span>`);
   }
   if (item.parseError) {
     parts.push(`<span class="badge warn" title="the engine could not fully parse this item">couldn&#39;t parse</span>`);
@@ -1581,12 +1466,17 @@ function nameCell(item: UiItem, cut?: CutFact): string {
     item.twinPath && !item.enabled
       ? `<span class="offtag" title="An enabled copy of this dispatch name exists at ${esc(item.twinPath)}. While it does, this copy never dispatches, and toggling is blocked until one copy is removed or renamed.">shadowed</span>`
       : "";
-  // Tonal, never amber: this is a modeled position in a drop order, not a
-  // severity — and the row it sits on already carries its own state tag.
+  // Tonal, never amber: this is a modelled position in a drop order, not a
+  // severity — and the row it sits on already carries its own state tag. It
+  // stays inline because it explains why a skill stopped auto-triggering,
+  // which is the one thing a reader cannot infer from anything else on the row.
   const dropped = cut?.dropped
     ? `<span class="offtag cut" title="${esc(
-        `Modelled as dropped: at ${fmtInt(cut.cumChars)} cumulative characters this description falls past the ~${fmtInt(cut.budget)}-char listing budget, so Claude Code would not load it — the skill still exists and can still be typed, it just stops auto-triggering. Freeing ${fmtInt(cut.need)} characters brings it back.\n\nThis replays Claude Code's documented drop order (least-invoked first) ranked on this ledger's own lifetime fire counts, which stand in for counters the harness keeps to itself. A model of the rule, not a readout of it.`
-      )}">listing dropped</span>`
+        `At ${fmtInt(cut.cumChars)} cumulative characters this description falls past the ~${fmtInt(cut.budget)}-char listing budget, so Claude Code would not load it — the skill still exists and can still be typed, it just stops auto-triggering. Freeing ${fmtInt(cut.need)} characters brings it back.`
+      )}">▸ dropped${dev(
+        "modelled",
+        "This replays Claude Code's documented drop order — least-invoked first — over your real listing, ranked on this ledger's own lifetime fire counts standing in for counters the harness keeps to itself."
+      )}</span>`
     : "";
   return `${name}${off}${shadowed}${dropped}`;
 }
@@ -1605,6 +1495,127 @@ function trendGlyph(f: UiFires, win: Window, budgetNote = ""): string {
   return `<i class="trend" title="${esc(note)}">${TREND_GLYPH[t.trend]}</i>`;
 }
 
+/**
+ * The activity cell: "is this used?", answered ONCE, in one phrasing.
+ *
+ * It replaces four columns that stated one fact three times —
+ * `fires: never · installed 47d`, `tok/fire: paid 90,383 · never fired`,
+ * `last fired: none in 43d` — each with its own window suffix. Four cases, no
+ * restatement, and the window is not repeated in any of them: it is in the
+ * provenance statement, and a row counted over a DIFFERENT one carries the
+ * deviation mark, which is the only thing that statement cannot cover.
+ */
+function activityCell(item: UiItem, mergedWin: Window, win: Window): string {
+  const f = item.fires;
+  const noun = sessionNoun(item);
+  // Does this row's window match the page's? Both ends decide: two windows of
+  // equal length opening on different days are different windows.
+  const offWindow = win.span !== mergedWin.span || win.start !== mergedWin.start;
+  const windowMark = offWindow
+    ? dev(
+        "window",
+        `counted in ${item.source}'s own store, covering ${win.span || "an undated range"} — not the ${mergedWin.span || "merged"} window on this page.`
+      )
+    : "";
+
+  // Fires are recorded by dispatch name; a shadowed disabled copy never
+  // dispatches, so repeating the name's count here would double-report it.
+  if (item.twinPath && !item.enabled) {
+    return `<td class="c-act-col na" title="${esc(
+      "Fires are recorded by dispatch name, and an enabled copy of this name exists — its row carries the history."
+    )}">shadowed</td>`;
+  }
+
+  // An absent measurement, which is not a zero. An agent DOES leave a dispatch
+  // record by construction, so its n/a means the ledger holding those launches
+  // could not be read — a different sentence from a kind that leaves no record
+  // at all.
+  if (f === undefined) {
+    return `<td class="c-act-col na">not tracked${dev(
+      "unmeasured",
+      item.kind === "agent"
+        ? "Agent launches ARE recorded, so no dispatch record reaching this row means the ledger could not be read for this scan — never a zero."
+        : "This kind leaves no dispatch record in local transcripts, so its use cannot be counted either way."
+    )}</td>`;
+  }
+
+  // A tracked zero. "never used" is the plain phrasing the zero case earns;
+  // the age beside it is what makes it actionable, and it is the fact the row
+  // used to state twice in two columns.
+  if (f === null) {
+    const p = item.provenance;
+    const age = p ? daysAgo(p.installedAt, win.asOf) : undefined;
+    const aged =
+      p && age !== undefined
+        ? ` <span class="dim">· ${age === 0 ? "new today" : `${fmtInt(age)}d old`}</span>`
+        : "";
+    const title =
+      p && age !== undefined
+        ? `${provVerb(p)} ${fmtDay(p.installedAt)}, date from ${PROVENANCE_LABEL[p.source]}.`
+        : "";
+    return `<td class="c-act-col zero"${title ? ` title="${esc(title)}"` : ""}>never used${aged}${windowMark}</td>`;
+  }
+
+  // ONE figure, because the cell answers one question. The two counts are
+  // different measurements over different spans and neither is the other's
+  // subset: the ledger's lifetime reaches back to when tracking began, the
+  // window count to the oldest surviving transcript, and on a machine that
+  // started tracking last week the window one covers far more. So the cell
+  // leads with the larger — both are counts of real recorded fires, so the
+  // larger is a true statement under either method — and the title carries
+  // both with the method behind each. Leading with lifetime unconditionally
+  // printed "0 fires" on rows the transcripts recorded a dozen times.
+  const lt = f.lifetime?.invocations;
+  const n = lt === undefined ? f.invocations : Math.max(lt, f.invocations);
+  const last = f.lifetime?.lastFired ?? f.lastFired;
+  const lastPart = last ? ` <span class="dim">· last ${esc(fmtMon(last, win.asOf))}</span>` : "";
+  // The count's own breakdown stays on the cell, because it is the ONE thing
+  // the figure cannot show: a lifetime count and a window count are different
+  // measurements over different spans, and the leading figure is the lifetime.
+  const title = f.lifetime
+    ? `${fmtInt(f.lifetime.invocations)} lifetime across ${fmtInt(f.lifetime.sessions)} ${noun}${plural(f.lifetime.sessions)}${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""} · ${fmtInt(f.invocations)} in the ${win.span || "scanned"} window, a separate pass over this provider's own store.`
+    : `${fmtInt(f.invocations)} across ${fmtInt(f.sessions)} ${noun}${plural(f.sessions)}${f.firstFired ? ` · first ${fmtDay(f.firstFired)}` : ""}.`;
+
+  // Table-level dispatch and waste facts. Each is a DIFFERENT fact from the
+  // count beside it, not a qualifier on it, so none of them is a repetition —
+  // and each appears only when its fact does, never as empty chrome.
+  const typedOnly =
+    f.byChannel && f.byChannel.auto === 0 && f.byChannel.typed > 0
+      ? ` <span class="badge fact" title="${esc(`Every recorded fire was user-typed${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""} — the model has not reached for this on its own.`)}">never auto-fired</span>`
+      : "";
+  const interrupted =
+    f.interruptedAfter > 0
+      ? ` <span class="badge fact" title="${esc(`${fmtInt(f.interruptedAfter)} of ${fmtInt(f.invocations)} fires stopped mid-run — the body tokens had already loaded.`)}">${fmtInt(f.interruptedAfter)} interrupted (~${fmtInt(tokens(item.bodyChars * f.interruptedAfter))} tok${f.invocations > 0 ? `, ${Math.round((f.interruptedAfter / f.invocations) * 100)}% of fires` : ""})</span>`
+      : "";
+  // Tried and dropped: every recorded fire inside one 7-day span, withheld
+  // while that burst is still recent — an item first used yesterday has all
+  // its fires inside one span too, and "dropped" would be a verdict on
+  // something that has barely started.
+  const sp = f.spread;
+  const burst =
+    sp?.oneBurst && trendOf(f.weeklyBins, win.asOf)?.trend !== "new"
+      ? ` <span class="badge fact" title="${esc(
+          `All ${fmtInt(n)} recorded fires landed within ${sp.spanDays === 0 ? "a single day" : `one ${fmtInt(sp.spanDays)}-day span`}` +
+            `${f.lifetime?.firstFired ?? f.firstFired ? ` (${fmtDay(f.lifetime?.firstFired ?? f.firstFired)} → ${fmtDay(f.lifetime?.lastFired ?? f.lastFired)})` : ""}` +
+            `${f.quiet ? `, and nothing since — ${fmtInt(f.quiet.days)}d ago` : ", and nothing since"}.` +
+            `${f.trackedSince ? ` Measured over the ledger's record since ${fmtDay(f.trackedSince)}.` : ""}`
+        )}">tried &amp; dropped</span>`
+      : "";
+  const scopeIn = item.scopeNote?.allFiresIn;
+  const scopeShort = scopeIn && scopeIn.length > 22 ? `${scopeIn.slice(0, 21)}…` : scopeIn;
+  const scope = scopeIn
+    ? ` <span class="badge fact" title="${esc(
+        `Every recorded fire of this ${item.scope}-scoped item landed in one project: ${scopeIn}. Its cost is paid in every session in every project; its recorded use is in that one.`
+      )}">only in ${esc(scopeShort)}</span>`
+    : "";
+
+  return `<td class="c-act-col" title="${esc(title)}"><span class="afig">${fmtInt(n)} fire${plural(n)}</span>${lastPart}${trendGlyph(
+    f,
+    win,
+    quietBudgetNote(item, f, win)
+  )}${windowMark}${typedOnly}${burst}${scope}${interrupted}</td>`;
+}
+
 function row(
   item: UiItem,
   idx: number,
@@ -1612,148 +1623,14 @@ function row(
   mergedWin: Window,
   maxInjected: number,
   cols: typeof COLS,
-  sessions: number,
   cut?: CutFact
 ): string {
-  const f = item.fires;
-  // Every figure in this row was counted out of ONE provider's store, so every
+  // Every figure in this row was counted out of ONE provider's store, so a
   // qualifier in it names that store's window. The merged window describes the
   // transcript scan, and for a cursor rule — counted over a conversation store
   // reaching back a year — it describes nothing this row contains.
   const win = windowFor(mergedWin, item);
-  const noun = sessionNoun(item);
   const has = (key: SortKey): boolean => cols.some((c) => c.key === key);
-  // An agent leaves a dispatch record by construction (S2 banks every
-  // Agent/Task launch), so "this kind is untrackable" is the wrong reason for
-  // an agent n/a — that cell means the ledger holding those launches could not
-  // be read for this scan. The rail states which failure; the cell states that
-  // the measurement is missing rather than zero.
-  const untracked =
-    item.kind === "agent"
-      ? `n/a — no dispatch record reached this row for this scan. Agent launches ARE recorded, so this is an absent measurement (see the caveat in the filter rail), never a zero.`
-      : `n/a — this kind leaves no dispatch record in local transcripts, so its use cannot be counted either way`;
-  // "0" and "never" are absolute-sounding words for a window-limited fact, so
-  // both carry the window in their text or their tooltip.
-  const firedNote = (u: NonNullable<UiItem["fires"]>): string =>
-    `${fmtInt(u.invocations)} invocation${u.invocations === 1 ? "" : "s"} across ${fmtInt(u.sessions)} ${noun}${u.sessions === 1 ? "" : "s"}` +
-    `${u.firstFired ? ` · first ${fmtDay(u.firstFired)}` : ""}${u.lastFired ? ` · last ${fmtDay(u.lastFired)}` : ""}` +
-    (u.lifetime
-      ? `\n${fmtInt(u.lifetime.invocations)} lifetime across ${fmtInt(u.lifetime.sessions)} ${noun}${u.lifetime.sessions === 1 ? "" : "s"}${u.trackedSince ? ` since tracking began ${fmtDay(u.trackedSince)}` : ""} — lifetime counts come from the durable ledger (dated events); the window count is a separate pass over this provider's own local store, a different method.`
-      : "") +
-    `\n\n${win.note}`;
-  // Fires are recorded by dispatch name; a shadowed disabled copy never
-  // dispatches, so repeating the name's count here would double-report it.
-  const shadowed = !!item.twinPath && !item.enabled;
-  const shadowNote =
-    "fires are recorded by dispatch name, and an enabled copy of this name exists — its row carries the history";
-  // The never-fired cell states the age fact inline when provenance can date
-  // the item: "never" alone is a claim, "never though installed 62d ago" is
-  // the fact worth acting on. Without a provenance date it stays a plain "0".
-  const neverCell = (): string => {
-    const p = item.provenance;
-    const age = p ? daysAgo(p.installedAt, win.asOf) : undefined;
-    return p && age !== undefined
-      ? `<td class="c-num zero" title="${esc(`${provVerb(p)} ${fmtDay(p.installedAt)} (date from ${PROVENANCE_LABEL[p.source]}) — no recorded fires.\n\n${win.note}`)}">never · ${provVerb(p)} ${fmtInt(age)}d</td>`
-      : `<td class="c-num zero" title="${esc(win.note)}">0</td>`;
-  };
-  // Table-level dispatch and waste facts: "never auto-fired" only at 100%
-  // typed, the interrupted badge only when interrupts exist — a badge appears
-  // when its fact does, never as empty chrome. Tonal, not amber: these are
-  // measurements, not states. Shadowed rows carry no fires surface at all.
-  const typedOnlyBadge =
-    !shadowed && f && f.byChannel && f.byChannel.auto === 0 && f.byChannel.typed > 0
-      ? ` <span class="badge fact" title="${esc(`every recorded fire was user-typed${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""} — the model has not reached for this on its own`)}">never auto-fired</span>`
-      : "";
-  const interruptedBadge =
-    !shadowed && f && f.interruptedAfter > 0
-      ? ` <span class="badge fact" title="${esc(`${fmtInt(f.interruptedAfter)} of ${fmtInt(f.invocations)} fires in the ${win.span || "scanned"} window were interrupted mid-run — the body tokens had already loaded when the run stopped`)}">${fmtInt(f.interruptedAfter)} interrupted (~${fmtInt(tokens(item.bodyChars * f.interruptedAfter))} tok${f.invocations > 0 ? `, ${Math.round((f.interruptedAfter / f.invocations) * 100)}% of fires` : ""})</span>`
-      : "";
-  // Tried and dropped: every recorded fire inside a single 7-day span. The
-  // payload refuses to call one fire a burst, so the badge can only appear
-  // where at least two fires bracket a span — the fact, then the badge.
-  //
-  // Withheld while that burst is still RECENT (the same 4-ISO-week measure the
-  // trend glyph calls "new"): an item first used yesterday has all its fires
-  // inside one span too, and "dropped" would be a verdict on something that
-  // has barely started. The row still says "∗ new", and the drawer still
-  // states the span either way.
-  const sp = shadowed ? undefined : f?.spread;
-  const burstBadge =
-    sp?.oneBurst && f && trendOf(f.weeklyBins, win.asOf)?.trend !== "new"
-      ? ` <span class="badge fact" title="${esc(
-          `all ${fmtInt(firesCount(f))} recorded fires landed within ${sp.spanDays === 0 ? "a single day" : `one ${fmtInt(sp.spanDays)}-day span`}` +
-            `${f.lifetime?.firstFired ?? f.firstFired ? ` (${fmtDay(f.lifetime?.firstFired ?? f.firstFired)} → ${fmtDay(f.lifetime?.lastFired ?? f.lastFired)})` : ""}` +
-            `${f.quiet ? `, and nothing since — ${fmtInt(f.quiet.days)}d ago` : ", and nothing since"}.` +
-            `${f.trackedSince ? ` Measured over the ledger's record since ${fmtDay(f.trackedSince)}.` : ""}`
-        )}">tried &amp; dropped</span>`
-      : "";
-  // Every fire in one project, while the item is loaded in all of them. A
-  // scope fact, but it lives beside the fires it is about — the scope column
-  // disappears whenever every row shares one scope.
-  const scopeIn = shadowed ? undefined : item.scopeNote?.allFiresIn;
-  // The label is clipped at a width the column can carry — a project display
-  // name is a basename, but nothing stops one being 60 characters, and a
-  // nowrap cell would widen the whole table for it. The full name is in the
-  // title, and in the drawer's relationships section.
-  const scopeShort = scopeIn && scopeIn.length > 22 ? `${scopeIn.slice(0, 21)}…` : scopeIn;
-  const scopeBadge = scopeIn
-    ? ` <span class="badge fact" title="${esc(
-        `every recorded fire of this ${item.scope}-scoped item landed in one project: ${scopeIn}. Its always-in-context cost is paid in every session in every project; its recorded use is in that one.`
-      )}">only in ${esc(scopeShort)}</span>`
-    : "";
-  const firesCell = shadowed
-    ? `<td class="c-num na" title="${esc(shadowNote)}">—</td>`
-    : f === undefined
-      ? `<td class="c-num na" title="${esc(untracked)}">n/a</td>`
-      : f === null
-        ? neverCell()
-        : `<td class="c-num" title="${esc(firedNote(f))}">${
-            f.lifetime
-              ? win.span
-                ? `${fmtInt(f.lifetime.invocations)} <span class="winpart">· ${fmtInt(f.invocations)} in ${win.span}</span>`
-                : fmtInt(f.lifetime.invocations)
-              : fmtInt(f.invocations)
-          }${trendGlyph(f, win, quietBudgetNote(item, f, win))}${typedOnlyBadge}${burstBadge}${scopeBadge}${interruptedBadge}</td>`;
-  // tok/fire: a ratio when the window has fires to divide by; what was paid,
-  // stated as a fact, when it does not. Never Infinity, never NaN.
-  const ratio = tokPerFire(item, sessions);
-  const tokFireCell = (): string => {
-    if (shadowed) return `<td class="c-num na" title="${esc(shadowNote)}">—</td>`;
-    if (f === undefined) return `<td class="c-num na" title="${esc(untracked)}">n/a</td>`;
-    if (f && ratio !== undefined) {
-      const s = Math.max(sessions, f.sessions);
-      const method =
-        `≈ (${fmtInt(tokens(item.injectedChars))} tok/session × ${fmtInt(s)} scanned sessions + ${fmtInt(tokens(item.bodyChars))} tok body × ${fmtInt(f.invocations)} fires) ÷ ${fmtInt(f.invocations)} fires — window figures on both sides. The session count is this payload's transcript total, which spans every provider whose transcripts it reads, not this row's alone.\n\n${win.note}`;
-      return `<td class="c-num" title="${esc(method)}">${fmtInt(ratio)}</td>`;
-    }
-    if (!item.enabled)
-      return `<td class="c-num na" title="off — no always-in-context cost is being paid">—</td>`;
-    // No session total for this provider, so there is nothing honest to
-    // multiply the always-in-context cost by. The page's transcript total
-    // counts Claude transcripts and Codex rollouts; pricing a Cursor rule with
-    // it would bill this row for sessions its harness was never in.
-    if (!comparableSessions(item))
-      return `<td class="c-num na" title="${esc(
-        `n/a — this payload carries no ${noun} total for ${item.source}. The transcript count it would otherwise divide by belongs to other harnesses' stores, and a cost per fire built from another store's ${noun}s would be a ratio of two different measurements.\n\n${win.note}`
-      )}">n/a</td>`;
-    if (!win.span || sessions <= 0) return `<td class="c-num na" title="${esc(win.note)}">n/a</td>`;
-    const paid = tokens(item.injectedChars * sessions);
-    const tail = f === null ? "never fired" : `none in ${win.span}`;
-    const note =
-      `${fmtInt(tokens(item.injectedChars))} tok × ${fmtInt(sessions)} scanned sessions — this payload's transcript total across the providers it reads — paid with zero fires recorded in this row's ${win.span} window, so there is no per-fire cost to state.` +
-      (f && f.lifetime && f.lifetime.invocations > 0
-        ? `\n${fmtInt(f.lifetime.invocations)} lifetime fire${f.lifetime.invocations === 1 ? "" : "s"} exist${f.trackedSince ? ` since tracking began ${fmtDay(f.trackedSince)}` : ""}, outside this window.`
-        : "") +
-      `\n\n${win.note}`;
-    return `<td class="c-num zero" title="${esc(note)}">paid ${fmtInt(paid)} · ${tail}</td>`;
-  };
-  const last = shadowed
-    ? `<td class="na" title="${esc(shadowNote)}">—</td>`
-    : f === undefined
-      ? `<td class="na" title="${esc(untracked)}">n/a</td>`
-      : f === null
-        ? `<td class="zero" title="${esc(win.note)}">${esc(win.none)}</td>`
-        : `<td title="${esc(firedNote(f))}">${fmtDay(f.lastFired) || "—"}</td>`;
   const cls = [
     item.enabled ? "" : "off",
     cut?.dropped ? "dropped" : "",
@@ -1767,27 +1644,24 @@ function row(
   // row, not only from the drawer. The path rides along underneath it.
   const nameTip = item.description ? `${item.description}\n\n${item.path}` : item.path;
   // Savings if disabled: what this row would stop costing, stated on the
-  // control that would do it. Only where the action exists (a togglable,
-  // currently-enabled item) and only where there is something to save — a
-  // "−0 tok" affordance would be chrome offering nothing.
+  // control that would do it. Only where the action exists and only where
+  // there is something to save — a "−0 tok" affordance would be chrome
+  // offering nothing.
   const saving = item.togglable && item.enabled ? tokens(item.injectedChars) : 0;
   const saveBtn =
     saving > 0
       ? `<button class="act save" data-toggle="${item.id}" data-saving-chars="${item.injectedChars}" aria-label="${esc(`disable ${item.name} — stops paying ${fmtInt(saving)} tokens every session`)}" title="${esc(
-          `Disable — stops paying ${fmtInt(saving)} tok in every session (${fmtInt(item.injectedChars)} chars of always-in-context text). The file is moved to ~/.claude/skills-disabled, not deleted, and its fire history is kept.`
+          `Disable — stops paying ${fmtInt(saving)} tok in every session. The file is moved to ~/.claude/skills-disabled, not deleted, and its fire history is kept.`
         )}">−${fmtInt(saving)} tok</button>`
       : "";
   return `<tr class="${cls}" data-id="${item.id}" tabindex="0"${style}>
     <td class="c-sw">${switchCell(item)}</td>
-    <td class="c-name" title="${esc(nameTip)}">${nameCell(item, cut)}</td>
+    <td class="c-name" title="${esc(nameTip)}"><i class="kg kg-${esc(item.kind)}" aria-hidden="true">${KIND_GLYPH[item.kind] ?? ""}</i>${nameCell(item, cut)}</td>
     ${has("source") ? `<td class="dim">${esc(item.source)}</td>` : ""}
-    ${has("kind") ? `<td class="c-kind" title="${esc(KIND_NOTE[item.kind] ?? "")}"><i class="kg kg-${esc(item.kind)}" aria-hidden="true">${KIND_GLYPH[item.kind] ?? ""}</i>${esc(item.kind)}</td>` : ""}
     ${has("scope") ? `<td class="dim">${item.scope === "user" ? "user" : "proj"}</td>` : ""}
-    ${costCell(item, maxInjected, win)}
-    ${firesCell}
-    ${tokFireCell()}
-    ${last}
-    <td>${findingsCell(item, win)}</td>
+    ${costCell(item, maxInjected, mergedWin)}
+    ${activityCell(item, mergedWin, win)}
+    <td>${findingsCell(item)}</td>
     <td class="c-act">${saveBtn}<button class="act" data-open="${item.id}" title="open in editor">edit</button></td>
   </tr>`;
 }
@@ -1833,7 +1707,7 @@ function emptyState(payload: UiPayload): string {
 function table(payload: UiPayload, state: AppState): string {
   if (payload.items.length === 0) return emptyState(payload);
   const win = usageWindow(payload);
-  const base = modeBase(payload, state);
+  const base = navBase(payload, state);
   const cols = activeCols(base);
   const span = cols.length + 1;
   const items = visibleItems(payload, state);
@@ -1841,68 +1715,53 @@ function table(payload: UiPayload, state: AppState): string {
   // bar that grows when you filter would be lying about relative cost.
   const maxInjected = Math.max(...payload.items.map((i) => i.injectedChars), 0);
   const { loose, groups } = grouped(items);
-  const sessions = payload.history?.transcriptFiles ?? 0;
+  // The listing cut still marks every dropped row inline. The two-line divider
+  // that used to sit in the table is gone: it restated the listing view's own
+  // headline in the middle of the inventory, and its placement was only ever
+  // true for one sort order.
   const cut = cutIndex(payload);
-  // The divider marks where the modeled cut falls. The table sorts on whatever
-  // column you chose, so "everything below this line is dropped" is only true
-  // when the dropped rows happen to form the tail of the current order — which
-  // is checked, and said either way. Every dropped row carries its own tag
-  // regardless, so the fact never depends on the line being where you expect.
-  const ordered = [...loose, ...groups.flatMap((g) => g.items)];
-  const listedSeq = ordered
-    .map((i) => cut?.byId.get(i.id)?.dropped)
-    .filter((d): d is boolean => d !== undefined);
-  const firstDropped = listedSeq.indexOf(true);
-  const isTail = firstDropped >= 0 && listedSeq.slice(firstDropped).every(Boolean);
-  let cutPlaced = false;
-  const cutDivider = (item: UiItem): string => {
-    if (cutPlaced || !cut || cut.dropped === 0 || !cut.byId.get(item.id)?.dropped) return "";
-    cutPlaced = true;
-    const sorting = COLS.find((c) => c.key === state.sort.key)?.label ?? state.sort.key;
-    const where = isTail
-      ? `every listed row below this line is dropped, in the order you are sorted by (${esc(sorting)})`
-      : `the first dropped row in this sort (${esc(sorting)}) — the model ranks most-fired first, so others sit above the line here; each carries its own tag`;
-    // One line. The placement rule and the modelling caveat are on the row's
-    // tooltip rather than wrapped across two lines of prose inside the table —
-    // as rendered text they cost the inventory another ~30px of height on
-    // every scroll, for a caveat you read once.
-    return `<tr class="cutrow" data-tip="${esc(
-      `${where}. Modelled from this ledger's own fire counts, standing in for the invocation counters Claude Code keeps to itself.`
-    )}"><td colspan="${span}">
-      <span class="engr">listing cut</span>
-      <span class="cutfig"><b class="dgr">${fmtInt(cut.dropped)}</b> of ${fmtInt(cut.listed)} description${plural(cut.listed)} fall past the ~${fmtInt(cut.budget)}-char budget${cut.headroom > 0 ? ` · free ${fmtInt(cut.headroom)} chars and every one loads` : ""}</span>
-      <button class="inlineclear" data-panel-to="budget">open the budget panel</button>
-    </td></tr>`;
-  };
   const supFor = (plugin: string, marketplace?: string): UiSuperseded | undefined =>
     (payload.superseded ?? []).find(
       (s) => s.plugin === plugin && (s.marketplace ?? "") === (marketplace ?? "")
     );
   let idx = 0;
   const looseRows = loose
-    .map((i) => cutDivider(i) + row(i, idx++, state, win, maxInjected, cols, sessions, cut?.byId.get(i.id)))
+    .map((i) => row(i, idx++, state, win, maxInjected, cols, cut?.byId.get(i.id)))
     .join("");
   const groupRows = groups
     .map(
       (g) =>
         groupRow(g, span, state.busy, supFor(g.plugin, g.marketplace)) +
-        g.items
-          .map((i) => cutDivider(i) + row(i, idx++, state, win, maxInjected, cols, sessions, cut?.byId.get(i.id)))
-          .join("")
+        g.items.map((i) => row(i, idx++, state, win, maxInjected, cols, cut?.byId.get(i.id))).join("")
     )
     .join("");
   // Two different empty states: filters that matched nothing (clear them), and
-  // a mode whose base is empty (the way out is the mode, not the filters).
+  // a nav entry whose base is empty (the way out is the sidebar, not the
+  // filters).
   const none =
     items.length === 0
       ? base.length === 0
-        ? `<tr class="nomatch"><td colspan="${span}">no skills in this inventory — <button class="inlineclear" data-mode="all">show everything (${fmtInt(payload.items.length)} items)</button></td></tr>`
+        ? `<tr class="nomatch"><td colspan="${span}">nothing in this view — <button class="inlineclear" data-nav="all">show the whole inventory (${fmtInt(payload.items.length)} items)</button></td></tr>`
         : `<tr class="nomatch"><td colspan="${span}">nothing matches this filter — this view has ${fmtInt(base.length)} items. <button class="inlineclear" data-clear>clear filters</button></td></tr>`
       : "";
   return `<table class="inv" aria-label="instruction inventory">
-    <thead>${tableHead(state, win, cols, base)}</thead>
+    <thead>${tableHead(state, cols)}</thead>
     <tbody>${looseRows}${groupRows}${none}</tbody>
   </table>`;
+}
+
+/**
+ * The flagged view's own header: the count, and the instruction that matters
+ * more than the count. Rendered above the table rather than as a tooltip on a
+ * readout, which is where it used to live and therefore went unread.
+ */
+function flaggedHead(payload: UiPayload): string {
+  const h = payload.header;
+  const body =
+    h.flagged === 0
+      ? `Nothing on this machine carries a security flag. That is a reading of what the checks found, not a guarantee that every file is safe.`
+      : `<b>${fmtInt(h.flagged)}</b> item${plural(h.flagged)} carr${h.flagged === 1 ? "ies" : "y"} at least one security flag${h.flaggedHigh > 0 ? `, <b class="dgr">${fmtInt(h.flaggedHigh)}</b> of them critical or high` : ""}. Open a row to read the evidence line, and verify it at the cited file before acting on it.`;
+  return `<p class="viewnote">${body}</p>`;
 }
 
 // --- drawer ----------------------------------------------------------------
@@ -2051,10 +1910,15 @@ export function renderDrawerBody(
               ? ` · interrupted ${fmtInt(f.interruptedAfter)}× (~${fmtInt(tokens(item.bodyChars * f.interruptedAfter))} tok${f.invocations > 0 ? `, ${Math.round((f.interruptedAfter / f.invocations) * 100)}% of fires` : ""})`
               : ""
           }`;
-  // Stated in full, every time, next to the number it qualifies — the window
-  // is a transcript-retention limit and the number means nothing without it.
+  // The window used to be stated in full, in every drawer, beside every count.
+  // It is stated once now, in the provenance statement, and what rides here is
+  // only what that statement cannot cover: this row was counted over a
+  // DIFFERENT window. A figure the statement describes carries nothing.
+  const pageWin = win ?? w;
   const fireCaveat =
-    f === undefined || !w.note ? "" : `<p class="caveat-note">${esc(w.note)}</p>`;
+    f === undefined || (w.span === pageWin.span && w.start === pageWin.start)
+      ? ""
+      : `<p class="caveat-note">${esc(w.note)}</p>`;
 
   // Ledger-backed extras: absent until the ledger join runs, and withheld from
   // a shadowed twin — the enabled copy's row carries the history.
@@ -2074,8 +1938,8 @@ export function renderDrawerBody(
   // started looking rather than how long the user took.
   const i2f = fx?.installToFirstFire;
   const provSection = prov
-    ? `<section>
-        <span class="engr">provenance</span>
+    ? `<div class="dsub">
+        <span class="engr sub">first seen</span>
         ${kv(
           prov.source === "mtime" ? "last edited" : "installed",
           `<b>${esc(fmtDay(prov.installedAt))}</b>${provAge !== undefined ? ` · ${fmtInt(provAge)}d ago` : ""}${prov.origin ? ` <span class="dim">· from ${esc(prov.origin)}</span>` : ""}`
@@ -2091,7 +1955,7 @@ export function renderDrawerBody(
               )
             : ""
         }
-      </section>`
+      </div>`
     : "";
 
   const lifetimeLine = fx?.lifetime
@@ -2254,6 +2118,42 @@ export function renderDrawerBody(
       ? `<p class="caveat-note">Cursor figures come from an undocumented, unversioned local conversation store, opened read-only — a Cursor update can change its shape at any time. A fire here is a rule ATTACHMENT recorded against a message, dated by its conversation's creation time, so every attachment in one conversation carries the same date. No record says whether the rule changed what the model did.</p>`
       : "";
 
+  // --- cost: what one fire costs --------------------------------------------
+  //
+  // `tok / fire` stopped being a table column: it is a DERIVED RATIO of two
+  // figures the row already carries, and a column restating a division is
+  // exactly the crowding this page was rebuilt to remove. It belongs where the
+  // cost question is the subject — here, and in the prune view.
+  const ratio = tokPerFire(item, totalSessions);
+  const perFireBlock = ((): string => {
+    if (item.twinPath && !item.enabled || f === undefined) return "";
+    if (f && ratio !== undefined) {
+      const s = Math.max(totalSessions, f.sessions);
+      return (
+        kv("per fire", `<b>${fmtInt(ratio)}</b> tok`) +
+        `<p class="kv-note">${esc(
+          `≈ (${fmtInt(tokens(item.injectedChars))} tok/session × ${fmtInt(s)} scanned ${noun}s + ${fmtInt(tokens(item.bodyChars))} tok body × ${fmtInt(f.invocations)} fires) ÷ ${fmtInt(f.invocations)} fires — window figures on both sides of the division.`
+        )}</p>`
+      );
+    }
+    // Nothing to divide by. What WAS paid is still a fact, and it is the one
+    // worth reading here — but only where a session count exists that belongs
+    // to this row's own store. A cost per fire built from another harness's
+    // sessions would be a ratio of two different measurements.
+    if (!comparableSessions(item)) {
+      return `<p class="kv-note">${esc(
+        `No cost per fire is stated: this payload carries no ${noun} total for ${item.source}, and dividing this row's cost by another store's ${noun}s would be a ratio of two different measurements.`
+      )}</p>`;
+    }
+    if (!item.enabled || totalSessions <= 0) return "";
+    return (
+      kv("paid so far", `<b>${fmtInt(tokens(item.injectedChars * totalSessions))}</b> tok`) +
+      `<p class="kv-note">${esc(
+        `${fmtInt(tokens(item.injectedChars))} tok × ${fmtInt(totalSessions)} scanned ${noun}s, with ${f === null ? "nothing recorded against it" : `no fires recorded in the ${w.span || "scanned"} window`} — so there is no per-fire cost to state.`
+      )}</p>`
+    );
+  })();
+
   // --- cost: per-agent run cost ---------------------------------------------
   // Near-exact where per-skill cost never can be, because an agent's work
   // lives in a transcript of its own — and stated only beside the method and
@@ -2263,7 +2163,10 @@ export function renderDrawerBody(
   const agentCostBlock = ac
     ? kv(
         "run cost",
-        `<b>${fmtInt(ac.totalTokens)}</b> tok total · median <b>${fmtInt(ac.medianTokens)}</b> tok`
+        `<b>${fmtInt(ac.totalTokens)}</b> tok total · median <b>${fmtInt(ac.medianTokens)}</b> tok${dev(
+          "approx",
+          "Tokens processed — input, output, cache creation and cache read — summed from each surviving run's own transcript. A token count, not a bill, and only over the runs whose transcripts are still on disk."
+        )}`
       ) +
       `<p class="kv-note">${esc(
         `Total tokens processed (input + output + cache creation + cache read), summed from each run's own subagents/agent-<id>.jsonl — a token count, not a bill. ` +
@@ -2412,7 +2315,7 @@ export function renderDrawerBody(
 
   const healthSection =
     freshBlock || refBlock || bundledBlock
-      ? `<section><span class="engr">content health</span>${freshBlock}${refBlock}${bundledBlock}</section>`
+      ? `<div class="dsub"><span class="engr sub">content health</span>${freshBlock}${refBlock}${bundledBlock}</div>`
       : "";
 
   // --- relationships ---------------------------------------------------------
@@ -2475,7 +2378,7 @@ export function renderDrawerBody(
 
   const relSection =
     confusableBlock || crossBlock || nearMissBlock || scopeBlock || collisionBlock
-      ? `<section><span class="engr">relationships</span>${confusableBlock}${crossBlock}${nearMissBlock}${scopeBlock}${collisionBlock}</section>`
+      ? `${confusableBlock}${crossBlock}${nearMissBlock}${scopeBlock}${collisionBlock}`
       : "";
 
   // --- plugin ----------------------------------------------------------------
@@ -2500,8 +2403,8 @@ export function renderDrawerBody(
         )}</p>`
       : "";
   const pluginSection = pl
-    ? `<section>
-        <span class="engr">plugin</span>
+    ? `<div class="dsub">
+        <span class="engr sub">plugin</span>
         ${kv(
           "plugin",
           `${esc(pl.name)} <span class="ver">${esc(pl.version)}</span>` +
@@ -2525,7 +2428,7 @@ export function renderDrawerBody(
             : ""
         }
         ${updateRelevanceBlock}
-      </section>`
+      </div>`
     : "";
 
   // --- since disabling -------------------------------------------------------
@@ -2533,18 +2436,20 @@ export function renderDrawerBody(
   // labeled as the kind it is.
   const ds = item.disabledSafety;
   const disabledSection = ds
-    ? `<section>
-        <span class="engr">since disabling</span>
+    ? `<div class="dsub">
+        <span class="engr sub">since disabling</span>
         ${
           ds.disabledAt
             ? factline(
-                `off since <b>${esc(fmtDay(ds.disabledAt))}</b> or earlier${ds.days !== undefined ? ` <span class="dim">· at least ${fmtInt(ds.days)}d</span>` : ""}`
-              ) +
-              (ds.disabledAtSource === "ctime"
-                ? `<p class="kv-note">${esc(
-                    "Nothing logs a disable. That date is the directory's ctime: moving a skill into skills-disabled is a rename, which leaves mtime alone but bumps ctime — and so does anything else that touches the directory's metadata. Treat it as an upper bound on the date, and the count below as counted only from it."
-                  )}</p>`
-                : "")
+                `off since <b>${esc(fmtDay(ds.disabledAt))}</b> or earlier${ds.days !== undefined ? ` <span class="dim">· at least ${fmtInt(ds.days)}d</span>` : ""}${
+                  ds.disabledAtSource === "ctime"
+                    ? dev(
+                        "bound",
+                        "Nothing logs a disable. That date is the directory's ctime: moving a skill into skills-disabled is a rename, which leaves mtime alone but bumps ctime — and so does anything else that touches the directory's metadata. The real date is that one or earlier, and the count below is counted only from it."
+                      )
+                    : ""
+                }`
+              )
             : ""
         }
         ${factline(
@@ -2561,7 +2466,7 @@ export function renderDrawerBody(
               ) + `<ul class="pathlist">${ds.referencedBy.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`
             : ""
         }
-      </section>`
+      </div>`
     : "";
 
   const evSection =
@@ -2582,9 +2487,15 @@ export function renderDrawerBody(
                 (ev.outcome === "error" ? `<span class="evmark">error</span>` : "") +
                 (ev.outcome === "rejected" ? `<span class="evmark">rejected</span>` : "") +
                 (ev.interrupted ? `<span class="evmark">interrupted</span>` : "") +
-                // An imported row names its method inline: no transcript ever
-                // sat behind it, and its open affordance says what it opens.
-                (ev.backfill ? `<span class="evmark">backfilled</span>` : "");
+                // Imported rather than observed — one of the six deviations, so
+                // it takes the page's one mark rather than a word of its own.
+                // Its open affordance still says what it actually opens.
+                (ev.backfill
+                  ? dev(
+                      "backfilled",
+                      "Imported from ~/.claude/history.jsonl rather than observed as it happened: no transcript ever sat behind this entry, and only the typed channel reaches back this far."
+                    )
+                  : "");
               const openTitle = purged
                 ? "transcript deleted (event retained)"
                 : ev.backfill
@@ -2602,19 +2513,27 @@ export function renderDrawerBody(
           const opens = evs.some((ev) => ev.backfill)
             ? "each row opens its source record at the line"
             : "each row opens its transcript at the line";
-          return `<section>
-            <span class="engr">invocations</span>
+          return `<div class="dsub">
+            <span class="engr sub">invocations</span>
             <p class="evcap dim">${cap} · newest first${fx.trackedSince ? ` · tracked since ${fmtDay(fx.trackedSince)}` : ""} · ${opens}</p>
             <div class="evlist">${rows}</div>
-          </section>`;
+          </div>`;
         })()
       : "";
 
-  const fm = item.frontmatter
-    ? `<section><span class="engr">frontmatter</span><table class="fmt">${Object.entries(item.frontmatter)
-        .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)
-        .join("")}</table></section>`
-    : "";
+  // What the file DECLARES, minus the fields already rendered above it: the
+  // name is the drawer's title and the description is the paragraph directly
+  // over this table, and reprinting both put the same sentence on screen twice
+  // in a row. Everything else is a fact only this block carries.
+  const fmRows = Object.entries(item.frontmatter ?? {}).filter(
+    ([k, v]) => !(k === "name" && v === item.name) && !(k === "description" && v === item.description)
+  );
+  const fm =
+    fmRows.length > 0
+      ? `<div class="dsub"><span class="engr sub">frontmatter</span><table class="fmt">${fmRows
+          .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)
+          .join("")}</table></div>`
+      : "";
 
   // Flags are the reason this section exists — they render in full, always.
   // Info-level notes are context, and a data-heavy skill can carry dozens of
@@ -2628,8 +2547,8 @@ export function renderDrawerBody(
       : infoFindings.map(findingBlock).join("");
   const findings =
     item.findings.length > 0
-      ? `<section><span class="engr">security findings</span>${flagFindings.map(findingBlock).join("")}${infoBlock}</section>`
-      : `<section><span class="engr">security findings</span><p class="dim">none for this item</p></section>`;
+      ? `${flagFindings.map(findingBlock).join("")}${infoBlock}`
+      : `<p class="dim">none for this item</p>`;
 
   const toggleBtn = item.togglable
     ? `<button class="btn" data-toggle="${item.id}"${state.busy ? " disabled" : ""}>${item.enabled ? "disable" : "enable"}</button>`
@@ -2644,11 +2563,8 @@ export function renderDrawerBody(
     ${error}
     <div class="dbody">
       <section>
-        <span class="engr">description</span>
+        <span class="engr">what it is</span>
         <p>${item.description ? esc(item.description) : `<span class="dim">none declared</span>`}</p>
-      </section>
-      <section>
-        <span class="engr">file</span>
         <button class="path" data-open="${item.id}" title="open in editor">${esc(item.path)}</button>
         ${
           item.twinPath
@@ -2659,9 +2575,10 @@ export function renderDrawerBody(
               }</p>`
             : ""
         }
+        ${fm}
       </section>
       <section>
-        <span class="engr">cost</span>
+        <span class="engr">what it costs</span>
         ${kv(
           "always in context",
           `<b>${fmtInt(tokens(item.injectedChars))}</b> tok ≈ ${fmtInt(item.injectedChars)} chars${item.enabled ? "" : " <span class='dim'>(if re-enabled)</span>"}`
@@ -2669,12 +2586,11 @@ export function renderDrawerBody(
         <p class="kv-note">${esc(INJECTION_NOTE[item.injection])}</p>
         ${kv("only when it runs", `<b>${fmtInt(tokens(item.bodyChars))}</b> tok ≈ ${fmtInt(item.bodyChars)} chars`)}
         <p class="kv-note">The rest of the file. Loaded only after this item is actually invoked, so it costs nothing on a session that never uses it.</p>
+        ${perFireBlock}
         ${agentCostBlock}
       </section>
-      ${provSection}
-      ${pluginSection}
       <section>
-        <span class="engr">fires</span>
+        <span class="engr">is it used</span>
         <p>${fireLine}</p>
         ${breadthNote}
         ${lifetimeLine}
@@ -2693,13 +2609,16 @@ export function renderDrawerBody(
         ${budgetNote ? `<p class="kv-note">${esc(budgetNote)}</p>` : ""}
         ${cursorNote}
         ${fireCaveat}
+        ${evSection}
       </section>
-      ${evSection}
-      ${healthSection}
-      ${relSection}
-      ${disabledSection}
-      ${fm}
-      ${findings}
+      ${
+        provSection || pluginSection || disabledSection
+          ? `<section><span class="engr">where it came from</span>${provSection}${pluginSection}${disabledSection}</section>`
+          : ""
+      }
+      ${healthSection ? `<section><span class="engr">is it healthy</span>${healthSection}</section>` : ""}
+      ${relSection ? `<section><span class="engr">what else answers to this name</span>${relSection}</section>` : ""}
+      <section><span class="engr">is it flagged</span>${findings}</section>
     </div>
     <div class="dact">
       <button class="btn" data-open="${item.id}">open in editor</button>
@@ -2720,36 +2639,27 @@ export function renderDrawer(
 
 // --- page ------------------------------------------------------------------
 
-/** Everything except the drawer, which main.ts keeps as a persistent node. */
+/**
+ * Everything except the drawer, which main.ts keeps as a persistent node.
+ *
+ * Navigation moved left because the crowding was structural: masthead, readout
+ * strip, portfolio strip, filter rail and panel bar were five stacked bands,
+ * each spending vertical space the table needed, and trimming their padding
+ * was whack-a-mole. A sidebar spends horizontal space the table does not want
+ * and removes the competition entirely.
+ */
 export function renderPage(payload: UiPayload, state: AppState): string {
-  // The backfill horizon rides the window line: the typed channel reaches
-  // further back than any surviving transcript, and the two claims must not
-  // be conflated — the extension names its method inline.
-  const hist = payload.history
-    ? `window ${fmtDay(payload.history.windowStart) || "?"} → ${fmtDay(payload.history.windowEnd) || "?"} · ${fmtInt(payload.history.transcriptFiles)} transcripts` +
-      (payload.history.backfilledSince
-        ? ` · typed-channel history extends to ${fmtDay(payload.history.backfilledSince)} (backfilled)`
-        : "")
-    : "history not scanned";
   return `
-  <div class="mast">
-    <div class="ident">
-      <span class="brand">context-audit</span>
-      <span class="mode">instruction inventory</span>
-    </div>
-    <div class="plate">
-      <span>rev ${esc(payload.version)}</span>
-      <span>scan ${esc(fmtStamp(payload.generatedAt))} · ${fmtInt(payload.tookMs)} ms</span>
-      <span>${esc(hist)}</span>
-      ${caveatChips(payload)}
-      <button class="btn rescan" data-rescan${state.busy ? " disabled" : ""}>${state.busy ? "scanning…" : "rescan"}</button>
-    </div>
-  </div>
-  <div class="gratbox">${graticule()}${state.animate && state.sweep ? `<div class="sweep"></div>` : ""}</div>
-  <div class="readouts">${headerReadouts(payload, state)}</div>
-  ${portfolioStrip(payload, state)}
-  ${filterRail(payload, state)}
-  <div id="results">${renderResults(payload, state)}</div>`;
+  <div class="shell">
+    ${sidebar(payload, state)}
+    <main class="content">
+      <div class="gratbox">${graticule()}${state.animate && state.sweep ? `<div class="sweep"></div>` : ""}</div>
+      ${statBar(payload, state)}
+      ${viewBar(payload, state)}
+      ${provenanceBlock(payload, state)}
+      <div id="results">${renderResults(payload, state)}</div>
+    </main>
+  </div>`;
 }
 
 /**
@@ -2778,71 +2688,40 @@ function logPanel(state: AppState): string {
   </div>`;
 }
 
-/**
- * Which panels this MACHINE has a question for. Only the budget panel is ever
- * withheld, and for the reason the header readout is: the skill listing is a
- * Claude Code mechanic, and a Codex- or Cursor-only setup is not subject to
- * it. Offering the door would put a Claude-specific budget in front of someone
- * who has no listing to be over or under — the same claim the header refuses
- * to make as a 0%. Every other panel's empty state is a real reading of this
- * machine ("one provider here", "no weekly history yet"), so it stays.
- */
-function panelApplies(key: string, payload: UiPayload): boolean {
-  return key !== "budget" || !!payload.header.listing || !!payload.budgetCut;
-}
-
-/** The selected panel, falling back to the table for anything unavailable. */
-export const panelKey = (payload: UiPayload, state: AppState): string =>
-  PANELS.some((p) => p.key === state.panel) && panelApplies(state.panel, payload)
-    ? state.panel
-    : "inventory";
-
-/**
- * The panel selector: one engraved, single-select bank above the results.
- *
- * It is NOT a filter and must not read as one — the rail's chips narrow which
- * items are in play, this switches which reading of them is drawn — so it sits
- * with the results rather than in the rail, and it carries the same amber the
- * sorted column header does to say which one is live.
- */
-function panelBank(payload: UiPayload, state: AppState): string {
-  const active = panelKey(payload, state);
-  const btns = PANELS.filter((p) => panelApplies(p.key, payload)).map(
-    (p) =>
-      `<button class="panel-btn${p.key === active ? " on" : ""}" data-panel-to="${esc(p.key)}" aria-pressed="${p.key === active}" data-tip="${esc(p.note)}">${esc(p.label)}</button>`
-  ).join("");
-  return `<div class="panelbank">
-    <span class="engr" data-tip="${esc(
-      "Which reading of the inventory to draw. A panel changes the drawing, never the items: your filters, your scope and your search all carry across, and the table is always one click away."
-    )}">panel</span>
-    <span class="panelset" role="group" aria-label="analysis panel">${btns}</span>
-  </div>`;
-}
-
 export function renderResults(payload: UiPayload, state: AppState): string {
   const shown = payload.items.length === 0 ? 0 : visibleItems(payload, state).length;
-  // The denominator is what this MODE could show; the readout names the layer
-  // so "54" in skills mode never reads as the whole machine.
-  const base = modeBase(payload, state).length;
+  // The denominator is what this NAV ENTRY could show, and the footer names it
+  // so "54" under `skills` never reads as the whole machine.
+  const base = navBase(payload, state).length;
   // An empty inventory has nothing to read four ways: the onboarding empty
-  // state is the whole answer, and a panel bank over it would be five doors
-  // onto the same blank room.
-  // The bank itself lives in the filter rail, not here: as its own full-width
-  // band it cost the table another 42px on top of the portfolio strip, and
-  // three stacked control bands left the inventory under a third of the page.
-  const key = payload.items.length === 0 ? "inventory" : panelKey(payload, state);
-  const body =
-    key === "inventory"
-      ? `<div class="tablebox">${table(payload, state)}</div>`
-      // Per-provider windows ride through so the overlap matrix captions each
+  // state is the whole answer.
+  const key = payload.items.length === 0 ? "all" : navKey(payload, state);
+  const analysis = ANALYSIS_KEYS.includes(key);
+  const noun = key === "all" || analysis || key === "flagged" ? "items" : KIND_LABEL[key];
+  // Nothing flagged is a real reading and the sentence is the whole answer —
+  // an empty table with column headings under it would be five labels over a
+  // blank room, which is the same failure as an axis drawn over no data.
+  const emptySecurity = key === "flagged" && payload.header.flagged === 0;
+  const body = analysis
+    ? // Per-provider windows ride through so the overlap matrix captions each
       // column with the retention horizon that column was measured over — one
       // shared date would claim a window two of the three providers never had.
-      : renderPanel(key, payload, state, payload.providerWindows);
+      renderPanel(key, payload, state, payload.providerWindows)
+    : emptySecurity
+      ? `${flaggedHead(payload)}<div class="tablebox"></div>`
+      : `${key === "flagged" ? flaggedHead(payload) : ""}<div class="tablebox">${table(payload, state)}</div>`;
+  // Dead weight is defined in the terms strip above the table; what the footer
+  // adds is which mark carries it, stated only where a marked row is on screen.
+  const win = usageWindow(payload);
+  const maxInjected = Math.max(...payload.items.map((i) => i.injectedChars), 0);
+  const anyDead =
+    !analysis && visibleItems(payload, state).some((i) => isDeadWeight(i, maxInjected, win));
   return `${body}
   ${logPanel(state)}
   <div class="foot">
     <span class="live"><i></i>127.0.0.1 — local only, nothing leaves the machine</span>
-    <span>${fmtInt(shown)} / ${fmtInt(base)} ${state.mode === "skills" ? "skills" : "items"} ${key === "inventory" ? "shown" : "in scope"}</span>
+    ${analysis ? "" : `<span>${fmtInt(shown)} / ${fmtInt(base)} ${esc(noun)} shown</span>`}
+    ${anyDead ? `<span class="footdw">amber cost = dead weight</span>` : ""}
     ${state.error && !state.selected ? `<span class="footerr" role="alert">${esc(state.error)}</span>` : ""}
     <span class="dim">${esc(payload.root)}</span>
   </div>`;

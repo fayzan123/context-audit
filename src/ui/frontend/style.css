@@ -43,6 +43,11 @@ body {
    real scrollport, and the footer readout should stay on screen. */
 #app { height: 100vh; display: flex; flex-direction: column; }
 #page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* Navigation left, content right. The five stacked bands this replaces each
+   spent VERTICAL space the table needed; a sidebar spends horizontal space the
+   table does not want, which is the whole point of the move. */
+.shell { display: grid; grid-template-columns: 208px minmax(0, 1fr); flex: 1; min-height: 0; }
+.content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 /* The results wrapper has to pass the flex sizing through to .tablebox, or the
    table grows to its full content height and the whole document scrolls —
    which also breaks the sticky column headers. */
@@ -88,39 +93,101 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   outline-offset: -1px;
 }
 
-/* --- masthead ----------------------------------------------------------- */
+/* --- sidebar -------------------------------------------------------------
+   An instrument's function selector, not a nav menu. This is the highest-risk
+   element on the page — a left sidebar is the most common shape of an
+   AI-generated dashboard — so it is built from the page's existing grammar and
+   nothing else: engraved section labels, hairline separators, tabular counts,
+   the one amber for the lit entry, a caret in the gutter. No icons, no pills,
+   no rounded cards, no nested panels, no accent bars, no fills. */
 
-.mast {
+.side {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 13px 28px 8px;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 13px 0 12px;
+  border-right: 1px solid var(--rule-strong);
 }
+.sidehead { padding: 0 16px 13px; }
 .brand {
+  display: block;
   font-family: var(--font-engr);
-  font-size: 21px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.17em;
   text-transform: uppercase;
 }
-.mode {
+.sidesub {
   display: block;
-  margin-top: 2px;
-  font-size: 10px;
-  letter-spacing: 0.22em;
+  margin-top: 3px;
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-dim);
 }
-.plate {
+.navgroup { padding: 12px 0 3px; border-top: 1px solid var(--rule); }
+.navgroup > .engr { padding: 0 16px 7px; }
+/* Gutter, name, count — a schedule of readings, ruled the way the table is. */
+.nav {
   display: flex;
   align-items: baseline;
-  gap: 18px;
+  width: 100%;
+  text-align: left;
+  padding: 3px 16px 2px 4px;
+  font-family: var(--font-engr);
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+.nav > s {
+  flex: none;
+  width: 12px;
+  text-decoration: none;
+  font-size: 9px;
+  color: var(--signal);
+}
+.nav > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav > b {
+  flex: none;
+  margin-left: 10px;
+  font-family: var(--font-num);
+  font-weight: 400;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+.nav:hover { color: var(--ink); }
+.nav.on { color: var(--signal); }
+.nav.on > b { color: var(--signal-text); }
+/* The only marks the sidebar carries, in the tones those two facts already
+   have elsewhere: the listing readout's over-budget --danger, and the findings
+   severity tone. No new colour rule, and no other entry is ever marked. */
+.navmark { flex: none; margin-left: 8px; font-style: normal; font-size: 9px; }
+.navmark.dgr { color: var(--danger); }
+.navmark.sig { color: var(--signal); }
+
+.sidefoot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: auto;
+  padding: 13px 16px 0;
+  border-top: 1px solid var(--rule);
+}
+/* The two page-level controls, together: rescan changes the data, stats
+   changes only whether the headline figures are drawn. Neither belongs in a
+   band above the table. */
+.sideacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.provlink {
   font-family: var(--font-num);
   font-size: 10.5px;
   color: var(--ink-dim);
-  text-align: right;
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 0 0 1px;
 }
+.provlink:hover { color: var(--signal); border-bottom-color: var(--signal-dim); }
+.sidestamp { font-family: var(--font-num); font-size: 10px; line-height: 1.5; color: var(--ink-faint); }
 
 .btn {
   font-family: var(--font-engr);
@@ -137,11 +204,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 }
 .btn:hover { border-color: var(--signal); color: var(--signal); }
 .btn:disabled { color: var(--ink-faint); border-color: var(--rule); cursor: default; }
-.btn.rescan { margin-left: 6px; }
-
-/* In the plate the caveats sit inline with the scan facts they qualify — the
-   rail's right-push would shove them away from the stamp they belong to. */
-.plate .caveat { margin-left: 0; }
+.btn.rescan { margin-top: 3px; }
 
 /* --- graticule + sweep --------------------------------------------------- */
 
@@ -149,7 +212,7 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
 .grat {
   display: block;
   width: 100%;
-  height: 24px;
+  height: 14px;
   color: var(--ink-dim);
   font-family: var(--font-num);
 }
@@ -174,48 +237,158 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   to   { transform: translateX(100vw); opacity: 0; }
 }
 
-/* --- readout strip -------------------------------------------------------- */
+/* --- stat bar --------------------------------------------------------------
+   One shallow row, replacing a 130px band of five hero readouts. Compartments
+   split by hairlines, figure then label, each one a link to the view that
+   explains it — which is what let the explanations go. */
 
-.readouts {
+.statbar {
   display: flex;
-  align-items: stretch;
-  padding: 11px 28px 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  padding: 7px 28px 6px;
   border-bottom: 1px solid var(--rule);
 }
-.readout {
+.stat {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding-right: 34px;
-  margin-right: 34px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 9px;
+  text-align: left;
+  padding: 1px 20px 1px 0;
+  margin-right: 20px;
   border-right: 1px solid var(--rule);
 }
-/* Asymmetry is deliberate: the last block floats free of the ruled grid. */
-.readout:last-child { border-right: none; }
-.readout .num {
+/* Asymmetry is deliberate: the last compartment floats free of the ruled grid. */
+.statbar .stat:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.statfig {
+  flex: none;
   font-family: var(--font-num);
-  font-size: 33px;
+  font-size: 20px;
   font-weight: 300;
-  line-height: 1.05;
+  line-height: 1.15;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
-.readout .num i {
-  font-style: normal;
-  font-size: 12px;
-  font-weight: 400;
-  margin-left: 7px;
-  color: var(--ink-dim);
-  letter-spacing: 0.08em;
+.statfig s { text-decoration: none; margin-left: 7px; font-size: 12px; }
+.statlab { font-size: 11px; color: var(--ink-dim); white-space: nowrap; }
+.stat:hover .statfig { color: var(--signal); }
+.stat:hover .statlab { color: var(--ink); }
+.stat.dgr .statfig { color: var(--danger); }
+.stat.dgr:hover .statfig { color: var(--danger); }
+
+/* --- view controls ---------------------------------------------------------
+   One compact row: the activity lens, the provider filter where more than one
+   provider is on the machine, search, and the stat-bar switch. Kind and scope
+   are not here — they are the sidebar. */
+
+.viewbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  padding: 5px 28px 4px;
+  border-bottom: 1px solid var(--rule);
 }
-.readout .sub {
+.vgroup { display: flex; }
+.lens {
   font-family: var(--font-num);
-  font-size: 10.5px;
-  color: var(--ink-faint);
-  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  padding: 3px 10px 2px;
+  white-space: nowrap;
 }
-.readout.signal .num { color: var(--signal); }
-.readout.danger .num { color: var(--danger); }
+.lens + .lens { border-left: none; }
+.lens:hover { color: var(--ink); }
+.lens.on {
+  color: var(--signal);
+  border-color: var(--signal-dim);
+  background: color-mix(in oklab, var(--signal) 8%, transparent);
+}
+/* Pressed state by tone, not by fill: the stat bar being drawn is the default,
+   so the lit reading is the ordinary one and "off" recedes. */
+.btn.vstat { color: var(--ink-faint); border-color: var(--rule); }
+.btn.vstat.on { color: var(--ink-dim); border-color: var(--rule-strong); }
+.btn.vstat:hover { color: var(--signal); border-color: var(--signal); }
+
+/* --- the provenance statement ----------------------------------------------
+   One statement, in one place, covering the whole page: what was read, the
+   window it covers, when tracking began, and what a fire is. Every figure that
+   matches it carries nothing; every figure that does not carries the one mark.
+   The terms beside it are defined HERE, in the layout — a definition that only
+   exists on hover does not exist for a first-time reader. */
+
+.prov { padding: 8px 28px; border-bottom: 1px solid var(--rule); }
+.prov .lede { font-size: 12.5px; line-height: 1.35; color: var(--ink); margin-bottom: 2px; }
+.provline { font-size: 11px; line-height: 1.45; color: var(--ink-dim); }
+.provline b {
+  font-family: var(--font-num);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.provline em { font-style: normal; color: var(--ink); }
+.devlegend { color: var(--ink-faint); }
+
+.terms {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+.term { max-width: 100%; padding-right: 15px; margin-right: 15px; border-right: 1px solid var(--rule); }
+.terms .term:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.term b {
+  font-family: var(--font-engr);
+  font-weight: 600;
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 8px;
+}
+
+/* The one deviation mark. Same glyph everywhere, its own sentence on hover,
+   and the legend above naming the kinds present on this page. */
+.dev {
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 0;
+  vertical-align: super;
+  margin-left: 3px;
+  color: var(--ink-dim);
+  cursor: help;
+}
+.dev:hover { color: var(--signal); }
+.devlegend .dev { vertical-align: baseline; margin: 0 3px 0 0; }
+
+/* Caveats live inside the statement they qualify — an inline disclosure, open
+   from the sidebar foot, never a modal and never a wall of amber prose. */
+.cav { list-style: none; margin-top: 6px; }
+.cav li {
+  max-width: 110ch;
+  padding: 1px 0 1px 10px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  border-left: 1px solid var(--signal-dim);
+}
+
+/* A view that answers with a sentence before it answers with rows. */
+.viewnote {
+  padding: 11px 28px 2px;
+  max-width: 104ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.viewnote b { font-family: var(--font-num); font-weight: 400; font-variant-numeric: tabular-nums; color: var(--ink); }
 
 @keyframes settle {
   from { opacity: 0; transform: translateY(7px); }
@@ -229,65 +402,6 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
    is an enhancement; the numbers do not depend on it. main.ts also strips the
    class on a timer as a second guarantee. */
 .settle { animation: settle 480ms var(--ease) backwards; }
-
-/* --- filter rail ---------------------------------------------------------- */
-
-.rail {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  padding: 7px 28px;
-  border-bottom: 1px solid var(--rule);
-}
-/* Each filter group is a labeled bank, so `agent` reads as a KIND and
-   `flagged` reads as a VIEW instead of both being loose chips in one run. */
-.bank {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 14px;
-  margin-left: 6px;
-  border-left: 1px solid var(--rule-strong);
-}
-.bank > .engr { flex: none; }
-.bank > .engr[title] { cursor: help; }
-.chipset { display: flex; flex-wrap: wrap; gap: 6px; }
-.vr { width: 1px; height: 16px; background: var(--rule-strong); }
-
-/* The master scope switch: which layer of the inventory the page is looking
-   at. Engraved segments, shared borders — an instrument's range selector, not
-   a filter chip. The lit segment gets a signal tint so the current scope is
-   readable from across the room. */
-.modes { display: flex; }
-.mode-btn {
-  display: inline-flex;
-  align-items: stretch;
-  font-family: var(--font-engr);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-  border: 1px solid var(--rule-strong);
-}
-.mode-btn + .mode-btn { border-left: none; }
-.mode-btn > span { padding: 4px 9px 3px 11px; }
-.mode-btn b {
-  font-family: var(--font-num);
-  font-weight: 400;
-  letter-spacing: 0;
-  padding: 4px 8px 3px;
-  border-left: 1px solid var(--rule);
-  color: var(--ink-faint);
-  font-variant-numeric: tabular-nums;
-}
-.mode-btn:hover { color: var(--ink); }
-.mode-btn.on {
-  color: var(--signal);
-  background: color-mix(in oklab, var(--signal) 8%, transparent);
-}
-.mode-btn.on b { color: var(--signal-text); }
 
 .find { display: flex; align-items: center; gap: 8px; }
 .find input {
@@ -317,10 +431,9 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   color: var(--signal);
   border: 1px solid var(--signal-dim);
   padding: 3px 10px 2px;
-  margin-left: 12px;
 }
 .clear:hover { border-color: var(--signal); }
-/* Present in the DOM at all times so typing never has to rebuild the rail. */
+/* Present in the DOM at all times so typing never has to rebuild the row. */
 .clear.gone { visibility: hidden; }
 .inlineclear {
   font-family: var(--font-num);
@@ -330,23 +443,15 @@ button:focus-visible, tr:focus-visible, th:focus-visible {
   padding: 0;
 }
 .chip.empty { color: var(--ink-faint); }
-/* The engraved "?" marking a readout that carries an explanation on hover. */
-.why {
-  font-weight: 400;
-  margin-left: 5px;
-  padding: 0 3px;
-  border: 1px solid var(--rule-strong);
-  color: var(--ink-faint);
-  cursor: help;
-}
 
 /* --- instant tooltips ------------------------------------------------------
-   Native title tooltips take a second to appear, vanish on any movement and
-   ignore the page's typography — which is how every carefully written
-   explanation on this page went unread. Chrome elements (readouts, column
-   headers, bank labels, chips) carry data-tip instead: instant-ish (260ms),
-   styled, wrapping. Row cells keep native titles on purpose — a tooltip that
-   pops on every row while scanning the table would be in the way. */
+   Tooltips are no longer the page's DEFAULT explanation mechanism — the
+   provenance statement, the terms strip and the deviation mark carry that job
+   in the layout, where a first-time reader can find them. What is left here is
+   supplementary: a handful of panel controls whose method is worth reading but
+   never worth a paragraph of rendered text. Row cells keep native titles on
+   purpose — a styled tooltip popping on every row while scanning the table
+   would be in the way. */
 [data-tip] { position: relative; cursor: help; }
 button[data-tip], th[data-tip] { cursor: pointer; }
 [data-tip]::after {
@@ -404,20 +509,6 @@ button[data-tip], th[data-tip] { cursor: pointer; }
 .chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .chip.on { color: var(--signal); border-color: var(--signal-dim); }
 .chip.on b { color: var(--signal-text); border-left-color: var(--signal-dim); }
-.caveat {
-  margin-left: auto;
-  font-family: var(--font-num);
-  font-size: 10.5px;
-  color: var(--signal);
-}
-/* The flagged-outside-this-view escape hatch: a caveat that is also a way in. */
-.caveat-act {
-  margin-left: auto;
-  border: 1px solid var(--signal-dim);
-  padding: 3px 10px 2px;
-}
-.caveat-act:hover { border-color: var(--signal); }
-.caveat + .caveat-act, .caveat-act + .caveat { margin-left: 0; }
 
 /* --- inventory table ------------------------------------------------------ */
 
@@ -483,8 +574,9 @@ tr.off .sw { opacity: 0.75; }
 
 /* Kind identity by SHAPE, since color belongs to state and severity: filled
    marker = skill (the togglable, primary object), hollow = agent, text glyphs
-   for the rest. Skills read a step brighter — they are what you act on. */
-.c-kind { color: var(--ink-dim); }
+   for the rest. Skills read a step brighter — they are what you act on.
+   The kind COLUMN is gone — kind is the sidebar now — so the glyph rides the
+   name cell, which is where identity belongs anyway. */
 .kg {
   display: inline-block;
   width: 15px;
@@ -493,7 +585,6 @@ tr.off .sw { opacity: 0.75; }
   color: var(--ink-faint);
 }
 .kg-skill { color: var(--ink); }
-td.c-kind { cursor: help; }
 
 /* The cost meter: fixed track, fill scaled to the most expensive item in the
    inventory. Right-anchored against the aligned figures so the bars compare
@@ -525,9 +616,12 @@ td.c-cost.dw .meter i { background: var(--signal-dim); }
 .na, .zero, td.zero { color: var(--ink-faint); }
 .none { color: var(--ink-faint); }
 
-/* Lifetime · window fires cell: the lifetime figure leads, the window share
-   sits dim beside it — two windows, adjacent, never conflated. */
-.winpart { color: var(--ink-faint); font-size: 11px; }
+/* The activity cell: one cell, one phrasing, replacing four columns. The
+   leading figure carries the ink; the date beside it recedes. */
+.c-act-col { color: var(--ink-dim); }
+.afig { font-variant-numeric: tabular-nums; color: var(--ink); }
+td.c-act-col.zero, td.c-act-col.na { color: var(--ink-faint); }
+td.c-act-col.zero .dim, td.c-act-col.na .dim { color: inherit; }
 /* Trend verdict beside the count. Tonal on purpose: amber stays reserved for
    the dead-weight cost cells; the glyph's title carries the numbers. */
 .trend { font-style: normal; margin-left: 6px; color: var(--ink-faint); cursor: help; }
@@ -676,6 +770,9 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
   font-size: 10.5px;
   color: var(--ink-dim);
 }
+/* Dead weight is DEFINED in the terms strip above the table; what the footer
+   adds is which mark carries it, and only while a marked row is on screen. */
+.footdw { color: var(--signal-text); }
 .foot .live i {
   display: inline-block;
   width: 6px;
@@ -714,6 +811,7 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
   visibility: hidden;
   transition: transform 260ms var(--ease), visibility 0s linear 260ms;
 }
+.drawer:focus { outline: none; }
 .drawer.open {
   transform: translateX(0);
   visibility: visible;
@@ -742,11 +840,19 @@ tr.nomatch td { color: var(--ink-faint); padding: 22px 28px; cursor: default; }
 }
 .warn-t { color: var(--signal); }
 
+/* Organised by QUESTION, not by data source: what it is, what it costs, is it
+   used, where it came from, is it healthy, what else answers to this name, is
+   it flagged. The old sections mirrored the payload's shape, which is how a
+   reader ended up with twelve headings and no idea which one held the answer.
+   Sub-blocks inside a question are ruled a step lighter than the question. */
 .dbody { flex: 1; overflow-y: auto; padding: 4px 24px 18px; }
 .dbody section { padding: 14px 0 4px; border-bottom: 1px solid var(--rule); }
 .dbody section:last-child { border-bottom: none; }
-.dbody .engr { margin-bottom: 7px; }
+.dbody > section > .engr { margin-bottom: 7px; }
 .dbody p { font-size: 13px; margin-bottom: 8px; }
+.dsub { padding-top: 11px; }
+.dsub:first-of-type { padding-top: 4px; }
+.engr.sub { font-size: 9px; letter-spacing: 0.13em; color: var(--ink-faint); margin-bottom: 6px; }
 
 .path {
   display: block;
@@ -950,151 +1056,38 @@ pre.ev {
 .sig { color: var(--signal); }
 .dgr { color: var(--danger); }
 
-/* --- portfolio rollup ------------------------------------------------------
-   The header's companion, not a second row of hero numbers: a low annunciator
-   strip of payload-wide facts, each compartment split from the next by a
-   hairline. Figures lead, the sentence that makes them readable follows, and
-   the denominator rides underneath in the engraved footnote voice. */
+/* --- portfolio facts, rehoused --------------------------------------------
+   The portfolio strip is dissolved. Its headline fact joined the stat bar;
+   the rest moved behind the views they belong to — concentration and window
+   spend under the prune plot, the since-last-scan delta under the growth
+   chart. This is what those lines look like there: figures in the numeric
+   face under an engraved label, ruled off from the panel above them. */
 
-/* One row, always. Wrapping produced a second band of stats whose border-left
-   hung off a neighbour that was no longer beside it, and cost ~100px of the
-   table's height; a narrow viewport scrolls this strip instead of stacking it. */
-.rollup {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: baseline;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding: 7px 28px 8px;
-  border-bottom: 1px solid var(--rule);
-}
-.rollup::-webkit-scrollbar { display: none; }
-/* Stretched, so its hairline runs the height of the strip however the stats
-   below it wrap. */
-.rollup-lab {
-  flex: none;
-  align-self: stretch;
-  padding-right: 16px;
-  margin-right: 16px;
-  border-right: 1px solid var(--rule-strong);
-}
-/* Compartments, not cards: a hairline between neighbours and nothing around
-   the run. The last one floats free of the rule, like the readout strip. */
-.rstat {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  text-align: left;
-  padding: 2px 18px 2px 0;
-  margin-right: 18px;
-  border-right: 1px solid var(--rule);
-}
-.rollup .rstat:last-child { border-right: none; margin-right: 0; padding-right: 0; }
-.rfig {
-  flex: none;
+.wm { margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.wm > .engr { margin-bottom: 7px; }
+.wm-line {
+  margin-bottom: 4px;
   font-family: var(--font-num);
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  white-space: nowrap;
-}
-.rfig i {
-  font-style: normal;
-  font-size: 10px;
-  color: var(--ink-faint);
-  margin-left: 6px;
-  letter-spacing: 0.06em;
-}
-/* Inline and unwrapped: the label sits beside its figure on one line, and the
-   method that used to occupy two more lines is on the stat's tooltip. */
-.rtxt {
-  display: inline;
   font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--ink-dim);
-  white-space: nowrap;
-}
-/* The denominator, always attached to the figure it qualifies. */
-em.rnote {
-  display: block;
-  font-style: normal;
-  font-size: 10.5px;
-  line-height: 1.45;
-  color: var(--ink-faint);
-}
-/* Severity follows the header's flagged readout exactly — the figure carries
-   the tone, the prose around it stays tonal so the strip never turns amber. */
-.rstat.sig, .rstat.dgr { color: var(--ink-dim); }
-.rstat.sig .rfig { color: var(--signal); }
-.rstat.dgr .rfig { color: var(--danger); }
-
-/* A stat that opens its own proof view. Amber on hover is the same affordance
-   grammar the row actions and the rescan button already use. */
-.rlinked:hover .rfig, .rlab:hover, .rlink:hover { color: var(--signal); }
-.rlinked:hover .rtxt { color: var(--ink); }
-.rspend { flex-direction: column; align-items: flex-start; gap: 3px; }
-.rlab {
-  display: block;
-  font-family: var(--font-engr);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  border-bottom: 1px solid var(--rule-strong);
-  padding: 0 0 1px;
-  margin-bottom: 2px;
-}
-.rlinks { display: flex; flex-wrap: wrap; gap: 3px 14px; }
-.rlink {
-  font-family: var(--font-num);
-  font-size: 11px;
-  color: var(--ink-dim);
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
-  padding: 0;
-  white-space: nowrap;
+  color: var(--ink-dim);
 }
-.rlink b { font-weight: 400; color: var(--ink); margin-left: 5px; }
-.rlink b i { font-style: normal; font-size: 9.5px; color: var(--ink-faint); margin-left: 3px; }
-/* Right-anchored: the last compartment sits nearest the viewport edge, and a
-   tooltip that overflows right is what grows a horizontal scrollbar. */
-.rollup .rstat:last-child[data-tip]::after, .rdelta[data-tip]::after { left: auto; right: 0; }
-
-/* --- panel selector --------------------------------------------------------
-   A range selector, not a filter: the rail's chips decide which items are in
-   play, this decides which reading of them is drawn. Segments share borders
-   like .modes does, and the live one carries the amber the sorted column
-   header uses. */
-
-/* A bank inside the filter rail, sharing its row — not a band of its own.
-   Same grammar as the provider/kind/lens banks beside it: an engraved label,
-   then the set. */
-.panelbank {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-.panelbank > .engr { flex: none; }
-.panelset { display: flex; flex-wrap: wrap; }
-/* Rail metrics, not band metrics. As its own full-width band this could afford
-   engraved caps and 13px of side padding; inside the rail that made the bank
-   444px wide and pushed the whole row onto a second line, which cost the table
-   more height than the band it replaced. It now matches the chips beside it. */
-.panel-btn {
+.wm-line b { font-weight: 400; color: var(--ink); }
+.wm-line[title] { cursor: help; }
+.wm-link {
   font-family: var(--font-num);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-dim);
-  border: 1px solid var(--rule);
-  padding: 3px 9px 2px;
+  padding: 0;
+  margin-right: 13px;
   white-space: nowrap;
 }
-.panel-btn + .panel-btn { border-left: none; }
-.panel-btn:hover { color: var(--ink); }
-.panel-btn.on {
-  color: var(--signal);
-  background: color-mix(in oklab, var(--signal) 8%, transparent);
-}
+.wm-link b { font-weight: 400; color: var(--ink); margin-left: 5px; }
+.wm-link b i { font-style: normal; font-size: 9.5px; color: var(--ink-faint); margin-left: 3px; }
+.wm-link:hover, .wm-link:hover b { color: var(--signal); }
+.gw-delta { max-width: 78ch; }
 
 /* --- panel frame -----------------------------------------------------------
    Panels take the scrollport the table would have taken, so the footer stays
@@ -1517,31 +1510,14 @@ table.ovl {
    centred swatch sinks to the middle of them, away from the key it marks. */
 .gw-swatch { flex: none; align-self: flex-start; margin-top: 1px; color: var(--ink-dim); }
 
-/* --- table: the listing cut ------------------------------------------------
-   Same grammar as the plugin group row — an engraved label, air above it and
-   one strong hairline under it. It marks where the modelled cut falls; every
-   dropped row also carries its own tag, so the fact never depends on the line
-   landing where you expect. */
-
-tr.cutrow td {
-  padding-top: 16px;
-  padding-bottom: 7px;
-  font-family: var(--font-num);
-  font-size: 11px;
-  color: var(--ink-dim);
-  border-bottom: 1px solid var(--rule-strong);
-  white-space: normal;
-  background: none;
-  cursor: default;
-}
-tr.cutrow .engr { display: inline; margin-right: 10px; }
-.cutfig { margin-right: 12px; font-variant-numeric: tabular-nums; color: var(--ink); }
-.cutfig .dgr { color: var(--danger); }
-tr.cutrow .inlineclear { margin-left: 12px; font-size: 11px; }
 /* A dropped description is not a disabled row: it still costs, it just stops
-   auto-triggering. Recessed one step, tonal, never amber. */
+   auto-triggering. Recessed one step, tonal, never amber. The two-line cut
+   divider that used to sit in the table is gone: it restated the listing
+   view's own headline in the middle of the inventory, and its placement was
+   only ever true for one sort order. Every dropped row still carries its tag. */
 tr.dropped .c-name { color: var(--ink-dim); }
 .offtag[title] { cursor: help; }
+.offtag .dev { vertical-align: baseline; font-size: 10px; margin-left: 4px; }
 /* Dashed, because it is a MODELLED position in a drop order rather than a
    state the harness reported. */
 .offtag.cut { border-style: dashed; }
@@ -1569,19 +1545,21 @@ tr.dropped .c-name { color: var(--ink-dim); }
 }
 .c-act { white-space: nowrap; }
 
-/* The live what-if: a second line under the measured total, never a
+/* The live what-if: a second line under the measured cost figure, never a
    replacement for it. Amber because a toggle is a state change, and the
    hairline ties the projection to the figure it was derived from. */
-.readout .whatif {
-  color: var(--signal-text);
+.stat .whatif {
+  flex: 0 0 100%;
+  font-family: var(--font-num);
+  font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+  color: var(--signal-text);
 }
-.readout.projecting .whatif {
+.stat.projecting .whatif {
   border-top: 1px solid var(--signal-dim);
   margin-top: 3px;
   padding-top: 3px;
 }
-.readout .sub2 { margin-top: 1px; }
 
 /* --- drawer: measured facts ------------------------------------------------
    A fact line is denser than a kv row on purpose: the ledger adds a dozen
@@ -1661,11 +1639,23 @@ tr.dropped .c-name { color: var(--ink-dim); }
   .pq-grid .pq-quad:nth-child(n + 3)[data-tip]::after { top: calc(100% + 7px); bottom: auto; }
 }
 
-@media (max-width: 900px) {
-  .readouts { flex-wrap: wrap; gap: 16px 0; }
-  .mast { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .plate { text-align: left; flex-wrap: wrap; }
-  .rollup { gap: 10px 0; }
-  .rstat { border-right: none; margin-right: 0; padding-right: 0; }
+/* Narrow. The sidebar does NOT collapse — a collapsing sidebar is a second
+   navigation state to design, test and explain, and the page has room for a
+   narrower one instead. Everything else reflows: the stat compartments lose
+   their rules rather than scrolling behind an invisible scroller, which is the
+   trade the old portfolio strip got wrong. */
+@media (max-width: 1180px) {
+  .shell { grid-template-columns: 164px minmax(0, 1fr); }
+  .side { padding-top: 11px; }
+  .sidehead, .navgroup > .engr, .nav, .sidefoot { padding-left: 12px; padding-right: 12px; }
+  .nav { padding-left: 2px; }
+  .brand { font-size: 13px; letter-spacing: 0.13em; }
+  .statbar, .viewbar, .prov, .viewnote { padding-left: 16px; padding-right: 16px; }
+  .inv th:first-child, .inv td:first-child { padding-left: 16px; }
+  .inv th:last-child, .inv td:last-child { padding-right: 16px; }
+  .foot, .loghead, .loglines { padding-left: 16px; padding-right: 16px; }
+  .statfig { font-size: 18px; }
+  .stat { padding-right: 14px; margin-right: 14px; }
+  .term { padding-right: 12px; margin-right: 12px; }
   .panelbox { padding: 14px 16px 24px; }
 }

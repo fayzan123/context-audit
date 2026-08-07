@@ -2,14 +2,14 @@
 // from the server payload. State lives here; rendering stays pure.
 import type { UiItem, UiPayload } from "../../types.js";
 import {
-  chipCounts,
+  KIND_LABEL,
   defaultState,
   fmtInt,
-  focusSet,
   initialState,
   isFiltered,
+  liveCounts,
   pluginUpdateSummary,
-  pruneFiltersForMode,
+  pruneFiltersForNav,
   renderDrawerBody,
   renderPage,
   renderResults,
@@ -112,12 +112,15 @@ function focusKey(): FocusMark | undefined {
     ["data-toggle", ""],
     ["data-open", ""],
     ["data-open-event", ""],
-    ["data-panel-to", ""],
-    ["data-focus", ""],
+    ["data-nav", ""],
+    ["data-lens", ""],
+    ["data-provider", ""],
+    ["data-stat", ""],
     ["data-quadrant", "button"],
     // Every host of data-id is a different element type, so the selector takes
-    // the focused node's own tag: a pinned row and a portfolio proof link can
-    // carry the same id, and only one of them was holding the caret.
+    // the focused node's own tag: a table row, a matrix row, a budget segment,
+    // a scatter mark and a top-spend link can carry the same id, and only one
+    // of them was holding the caret.
     ["data-id", "self"],
   ] as [string, string][]) {
     const owner: HTMLElement | null = el.closest<HTMLElement>(`[${attr}]`);
@@ -128,13 +131,8 @@ function focusKey(): FocusMark | undefined {
   }
   if (el.hasAttribute("data-rescan")) return { root, sel: "[data-rescan]" };
   if (el.hasAttribute("data-close")) return { root, sel: "[data-close]" };
-  if (el.dataset.chip) {
-    return {
-      root,
-      sel: `[data-chip="${CSS.escape(el.dataset.chip)}"][data-value="${CSS.escape(el.dataset.value ?? "")}"]`,
-    };
-  }
-  if (el.dataset.mode) return { root, sel: `[data-mode="${CSS.escape(el.dataset.mode)}"]` };
+  if (el.hasAttribute("data-statbar")) return { root, sel: "[data-statbar]" };
+  if (el.hasAttribute("data-prov")) return { root, sel: "[data-prov]" };
   if (el.dataset.pluginUpdate) {
     return {
       root,
@@ -249,7 +247,10 @@ function connectionLost(): void {
 let whatIfPinned = false;
 
 function showWhatIf(item: UiItem | undefined, chars = 0): void {
-  const box = page.querySelector<HTMLElement>('[data-readout="injected"]');
+  // Absent entirely while the stat bar is hidden — the projection is a second
+  // line under a measured figure, and with no figure drawn there is nothing to
+  // project from.
+  const box = page.querySelector<HTMLElement>('[data-readout="cost"]');
   if (!box) return;
   box.querySelector(".whatif")?.remove();
   box.classList.toggle("projecting", !!item);
@@ -566,13 +567,12 @@ function renderResultsOnly(): void {
   if (!results) return render();
   results.innerHTML = renderResults(payload, state);
   page.querySelector(".clear")?.classList.toggle("gone", !isFiltered(state));
-  // Chip counts are faceted by the query, so typing changes them. The rail is
-  // never rebuilt while typing (the caret lives in it) — patch each count
-  // node in place instead, so the numbers keep predicting what a click shows.
-  for (const { group, value, count } of chipCounts(payload, state)) {
-    const el = page.querySelector<HTMLElement>(
-      `[data-chip="${CSS.escape(group)}"][data-value="${CSS.escape(value)}"]`
-    );
+  // Sidebar and provider counts are faceted by the query, so typing changes
+  // them. Neither is rebuilt while typing (the caret lives in the view bar) —
+  // patch each count node in place instead, so every number keeps predicting
+  // what clicking it shows.
+  for (const { group, key, count } of liveCounts(payload, state)) {
+    const el = page.querySelector<HTMLElement>(`[data-${group}="${CSS.escape(key)}"]`);
     if (!el) continue;
     const b = el.querySelector("b");
     if (b) b.textContent = fmtInt(count);
@@ -583,7 +583,6 @@ function renderResultsOnly(): void {
 
 function clearFilters(): void {
   state.providers = [];
-  state.kinds = [];
   state.query = "";
   state.lens = "all";
   state.focus = undefined;
@@ -592,37 +591,46 @@ function clearFilters(): void {
 }
 
 /**
- * Pin an explicit id set — a quadrant, or a portfolio stat's proof view — and
- * return to the inventory, which is where a set of rows can actually be read.
+ * Pin the exact id set a prune quadrant plotted, and land on the inventory
+ * entry that can actually show them.
  *
- * `reset` separates the two callers. A portfolio stat printed a count over the
- * WHOLE machine and promised to show exactly that, so it clears the narrowing
- * that would deliver fewer rows than it named, and widens the scope when the
- * set reaches outside it. A quadrant was computed FROM the current filters, so
- * clearing them would show a set the plot never plotted.
+ * The lens, the search and the provider chips are left alone on purpose: the
+ * quadrant was computed FROM them, so clearing them would show a set the plot
+ * never plotted. The nav entry does have to widen — the quadrant plots every
+ * kind, so a pin landing under `skills` would silently drop the agents in it.
  */
-function pinFocus(f: { label: string; ids: string[] }, reset: boolean): void {
+function pinFocus(f: { label: string; ids: string[] }): void {
   if (!payload) return;
   state.focus = f;
-  state.panel = "inventory";
-  if (reset) {
-    state.query = "";
-    state.providers = [];
-    state.kinds = [];
-    state.lens = "all";
-    const ids = new Set(f.ids);
-    if (state.mode === "skills" && payload.items.some((i) => ids.has(i.id) && i.kind !== "skill")) {
-      state.mode = "all";
-      pruneFiltersForMode(payload, state);
-    }
-  }
+  state.nav = "all";
+  pruneFiltersForNav(payload, state);
   render();
   announce(`inventory pinned to ${f.ids.length} row${f.ids.length === 1 ? "" : "s"} — ${f.label}`);
 }
 
+/**
+ * Where a stat-bar figure leads: the view that EXPLAINS it. That is the whole
+ * reason the figures could shed their paragraphs — the derivation is one click
+ * away rather than attached to every number.
+ */
+function openStat(key: string): void {
+  if (!payload) return;
+  if (key === "never") {
+    state.nav = "all";
+    state.lens = "never-fired";
+    render();
+    return announce("inventory, never-fired only");
+  }
+  const to = key === "cost" ? "prune" : key === "listing" ? "budget" : "growth";
+  state.nav = to;
+  pruneFiltersForNav(payload, state);
+  render();
+  announce(`${PANELS.find((p) => p.key === to)?.label ?? to} view`);
+}
+
 app.addEventListener("click", (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>(
-    "[data-chip], [data-mode], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], [data-unfocus], [data-panel-to], [data-focus], [data-quadrant], #catch, [data-id]"
+    "[data-nav], [data-lens], [data-provider], [data-stat], [data-statbar], [data-prov], [data-plugin-update], [data-logtoggle], [data-sort], [data-toggle], [data-open], [data-open-event], [data-rescan], [data-close], [data-clear], [data-unfocus], [data-quadrant], #catch, [data-id]"
   );
   if (!el || !payload) return;
 
@@ -634,20 +642,22 @@ app.addEventListener("click", (e) => {
     return announce("pinned rows released — your other filters are unchanged");
   }
 
-  if (el.dataset.panelTo) {
-    const key = el.dataset.panelTo;
-    if (state.panel === key) return;
-    state.panel = key;
+  // The stat bar switch. It changes only whether the figures are drawn — no
+  // figure moves, and nothing is recomputed.
+  if (el.hasAttribute("data-statbar")) {
+    state.statBar = !state.statBar;
     render();
-    return announce(`${PANELS.find((p) => p.key === key)?.label ?? key} panel`);
+    return announce(state.statBar ? "headline figures shown" : "headline figures hidden");
   }
 
-  // A portfolio stat opening its own proof view.
-  if (el.dataset.focus) {
-    const f = focusSet(payload, el.dataset.focus);
-    if (!f) return announce("that stat has no rows to show in this payload");
-    return pinFocus(f, true);
+  if (el.hasAttribute("data-prov")) {
+    state.provOpen = !state.provOpen;
+    render();
+    page.querySelector<HTMLElement>(".prov")?.scrollIntoView({ block: "nearest" });
+    return announce(state.provOpen ? "caveats shown" : "caveats hidden");
   }
+
+  if (el.dataset.stat) return openStat(el.dataset.stat);
 
   // A quadrant of the prune plot: the ids it actually plotted, filtered into
   // the table. Resolved through the panel's own model so the set the click
@@ -657,7 +667,7 @@ app.addEventListener("click", (e) => {
     const ids = quadrantIds(payload, state, key);
     if (ids.length === 0) return announce("that quadrant is empty");
     const label = pruneModel(payload, state).quads[key as QuadrantKey]?.label ?? key;
-    return pinFocus({ label, ids }, false);
+    return pinFocus({ label, ids });
   }
 
   if (el.hasAttribute("data-logtoggle")) {
@@ -671,36 +681,38 @@ app.addEventListener("click", (e) => {
     return;
   }
 
-  if (el.dataset.mode) {
-    state.mode = el.dataset.mode as AppState["mode"];
-    // Filters whose bank disappears in the new mode must not survive as
-    // invisible narrowing with nothing on screen to turn off.
-    pruneFiltersForMode(payload, state);
-    if (el.dataset.lens) {
-      // The flagged-outside-this-view caveat announced a count no other
-      // filter reduced, and promised to show it — so the jump resets the
-      // other dimensions rather than landing on a query-narrowed subset of
-      // the flags it named.
-      state.lens = el.dataset.lens as AppState["lens"];
+  if (el.dataset.nav) {
+    const to = el.dataset.nav;
+    // Security is never reduced by a presentation default: the flagged entry
+    // printed a count over the whole inventory and promised to show it, so it
+    // clears the narrowing that would deliver fewer rows than it named. Every
+    // other entry leaves the lens and the search exactly where they were.
+    if (to === "flagged") {
+      state.lens = "all";
       state.query = "";
       state.providers = [];
-      state.kinds = [];
+      state.focus = undefined;
     }
-    announce(state.mode === "skills" ? "showing skills only" : "showing the whole inventory");
+    state.nav = to;
+    // A provider filter whose chip disappears in the new entry must not
+    // survive as invisible narrowing with nothing on screen to turn off.
+    pruneFiltersForNav(payload, state);
+    const label = PANELS.find((p) => p.key === to)?.label ?? KIND_LABEL[to] ?? to;
+    announce(`${label} view`);
     return render();
   }
 
-  if (el.dataset.chip) {
-    const { chip, value } = el.dataset as { chip: string; value: string };
-    if (chip === "provider") {
-      state.providers = state.providers.includes(value)
-        ? state.providers.filter((p) => p !== value)
-        : [...state.providers, value];
-    } else if (chip === "kind") {
-      state.kinds = state.kinds.includes(value) ? state.kinds.filter((k) => k !== value) : [...state.kinds, value];
-    } else if (chip === "lens") {
-      state.lens = state.lens === value ? "all" : (value as AppState["lens"]);
-    }
+  if (el.dataset.lens) {
+    const v = el.dataset.lens as AppState["lens"];
+    state.lens = state.lens === v ? "all" : v;
+    return render();
+  }
+
+  if (el.dataset.provider) {
+    const v = el.dataset.provider;
+    state.providers = state.providers.includes(v)
+      ? state.providers.filter((p) => p !== v)
+      : [...state.providers, v];
     return render();
   }
 

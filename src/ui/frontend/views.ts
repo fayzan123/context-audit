@@ -12,16 +12,29 @@ import {
   type AppState,
   type Window,
   KIND_GLYPH,
+  KIND_LABEL,
   esc,
   fmtInt,
   fmtK,
   isDeadWeight,
-  modeBase,
+  navBase,
+  navKey,
+  signed,
+  signedTokens,
   tokens,
+  trackedSince,
   usageWindow,
   visibleItems,
   windowFor,
 } from "./render.js";
+
+/**
+ * What the current nav entry holds, as a word. The sidebar decides the scope
+ * now, so a panel caption says "skills" only when the sidebar does — it never
+ * guesses from a mode flag that no longer exists.
+ */
+const scopeNoun = (payload: UiPayload, state: AppState): string =>
+  KIND_LABEL[navKey(payload, state)] ?? "items";
 
 // --- shared drawing helpers -----------------------------------------------
 //
@@ -227,6 +240,62 @@ export interface PruneModel {
 const QUAD_ORDER: QuadrantKey[] = ["costly-quiet", "costly-busy", "cheap-quiet", "cheap-busy"];
 
 /**
+ * The two portfolio facts that used to sit in a strip of their own above the
+ * table: how few names do most of the work, and where the window spend goes.
+ *
+ * Both are cost-and-use questions, so they belong under the plot that asks
+ * them — that is what "the portfolio strip is dissolved" means in practice.
+ * They describe the WHOLE machine and do NOT follow the lens or the search, so
+ * they say so in their own label rather than sitting silently beside figures
+ * that do.
+ */
+function wholeMachine(payload: UiPayload): string {
+  const p = payload.portfolio;
+  const rent = payload.header.deadWeightChars;
+  if (!p && !(rent !== undefined && rent > 0)) return "";
+  const since = trackedSince(payload);
+  const lines: string[] = [];
+  // The silent-item rent: what is being paid, every session, for items that
+  // predate their provider's window and recorded nothing inside it. It used to
+  // hang off the header's never-fired readout as a sub-line; it is a cost fact
+  // about silence, which is the exact subject of this plot.
+  if (rent !== undefined && rent > 0) {
+    lines.push(
+      `<p class="wm-line" title="${esc(
+        "Summed always-in-context cost of enabled items that predate their own provider's window start and recorded no fires inside it. A PER-SESSION figure — paid every session either way — and not the same unit as the window totals below it."
+      )}"><b>${fmtK(tokens(rent))}</b> tok/session is paid on items with nothing recorded against them</p>`
+    );
+  }
+  if (!p) return `<div class="wm"><span class="engr">across the whole machine</span>${lines.join("")}</div>`;
+  const c = p.concentration;
+  if (c && c.items > 0) {
+    lines.push(
+      `<p class="wm-line" title="${esc(
+        `The fewest dispatch names whose fires add up to at least 80% of every fire on record${since ? `, counted since tracking began ${fmtDay(since)}` : ""}. Counted per dispatch name — provider + kind + name — because two rows sharing a name hold the same events, and summing rows would count those fires twice.`
+      )}"><b>${fmtInt(c.items)}</b> name${c.items === 1 ? "" : "s"} account for <b>${fmtInt(c.pct)}%</b> of every recorded fire</p>`
+    );
+  }
+  const spend = (p.topSpend ?? []).filter((s) => s.chars > 0).slice(0, 3);
+  if (spend.length > 0) {
+    const known = new Map(payload.items.map((i) => [i.id, i]));
+    lines.push(
+      `<p class="wm-line" title="${esc(
+        "Always-in-context characters multiplied by the sessions the provider that loads them was observed in — a WINDOW TOTAL over the observed history, a different unit from the per-session cost on the axis above."
+      )}">top window spend ${spend
+        .map((s) => {
+          const label = `${esc(s.name)} <b>${fmtK(tokens(s.chars))}<i>tok</i></b>`;
+          return known.has(s.id)
+            ? `<button class="wm-link" data-id="${esc(s.id)}">${label}</button>`
+            : `<span class="wm-link">${label}</span>`;
+        })
+        .join(" ")}</p>`
+    );
+  }
+  if (lines.length === 0) return "";
+  return `<div class="wm"><span class="engr">across the whole machine</span>${lines.join("")}</div>`;
+}
+
+/**
  * The quadrant model, exported so main.ts can resolve a clicked quadrant to
  * its exact item ids. Computed over the items currently IN VIEW: the rail's
  * filters are on screen and their counts are faceted, so a plot that ignored
@@ -353,8 +422,8 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
   const key = "prune";
   const title = "prune quadrant";
 
-  const base = modeBase(payload, state).length;
-  const scopeWord = state.mode === "skills" ? "skills" : "items";
+  const base = navBase(payload, state).length;
+  const scopeWord = scopeNoun(payload, state);
 
   if (m.items.length === 0) {
     const why =
@@ -522,7 +591,7 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
     return `<button class="pq-quad${k === "costly-quiet" ? " prime" : ""}" data-quadrant="${k}" ${q.count === 0 ? "disabled " : ""}data-tip="${esc(tip)}">
       ${quadGlyph(k)}
       <span class="pq-qlab">${esc(q.label)}</span>
-      <span class="pq-qn">${fmtInt(q.count)}<i>${state.mode === "skills" ? "skills" : "items"}</i></span>
+      <span class="pq-qn">${fmtInt(q.count)}<i>${esc(scopeNoun(payload, state))}</i></span>
       <span class="pq-qtok">${fmtK(tokens(q.chars))}<i>tok/session</i></span>
       ${dw}
     </button>`;
@@ -569,7 +638,8 @@ export function renderPruneQuadrant(payload: UiPayload, state: AppState): string
     <div class="pq-side">
       <div class="pq-grid">${QUAD_ORDER.map(readout).join("")}</div>
       ${legend}
-      <p class="kv-note">Summed cost is characters added first and converted once, the way the header total is — per-item rounding would drift the two apart.</p>
+      <p class="kv-note">Summed cost is characters added first and converted once, the way the stat bar's total is — per-item rounding would drift the two apart.</p>
+      ${wholeMachine(payload)}
     </div>
   </div>`;
 
@@ -590,7 +660,11 @@ export function renderListingBudget(payload: UiPayload, state: AppState): string
     if (listing) {
       return panelEmpty(key, title, "drop order not modelled", [
         `Your skill listing is <b>${fmtInt(listing.chars)}</b> of the ~<b>${fmtInt(listing.budgetChars)}</b>-char budget (<b>${fmtInt(listing.pct)}%</b>), but this scan carries no modelled drop order, so there is no per-skill cut to draw.`,
-        `The order replays Claude Code's documented behaviour — descriptions dropped starting with the least-invoked skills — over your real listing. It needs fire counts to rank on; a scan with no readable history cannot produce it.`,
+        // The consequence is the actionable half of this view and belongs on
+        // it whether or not the order could be modelled: a reader arriving at
+        // an over-budget figure needs to know what being over budget DOES.
+        `Past the budget, Claude Code drops descriptions starting with the skills you invoke least. A dropped skill still exists and can still be typed; it just stops auto-triggering, which looks exactly like the model ignoring you.`,
+        `The order replays that documented behaviour over your real listing. It needs fire counts to rank on; a scan with no readable history cannot produce it.`,
       ]);
     }
     return panelEmpty(key, title, "no skill listing on this machine", [
@@ -786,32 +860,18 @@ export function renderProviderOverlap(
   const title = "provider overlap";
   const win = usageWindow(payload);
 
+  // Payload-wide by construction: this view is a sidebar destination now, and
+  // the sidebar's entry IS the whole inventory. The two empty states that used
+  // to cover a narrowed scope — "shared assets sit outside this scope", "one
+  // provider on this machine" — are gone with it: the first can no longer
+  // happen, and the second never reaches the page at all, because an entry
+  // appears only when it has something to show and a single-provider machine
+  // has nothing to cross.
   const shared = (items: UiItem[]): UiItem[] => items.filter((i) => providersOf(i).length > 1);
-  const inScope = shared(modeBase(payload, state));
-  const everywhere = shared(payload.items);
+  const inScope = shared(navBase(payload, state));
 
   if (inScope.length === 0) {
     const providerCount = new Set(payload.items.map((i) => i.source)).size;
-    if (everywhere.length > 0) {
-      // The overlap exists, just not inside the current scope — say so, and
-      // offer the way there rather than rendering a silent blank.
-      return panelEmpty(
-        key,
-        title,
-        "shared assets sit outside this scope",
-        [
-          `<b>${fmtInt(everywhere.length)}</b> asset${everywhere.length === 1 ? " is" : "s are"} read or fired by more than one provider, but none of them is in the current scope.`,
-          `An AGENTS.md read by two harnesses is the usual case, and it is not a skill — so the skills scope cannot show it.`,
-        ],
-        `<button class="inlineclear" data-mode="all">show everything (${fmtInt(payload.items.length)} items)</button>`
-      );
-    }
-    if (providerCount < 2) {
-      return panelEmpty(key, title, "one provider on this machine", [
-        `Every asset found belongs to <b>${esc([...new Set(payload.items.map((i) => i.source))].join(", ")) || "one provider"}</b>. An overlap matrix compares what two or more harnesses read; with one, there is nothing to cross.`,
-        `This panel fills in when a second tool is on the machine — a Codex or Cursor install reading the same AGENTS.md, or the same dispatch name existing under two harnesses.`,
-      ]);
-    }
     return panelEmpty(key, title, "nothing is shared", [
       `<b>${fmtInt(providerCount)}</b> providers were found, but no asset is read or fired by more than one of them, and no dispatch name exists under two harnesses. Each harness is reading only its own files.`,
       // Deliberately NOT "nothing is paid for twice". Only two kinds of sharing
@@ -925,7 +985,7 @@ export function renderProviderOverlap(
     .join("");
 
   const cap =
-    `Assets more than one provider reads or fires — <b>${fmtInt(rows.length)}</b> of ${fmtInt(modeBase(payload, state).length)} in this scope. ` +
+    `Assets more than one provider reads or fires — <b>${fmtInt(rows.length)}</b> of ${fmtInt(navBase(payload, state).length)} in this scope. ` +
     `A cell carries that provider's recorded fires; <b>read</b> means the provider loads the file but dispatches nothing from it; an empty cell means no record that the provider touches it at all — an absent observation, never a zero. ` +
     (anyPerProvider
       ? `Each column states its own provider's window, because the stores keep different amounts of history and the counts are not like-for-like.`
@@ -949,10 +1009,16 @@ export function renderGrowth(payload: UiPayload, state: AppState): string {
   const g = payload.growth;
 
   if (!g || g.weeks.length === 0) {
-    return panelEmpty(key, title, "no weekly history yet", [
-      `This panel plots two counts of the same thing — instruction files you own, and instruction files that actually fired — over ISO weeks, so the gap between them is visible.`,
-      `Owned counts come from scan snapshots and fired counts from the durable ledger. Neither has recorded a week yet on this machine, so there is no series to draw. Rescan over the coming weeks and it fills in from the first observation forward.`,
-    ]);
+    return panelEmpty(
+      key,
+      title,
+      "no weekly history yet",
+      [
+        `This panel plots two counts of the same thing — instruction files you own, and instruction files that actually fired — over ISO weeks, so the gap between them is visible.`,
+        `Owned counts come from scan snapshots and fired counts from the durable ledger. Neither has recorded a week yet on this machine, so there is no series to draw. Rescan over the coming weeks and it fills in from the first observation forward.`,
+      ],
+      sinceLastScan(payload)
+    );
   }
 
   const weeks = [...g.weeks].sort((a, b) => a.weekStart.localeCompare(b.weekStart));
@@ -963,10 +1029,16 @@ export function renderGrowth(payload: UiPayload, state: AppState): string {
   );
 
   if (maxV === 0) {
-    return panelEmpty(key, title, "every week reads zero", [
-      `<b>${fmtInt(weeks.length)}</b> week${weeks.length === 1 ? " is" : "s are"} on record, and none of them carries an owned count or a single firing item.`,
-      `An axis drawn over that would look like a measurement of zero rather than the absence of one. ${esc(g.ownedSource)}`,
-    ]);
+    return panelEmpty(
+      key,
+      title,
+      "every week reads zero",
+      [
+        `<b>${fmtInt(weeks.length)}</b> week${weeks.length === 1 ? " is" : "s are"} on record, and none of them carries an owned count or a single firing item.`,
+        `An axis drawn over that would look like a measurement of zero rather than the absence of one. ${esc(g.ownedSource)}`,
+      ],
+      sinceLastScan(payload)
+    );
   }
 
   // --- geometry: ONE axis. Both series count items, so a second y-scale would
@@ -1132,52 +1204,57 @@ export function renderGrowth(payload: UiPayload, state: AppState): string {
     // the series it qualifies, where a caption belongs.
     `Each series is captioned with the method it came from.`;
 
-  return panel(key, title, cap, `<div class="gw-body">${svg}${legend}</div>`);
+  return panel(key, title, cap, `<div class="gw-body">${svg}${legend}${sinceLastScan(payload)}</div>`);
+}
+
+/**
+ * What changed since the previous scan. It used to ride the portfolio strip
+ * above the table, where it competed with the figures that describe NOW; it is
+ * a change-over-time fact, so it belongs under the chart that plots change
+ * over time.
+ */
+function sinceLastScan(payload: UiPayload): string {
+  const d = payload.delta;
+  if (!d) return "";
+  const ups = d.pluginsUpdated ?? [];
+  // No `from` on disk means the previous version was never recorded. Said in
+  // those words: a sentinel in that slot would read as a version number.
+  const upText = (u: { name: string; from?: string; to: string }): string =>
+    u.from ? `${u.name} ${u.from} → ${u.to}` : `${u.name} updated to ${u.to} (previous version not recorded)`;
+  const tok = signedTokens(d.injectedChars);
+  const quiet = d.items === 0 && d.injectedChars === 0 && ups.length === 0;
+  return `<div class="wm gw-delta">
+    <span class="engr">since the previous scan · ${esc(fmtDay(d.since))}</span>
+    <p class="wm-line">${
+      quiet
+        ? `no change — same items, same always-in-context cost, no plugin moved`
+        : `<b>${esc(signed(d.items))}</b> item${Math.abs(d.items) === 1 ? "" : "s"} · <b>${esc(signed(tok))}</b> tok/session`
+    }</p>
+    ${
+      ups.length > 0
+        ? `<p class="wm-line">${ups.map((u) => esc(upText(u))).join(" · ")}</p>
+           <p class="kv-note">Plugin moves come from each plugin manifest's "current version since" date, not from the snapshot — snapshots record no plugin versions, which is why a previous version can be unrecorded.</p>`
+        : `<p class="kv-note">Item and cost diffs are the previous snapshot's own figures subtracted from this one. Snapshots record no plugin versions, so a plugin move is read from the manifest's "current version since" date; none moved between these two scans.</p>`
+    }
+  </div>`;
 }
 
 // --- panel registry --------------------------------------------------------
 
 /**
- * The panels, in the order their selector lists them. Kept here so the control
- * and the renderers cannot drift apart — one list, one set of keys.
- *
- * Deliberately NOT called a view: the rail's "view" bank is already the lens
- * filter, and two controls sharing a word is how a filter gets mistaken for a
- * scope.
+ * The analysis views, keyed the way the sidebar navigates to them. The keys
+ * are the payload's own vocabulary (`budget`, `overlap`); the sidebar's labels
+ * — `listing`, `providers` — live with the sidebar, so a renaming in the
+ * chrome never has to reach the panel registry or the payload.
  */
-export const PANELS: { key: string; label: string; note: string }[] = [
-  {
-    key: "inventory",
-    label: "inventory",
-    note: "Every instruction file as a row: what it costs every session, when it last fired, what it is flagged for.",
-  },
-  {
-    key: "prune",
-    label: "prune",
-    note: "Always-in-context cost against recorded fires, split at both medians. The costly-and-quiet quadrant is the shortlist.",
-  },
-  {
-    key: "budget",
-    label: "budget",
-    note: "Claude Code's skill listing against its character budget, in the order it drops descriptions — least-invoked first.",
-  },
-  {
-    key: "overlap",
-    label: "overlap",
-    note: "Assets more than one provider reads or fires, with each provider's own counts held apart.",
-  },
-  {
-    key: "growth",
-    label: "growth",
-    note: "Instruction files owned against instruction files that actually fired, per ISO week.",
-  },
+export const PANELS: { key: string; label: string }[] = [
+  { key: "prune", label: "prune" },
+  { key: "budget", label: "listing" },
+  { key: "overlap", label: "providers" },
+  { key: "growth", label: "growth" },
 ];
 
-/**
- * Dispatch. Returns "" for the inventory key so the caller keeps rendering its
- * own table there — the panels are scopes on the same data, not replacements
- * for it.
- */
+/** Dispatch. Anything that is not an analysis key renders nothing here. */
 export function renderPanel(
   key: string,
   payload: UiPayload,
