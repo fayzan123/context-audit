@@ -10,6 +10,7 @@ import { securityScan } from "../security.js";
 import { discoverSkills, isSkillMd, parseFrontmatter } from "../skills.js";
 import { ADAPTERS, scanLedgerHome, type AuditContext } from "../sources/index.js";
 import { codexAdapter } from "../sources/codex.js";
+import { claudeAdapter } from "../sources/claude.js";
 import { cursorAdapter } from "../sources/cursor.js";
 import { cursorStorePath } from "../sources/cursordb.js";
 import { BUILTIN_COMMANDS } from "../types.js";
@@ -120,9 +121,9 @@ interface Row {
 }
 
 const V1_READONLY = {
-  plugin: "Plugin-managed — read-only in v1; enable or disable the plugin from Claude Code",
-  project: "Project-scoped — the safe disable convention covers user skills only in v1",
-  kind: "No safe disable convention for this kind in v1",
+  plugin: "Plugin-managed — read-only here; enable or disable the plugin from Claude Code",
+  project: "Project-scoped — the disable convention covers user-scoped assets only",
+  kind: "No disable convention for this kind: it is not resolved from a directory this tool can move it out of",
   vendor: "Read-only — no invented disable conventions for other vendors in v1",
   custom: "Explicit-directory audits are read-only",
 } as const;
@@ -300,17 +301,38 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
         // every plugin asset lands in the inventory twice.
         if (skill.fromPlugin) continue;
         const kind = skill.kind ?? "skill";
-        const userSkillsRoot = join(ctx.home, ".claude", "skills");
-        // A direct child of the root, matching what toggle.ts will actually
-        // accept. `startsWith(root + "/")` was both laxer (nested paths) and,
-        // on Windows, never true at all — join() produces backslashes, so
-        // every user skill silently lost its toggle.
+        // A direct child of a user root, matching what toggle.ts will
+        // actually accept. `startsWith(root + "/")` was both laxer (nested
+        // paths) and, on Windows, never true at all — join() produces
+        // backslashes, so every user skill silently lost its toggle.
+        //
+        // Agents are here too. They were held back while it looked like
+        // moving one would mean inventing a disable convention; `skills-
+        // disabled` turned out to be no convention either, just a sibling
+        // Claude Code does not read, and `agents-disabled` is the same
+        // sibling of `.claude/agents/*.md`. On a machine that is two thirds
+        // never-launched agents, measuring them while refusing to move them
+        // made the tool a report rather than a fix.
+        const userRoot: Record<string, string> = {
+          skill: join(ctx.home, ".claude", "skills"),
+          agent: join(ctx.home, ".claude", "agents"),
+        };
+        // An agent is a single FILE, so its parent is the file's directory,
+        // not the asset directory a skill has.
+        const parent = dirname(kind === "agent" ? skill.files[0]?.absPath ?? skill.dir : skill.dir);
+        // The disabled side is discovered too, and stays a first-class row —
+        // grayed, re-enableable, history intact, and out of the per-session
+        // total, because the header reports what the setup actually costs.
+        // Skills get this a few lines below, from their own walk; agents come
+        // through this loop because the adapter discovers both sides at once.
+        const offRoot = kind === "agent" ? join(ctx.home, ".claude", "agents-disabled") : undefined;
+        const isOff = offRoot !== undefined && parent === offRoot;
         const isUserSkill =
-          adapter.id === "claude" && kind === "skill" && dirname(skill.dir) === userSkillsRoot;
+          adapter.id === "claude" && userRoot[kind] !== undefined && (parent === userRoot[kind] || isOff);
         rows.push({
           skill,
           source: adapter.id,
-          enabled: true,
+          enabled: !isOff,
           togglable: isUserSkill,
           readOnlyReason: isUserSkill
             ? undefined
@@ -606,6 +628,18 @@ export async function buildUiPayload(ctx: AuditContext, opts: UiBuildOptions): P
       // history gets its reason stated rather than left as an unexplained gap.
       caveats.push(...(cursorAdapter.caveats?.(ctx) ?? []));
     }
+  }
+
+  // Claude's own qualifiers reach the dashboard too. Only cursor's did, which
+  // meant a caveat the CLI report printed in full was silently absent from the
+  // page the same scan produced — two surfaces disagreeing about what this
+  // scan could and could not see. The plugin-version fallback keeps its
+  // dedicated `pluginResolution` field (the page renders it as its own line),
+  // so it is not duplicated here.
+  if (!opts.dir && (!opts.sources || opts.sources.includes("claude"))) {
+    caveats.push(
+      ...(claudeAdapter.caveats?.(ctx) ?? []).filter((c: string) => !/^plugin versions resolved/.test(c))
+    );
   }
 
   // The durable ledger: bank this window's events before the harness purges

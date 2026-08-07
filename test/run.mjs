@@ -897,8 +897,19 @@ const BENIGN_SKILL = FM() + "Say hello politely.\n";
   // shapes every figure the CLI reports — so the report has to say so rather
   // than present an inference as a measurement.
   check(
-    "no caveat while plugin versions are read from config",
-    claudeP?.caveats === undefined,
+    "no PLUGIN-VERSION caveat while versions are read from config",
+    !(claudeP?.caveats ?? []).some((c) => /^plugin versions resolved/.test(c)),
+    `caveats: ${JSON.stringify(claudeP?.caveats)}`
+  );
+  // The same fixture carries README.md and SETUP.md in agents/ — deliberately,
+  // to prove a frontmatter-less file is still scanned. They are not agents, so
+  // the adapter names them rather than letting the reader wonder why 4 files
+  // on disk became 2 agents.
+  check(
+    "files in agents/ with no frontmatter name are reported as not being agents",
+    (claudeP?.caveats ?? []).some(
+      (c) => /are not agent definitions/.test(c) && /README\.md/.test(c) && /SETUP\.md/.test(c)
+    ),
     `caveats: ${JSON.stringify(claudeP?.caveats)}`
   );
   {
@@ -1380,6 +1391,10 @@ console.log("UI HTTP tier (server security + endpoints):");
     writeFileSync(f, content);
   };
   w(".claude/skills/togglee/SKILL.md", FM() + "Toggle me.\n");
+  w(
+    ".claude/agents/agent-togglee.md",
+    "---\nname: agent-togglee\ndescription: A user-scoped agent with a description long enough to move the header total.\n---\n\nDo the thing.\n"
+  );
   w(".claude/skills/dup/SKILL.md", FM() + "Hello.\n");
   w(".claude/skills-disabled/dup/SKILL.md", FM() + "Hello.\n");
   w(".claude/skills-disabled/dormant/SKILL.md",
@@ -1729,6 +1744,55 @@ console.log("UI HTTP tier (server security + endpoints):");
       projToggle.status === 403 && /project/i.test(projToggle.json?.error ?? ""),
       `status ${projToggle.status}: ${projToggle.json?.error}`
     );
+    // --- agents toggle the same way skills do -----------------------------
+    // Held back through v1 on the belief that moving one would mean inventing
+    // a disable convention. `skills-disabled` turned out to be no convention
+    // either — just a sibling directory Claude Code does not read — and
+    // `agents-disabled` is the same sibling of `.claude/agents/*.md`. On a
+    // machine that is two thirds never-launched agents, measuring them while
+    // refusing to move them made the tool a report rather than a fix.
+    {
+      const items = (await api("/api/audit")).json?.payload?.items ?? [];
+      const ag = items.find((i) => i.name === "agent-togglee");
+      check("a user-scoped agent is togglable", ag?.togglable === true, JSON.stringify(ag?.readOnlyReason));
+      const off = await api("/api/toggle", { method: "POST", body: { id: ag?.id ?? "" } });
+      check(
+        "toggling an agent moves the FILE to ~/.claude/agents-disabled",
+        off.status === 200 &&
+          off.json?.action === "disable" &&
+          existsSync(join(home, ".claude/agents-disabled/agent-togglee.md")) &&
+          !existsSync(join(home, ".claude/agents/agent-togglee.md")),
+        JSON.stringify(off.json?.error ?? off.json?.to)
+      );
+      const disabled = off.json?.payload?.items?.find((i) => i.name === "agent-togglee");
+      check(
+        "…and it stays a row: grayed, still togglable, out of the per-session total",
+        disabled?.enabled === false && disabled?.togglable === true,
+        JSON.stringify({ enabled: disabled?.enabled, togglable: disabled?.togglable })
+      );
+      check(
+        "…and the cost it stopped paying left the header",
+        off.json?.payload?.header?.injectedChars < (payload?.header?.injectedChars ?? 0),
+        `${payload?.header?.injectedChars} → ${off.json?.payload?.header?.injectedChars}`
+      );
+      const on = await api("/api/toggle", { method: "POST", body: { id: disabled?.id ?? "" } });
+      check(
+        "re-enabling puts the file back where Claude Code reads it",
+        on.status === 200 &&
+          on.json?.action === "enable" &&
+          existsSync(join(home, ".claude/agents/agent-togglee.md")),
+        JSON.stringify(on.json?.error)
+      );
+      // Nothing else in the agents tree became movable by accident.
+      const proj = (await api("/api/audit")).json?.payload?.items ?? [];
+      const nested = proj.filter((i) => i.kind === "agent" && !i.togglable);
+      check(
+        "only DIRECT children of ~/.claude/agents are togglable",
+        nested.every((i) => !i.path.startsWith(join(home, ".claude/agents/")) || i.path.slice(join(home, ".claude/agents/").length).includes("/")),
+        nested.slice(0, 2).map((i) => i.path).join(" | ")
+      );
+    }
+
     // --- turning off a set in one request ---------------------------------
     // The prune shortlist's whole point is that pruning is a batch decision.
     // 68 rows through /api/toggle would be 68 full rescans; this runs the same

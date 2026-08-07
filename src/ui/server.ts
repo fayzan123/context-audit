@@ -132,10 +132,19 @@ export async function startUiServer(
   // from under an open dashboard.
   const html = readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 
-  const skillRoots = {
-    enabledRoot: join(ctx.home, ".claude", "skills"),
-    disabledRoot: join(ctx.home, ".claude", "skills-disabled"),
-  };
+  // Both togglable kinds, in one list. Agents joined skills once it was clear
+  // that `skills-disabled` was never a Claude Code convention — only a sibling
+  // directory it does not read — and that the same is true of agents-disabled.
+  const skillRoots = [
+    {
+      enabledRoot: join(ctx.home, ".claude", "skills"),
+      disabledRoot: join(ctx.home, ".claude", "skills-disabled"),
+    },
+    {
+      enabledRoot: join(ctx.home, ".claude", "agents"),
+      disabledRoot: join(ctx.home, ".claude", "agents-disabled"),
+    },
+  ];
 
   const server = createServer(async (req, res) => {
     // Node's HTTP parser accepts absolute-form request targets that WHATWG URL
