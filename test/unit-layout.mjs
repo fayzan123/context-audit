@@ -12,9 +12,11 @@
 // payload has to be deterministic or the measurement is, too, a measurement of
 // whatever happens to be on this machine.
 //
-// Chrome is not a dependency of this package. Without it the file says so and
-// passes — a headless browser missing on a CI runner is not a defect in the
-// dashboard — but it names the skip rather than quietly reporting nothing.
+// Chrome is not a dependency of this package, and neither is a WebSocket
+// client. Without either the file says so and passes — a headless browser
+// missing on a CI runner, or a Node old enough to predate the WebSocket
+// global, is not a defect in the dashboard — but it names the skip rather than
+// quietly reporting nothing.
 import { createServer } from "node:http";
 import { readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,6 +62,15 @@ if (!chromePath) {
   ok("skipped: no Chrome on this machine (set CHROME=<path> to run the layout measurement)");
   process.exit(0);
 }
+// The other prerequisite, checked here beside Chrome's so that neither a server
+// nor a browser is started before both are known present. `WebSocket` became a
+// global in Node 21; this package supports Node 18, where driving CDP would
+// mean taking a dependency the zero-dependency constraint forbids. Named, not
+// silent — a measurement that did not run must never read as one that passed.
+if (typeof WebSocket === "undefined") {
+  ok(`skipped: no global WebSocket on ${process.version} (Node 21+ required for the CDP driver)`);
+  process.exit(0);
+}
 
 // --- the stub server: the real bundle, one fixed payload --------------------
 const payload = JSON.parse(readFileSync(join(root, "test", "fixtures", "render", "payload-s2.json"), "utf8"));
@@ -77,8 +88,9 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/?token=test`;
 
 // --- drive Chrome over CDP --------------------------------------------------
-// Node 22 ships a global WebSocket, so this needs no dependency — which is the
-// whole point: the published package stays at zero.
+// Node 21+ ships a global WebSocket, so this needs no dependency — which is the
+// whole point: the published package stays at zero. Older supported Nodes took
+// the skip above rather than reaching here.
 const profile = mkdtempSync(join(tmpdir(), "ca-layout-"));
 const chrome = spawn(
   chromePath,
