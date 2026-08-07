@@ -1,0 +1,6 @@
+{
+  "session_id": "sess-3",
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "UserPromptExpansion",
+  "command": "/impeccable teach --project ~/clients/acme"
+}

@@ -6,6 +6,9 @@
 //   - monthly file routing by event ts, never wall clock
 //   - malformed-line tolerance (skipped, counted, never a crash), incl.
 //     month-prefixed junk timestamps and args-shaped names
+//   - the name rule SPLIT BY KIND at the durable boundary: an agent's prose
+//     name is admitted, and the same args-shaped string is still refused on a
+//     skill or command event — the privacy boundary NAME_RE exists to hold
 //   - append mode: no historical parse at open, per-month id dedupe,
 //     meta horizon never reset by a hook fire
 //   - the built-ins gate: the ONE place all three typed-channel writers agree
@@ -20,12 +23,12 @@
 // never read.
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const fixtures = join(root, "test", "fixtures", "ledger");
-const { openLedger, LEDGER_SCHEMA_VERSION, isLedgerEvent, NAME_RE } = await import(
+const { openLedger, LEDGER_SCHEMA_VERSION, isLedgerEvent, NAME_RE, AGENT_NAME_RE } = await import(
   pathToFileURL(join(root, "dist", "ledger.js")).href
 );
 // The gate reads the SHARED set — one list, not one per writer.
@@ -451,6 +454,43 @@ console.log("SHAPE GATE + BASE RESOLUTION:");
   check("NAME_RE accepts dispatch tokens incl. plugin namespaces", NAME_RE.test("impeccable") && NAME_RE.test("superpowers:brainstorming"));
   check("NAME_RE refuses args-shaped strings", !NAME_RE.test("impeccable teach --project ~/clients/acme"));
   check("args-shaped name fails the gate on dispatch channels", !isLedgerEvent(ev("g7", "2025-01-01T00:00:00.000Z", { name: "impeccable SECRET-ARG never store me" })));
+
+  // --- the agent channel's own rule, and the boundary it must not move ------
+  // AGENT_NAME_RE exists because `subagent_type` is a structured tool parameter
+  // carrying a registered frontmatter name, with no user-typed line behind it
+  // and no argument tail to strip. It is a SECOND rule beside NAME_RE, never a
+  // widening of it: the six assertions above must keep holding afterwards,
+  // which is what the two re-pins below check on the durable boundary.
+  check(
+    "AGENT_NAME_RE accepts a registered agent's prose name",
+    AGENT_NAME_RE.test("LinkedIn Content Creator") && AGENT_NAME_RE.test("Backend Architect")
+  );
+  check(
+    "AGENT_NAME_RE accepts 60 chars with the characters real agent names use",
+    AGENT_NAME_RE.test("Research & Analysis, Ops/Infra, Delivery Coordination Agents")
+  );
+  check("AGENT_NAME_RE refuses a control character", !AGENT_NAME_RE.test("general\u0000purpose"));
+  check("AGENT_NAME_RE refuses a name past 80 characters", !AGENT_NAME_RE.test("x".repeat(81)) && AGENT_NAME_RE.test("x".repeat(80)));
+  check("AGENT_NAME_RE refuses the empty string", !AGENT_NAME_RE.test(""));
+  check(
+    "the durable boundary admits a spaced name on an agent event",
+    isLedgerEvent(ev("g10", "2025-01-01T00:00:00.000Z", { kind: "agent", name: "LinkedIn Content Creator" }))
+  );
+  check(
+    "the durable boundary refuses a control character on an agent event",
+    !isLedgerEvent(ev("g11", "2025-01-01T00:00:00.000Z", { kind: "agent", name: "general\u0000purpose" }))
+  );
+  // The regression this change came closest to causing: the SAME string, now
+  // that a laxer rule exists, is still refused on the channels it can reach
+  // from a typed line.
+  check(
+    "args-shaped name is STILL refused on a skill event after AGENT_NAME_RE exists",
+    !isLedgerEvent(ev("g12", "2025-01-01T00:00:00.000Z", { kind: "skill", name: "impeccable teach --project ~/clients/acme" }))
+  );
+  check(
+    "args-shaped name is STILL refused on a command event after AGENT_NAME_RE exists",
+    !isLedgerEvent(ev("g13", "2025-01-01T00:00:00.000Z", { kind: "command", channel: "typed", name: "impeccable teach --project ~/clients/acme" }))
+  );
   check(
     "dotted codex names pass the durable gate",
     isLedgerEvent(ev("g8", "2025-01-01T00:00:00.000Z", { provider: "codex", kind: "prompt", name: "release.notes", channel: "typed" }))
@@ -459,6 +499,31 @@ console.log("SHAPE GATE + BASE RESOLUTION:");
     "load-channel path names are exempt from the token gate",
     isLedgerEvent(ev("g9", "2025-01-01T00:00:00.000Z", { provider: "codex", kind: "instructions", name: "/Users/fx/my proj", channel: "load" }))
   );
+
+  // --- compatibility: a store written under the old narrow rule -------------
+  // Widening what is ACCEPTED is backward-compatible by construction: every
+  // event already banked still validates, and nothing rewrites the store.
+  {
+    const old = freshBase();
+    const usage = join(old, "usage");
+    mkdirSync(usage, { recursive: true });
+    const file = join(usage, "events-2025-02.jsonl");
+    const lines =
+      [
+        ev("old1", "2025-02-01T10:00:00.000Z"),
+        ev("old2", "2025-02-02T10:00:00.000Z", { kind: "command", channel: "typed", name: "deploy-check" }),
+        // An agent fire banked under the old rule: the only agent names that
+        // could pass it were token-shaped, and they must still load.
+        ev("old3", "2025-02-03T10:00:00.000Z", { kind: "agent", name: "code-reviewer" }),
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n";
+    writeFileSync(file, lines);
+    const reopened = openLedger(old);
+    check("a pre-existing narrow-rule ledger still loads whole", reopened.readEvents().length === 3, JSON.stringify(reopened.readEvents().length));
+    check("its lines are unchanged on disk — no migration runs", readFileSync(file, "utf8") === lines);
+    check("and it reports no malformed lines", reopened.diagnostics().malformedLines === 0, JSON.stringify(reopened.diagnostics()));
+  }
 
   const base = freshBase();
   process.env.CONTEXT_AUDIT_HOME = base;

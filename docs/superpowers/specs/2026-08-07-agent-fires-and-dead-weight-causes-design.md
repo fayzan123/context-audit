@@ -84,6 +84,16 @@ export const AGENT_NAME_RE = /^[^\u0000-\u001F\u007F]{1,80}$/;
 
 **Both writers must continue to agree.** `history.ts` and `hooks.ts` import both constants and select by kind; neither grows its own copy.
 
+The three call sites do not all change, and this is the one place the fix can be got exactly backwards:
+
+| site | channel | rule |
+|---|---|---|
+| `history.ts:345` | `subagent_type` from a transcript | `AGENT_NAME_RE` when `kind === "agent"`, else `NAME_RE` |
+| `hooks.ts:378` | `subagent_type` from a live `Agent`/`Task` hook | `AGENT_NAME_RE` when `kind === "agent"`, else `NAME_RE` |
+| `hooks.ts:399` | **a typed command, already split to its first token** | **`NAME_RE`, unchanged** |
+
+`hooks.ts:399` is the site the privacy boundary exists for — its own comment reads *"First token only, slash stripped: the dispatch name is stored, args never are"*, and `NAME_RE` is the backstop behind that stripping. Applying `AGENT_NAME_RE` there would admit `impeccable teach --project ~/clients/acme` to the ledger, which is precisely the failure this spec was rewritten to avoid.
+
 ### Compatibility
 
 Widening what is *accepted* is backward-compatible: every event already in a ledger still validates, and no migration runs.

@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-1",
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": { "subagent_type": "Review the diff and report every finding with evidence and a citation for it....!", "prompt": "SECRET-PROMPT must never be stored" },
+  "tool_use_id": "toolu_long01"
+}

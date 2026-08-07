@@ -1,0 +1,11 @@
+{
+  "session_id": "sess-1",
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "subagent_type": "general\u0000purpose",
+    "prompt": "SECRET-PROMPT must never be stored"
+  },
+  "tool_use_id": "toolu_ctl001"
+}
