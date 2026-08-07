@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { discoverSkills, fileAsset, mdFilesUnder } from "../skills.js";
+import { discoverSkills, fileAsset, loadSkill, mdFilesUnder } from "../skills.js";
 import { discoverPluginAssets, resolveActivePlugins } from "../plugins.js";
 import { historyFacts } from "../history.js";
 import type { HistoryFacts, Skill } from "../types.js";
@@ -10,6 +10,22 @@ function skillRoots(ctx: SourceContext): string[] {
   // A Set because cwd can sit inside HOME (or be it) — auditing the same
   // directory twice would double every finding.
   return [...new Set([join(ctx.home, ".claude", "skills"), join(ctx.cwd, ".claude", "skills")])];
+}
+
+/**
+ * Files sitting in an agents directory that are not agent definitions: no
+ * frontmatter name, so Claude Code cannot register them and this tool does not
+ * count them. Named rather than silently skipped — an unexplained gap between
+ * "134 files on disk" and "110 agents" is its own kind of wrong number.
+ */
+function strayAgentFiles(ctx: SourceContext): string[] {
+  const out: string[] = [];
+  for (const root of new Set([join(ctx.home, ".claude", "agents"), join(ctx.cwd, ".claude", "agents")])) {
+    for (const f of mdFilesUnder(root)) {
+      if (!loadSkill(f).fmName) out.push(f.split("/").pop()!);
+    }
+  }
+  return out.sort();
 }
 
 export const claudeAdapter: SourceAdapter = {
@@ -33,12 +49,30 @@ export const claudeAdapter: SourceAdapter = {
       }
     }
 
-    // Agents dispatch on their frontmatter name (loadSkill already prefers it).
-    for (const root of new Set([join(ctx.home, ".claude", "agents"), join(ctx.cwd, ".claude", "agents")])) {
+    // Agents dispatch on their frontmatter name (loadSkill already prefers it),
+    // and a file WITHOUT one is not an agent at all — Claude Code cannot
+    // register what it cannot name. Counting every .md in the directory turned
+    // 23 files of somebody's repo documentation (README.md, CONTRIBUTING.md,
+    // phase-*.md) into agents on the machine this was found on: a real
+    // overcount of the inventory, reported instead as the thing it is.
+    for (const root of new Set([
+      join(ctx.home, ".claude", "agents"),
+      join(ctx.cwd, ".claude", "agents"),
+      // A disabled agent stays a row — grayed, history intact, excluded from
+      // the per-session total — exactly as a disabled skill does.
+      join(ctx.home, ".claude", "agents-disabled"),
+    ])) {
       for (const f of mdFilesUnder(root)) {
         const fallback = f.split("/").pop()!.replace(/\.md$/, "");
-        const asset = fileAsset(f, fallback, "claude", "agent", "description");
-        if (asset.fmName) asset.dirName = asset.fmName;
+        // A file with no frontmatter name is NOT an agent: Claude Code cannot
+        // register what it cannot name, so nothing about it is ever loaded and
+        // it costs nothing per session. It stays in the inventory anyway —
+        // dropping it would turn ~/.claude/agents into a hiding place for an
+        // injection payload the scanner never reads, which is the one thing
+        // this tool must never do. It is priced at what it actually costs.
+        const named = !!loadSkill(f).fmName;
+        const asset = fileAsset(f, fallback, "claude", "agent", named ? "description" : "on-demand");
+        if (named) asset.dirName = asset.fmName!;
         assets.push(asset);
       }
     }
@@ -97,6 +131,19 @@ export const claudeAdapter: SourceAdapter = {
     const { installs, resolution } = resolveActivePlugins(ctx.home);
     const live = installs.filter((i) => i.enabled);
     const out: string[] = [];
+    // Files sitting in an agents directory that are not agent definitions.
+    // Skipping them silently would trade an overcount for an unexplained gap
+    // between "134 files on disk" and "110 agents", and this tool states its
+    // own degradations rather than leaving the reader to notice one.
+    const stray = strayAgentFiles(ctx);
+    if (stray.length > 0) {
+      const shown = stray.slice(0, 6).join(", ");
+      out.push(
+        `${stray.length} file${stray.length === 1 ? "" : "s"} under ~/.claude/agents ${stray.length === 1 ? "is not an agent definition" : "are not agent definitions"}: ` +
+          `no frontmatter name, so Claude Code cannot register ${stray.length === 1 ? "it" : "them"} and ${stray.length === 1 ? "it is" : "they are"} not counted here ` +
+          `(${shown}${stray.length > 6 ? `, +${stray.length - 6} more` : ""}).`
+      );
+    }
     if (resolution === "newest-fallback" && live.length > 0) {
       out.push(
         `plugin versions resolved by newest-cached fallback (${live.length} plugin(s)) — ` +

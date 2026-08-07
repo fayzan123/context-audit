@@ -19,16 +19,34 @@ function nameExists(path: string): boolean {
 }
 
 /**
- * Enable/disable = a directory move between skills/ and skills-disabled/.
- * That is the whole mechanism: no state file to drift out of sync with disk,
- * git sees a rename, and a fresh CLI run agrees with the dashboard for free.
+ * Enable/disable = a move between a directory Claude Code reads and a sibling
+ * it does not. That is the whole mechanism: no state file to drift out of sync
+ * with disk, git sees a rename, and a fresh CLI run agrees with the dashboard
+ * for free.
+ *
+ * It works for skills (a DIRECTORY under ~/.claude/skills) and for agents (a
+ * single .md FILE under ~/.claude/agents) without caring which, because
+ * `rename` operates on a name either way.
+ *
+ * The sibling is what makes this safe. Claude Code resolves agents from
+ * `.claude/agents/*.md` — its own tool documentation says so — and no glob
+ * rooted at that directory can reach a sibling of it at any depth. v1 refused
+ * agents on the grounds that it would have to invent a convention; it turned
+ * out `skills-disabled` was never a Claude Code convention either, just a
+ * directory Claude Code does not read, and the same reasoning carries over
+ * unchanged.
  */
-export interface ToggleRoots {
-  /** ~/.claude/skills */
+export interface TogglePair {
+  /** The directory Claude Code reads: ~/.claude/skills, ~/.claude/agents. */
   enabledRoot: string;
-  /** ~/.claude/skills-disabled */
+  /** Its sibling, which Claude Code does not: ~/.claude/skills-disabled. */
   disabledRoot: string;
 }
+
+export type ToggleRoots = TogglePair | TogglePair[];
+
+/** Every pair a toggle may be planned against, in a stable order. */
+const pairsOf = (roots: ToggleRoots): TogglePair[] => (Array.isArray(roots) ? roots : [roots]);
 
 export type TogglePlan =
   | { ok: true; action: "disable" | "enable"; from: string; to: string }
@@ -38,21 +56,27 @@ export type TogglePlan =
  * Decide what a toggle of `itemDir` would do, without touching disk. Refusals
  * live here so the tests can assert them without building fixture trees.
  */
-export function planToggle(itemDir: string, roots: ToggleRoots): TogglePlan {
-  const dir = resolve(itemDir);
+export function planToggle(itemPath: string, roots: ToggleRoots): TogglePlan {
+  const dir = resolve(itemPath);
   const name = basename(dir);
-  // Only a DIRECT child of the user skills roots is toggleable. Anything else
-  // — plugin cache, project .claude/skills, a nested path inside a skill —
-  // has no safe disable convention, and inventing one is how files get lost.
-  if (dirname(dir) === resolve(roots.enabledRoot)) {
-    return { ok: true, action: "disable", from: dir, to: join(resolve(roots.disabledRoot), name) };
-  }
-  if (dirname(dir) === resolve(roots.disabledRoot)) {
-    return { ok: true, action: "enable", from: dir, to: join(resolve(roots.enabledRoot), name) };
+  const pairs = pairsOf(roots);
+  // Only a DIRECT child of a user root is toggleable. Anything else — the
+  // plugin cache, a project .claude/skills, a nested path inside a skill — has
+  // no disable convention, and inventing one per case is how files get lost.
+  for (const p of pairs) {
+    if (dirname(dir) === resolve(p.enabledRoot)) {
+      return { ok: true, action: "disable", from: dir, to: join(resolve(p.disabledRoot), name) };
+    }
+    if (dirname(dir) === resolve(p.disabledRoot)) {
+      return { ok: true, action: "enable", from: dir, to: join(resolve(p.enabledRoot), name) };
+    }
   }
   return {
     ok: false,
-    error: `not a user-scoped Claude skill: ${dir} — only direct children of ${roots.enabledRoot} and ${roots.disabledRoot} can be toggled`,
+    error:
+      `not a user-scoped Claude asset: ${dir} — only direct children of ` +
+      pairs.map((p) => `${p.enabledRoot} and ${p.disabledRoot}`).join(", ") +
+      ` can be toggled`,
   };
 }
 

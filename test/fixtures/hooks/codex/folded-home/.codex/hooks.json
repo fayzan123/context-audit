@@ -1,0 +1,29 @@
+{
+  "description": "my own codex hooks — this text is mine and must survive",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "statusMessage": "recording usage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "context-audit log-event --codex-hook UserPromptSubmit"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user-prompt-hook"
+          },
+          {
+            "type": "command",
+            "command": "context-audit log-event --codex-hook UserPromptSubmit",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

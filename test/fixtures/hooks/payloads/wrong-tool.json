@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-3",
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "rm -rf /" },
+  "tool_use_id": "toolu_bash789"
+}

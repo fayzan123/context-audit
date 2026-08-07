@@ -1,0 +1,10 @@
+{
+  "cwd": "/Users/someone/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5-codex",
+  "permission_mode": "on-request",
+  "prompt": "/release.notes for 2.1.0 SECRET-TAIL must never be stored",
+  "session_id": "cx-sess-2",
+  "transcript_path": "/Users/someone/.codex/sessions/2026/08/06/rollout-cx-sess-2.jsonl",
+  "turn_id": "turn-3"
+}

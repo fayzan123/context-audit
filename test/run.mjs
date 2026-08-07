@@ -897,8 +897,19 @@ const BENIGN_SKILL = FM() + "Say hello politely.\n";
   // shapes every figure the CLI reports — so the report has to say so rather
   // than present an inference as a measurement.
   check(
-    "no caveat while plugin versions are read from config",
-    claudeP?.caveats === undefined,
+    "no PLUGIN-VERSION caveat while versions are read from config",
+    !(claudeP?.caveats ?? []).some((c) => /^plugin versions resolved/.test(c)),
+    `caveats: ${JSON.stringify(claudeP?.caveats)}`
+  );
+  // The same fixture carries README.md and SETUP.md in agents/ — deliberately,
+  // to prove a frontmatter-less file is still scanned. They are not agents, so
+  // the adapter names them rather than letting the reader wonder why 4 files
+  // on disk became 2 agents.
+  check(
+    "files in agents/ with no frontmatter name are reported as not being agents",
+    (claudeP?.caveats ?? []).some(
+      (c) => /are not agent definitions/.test(c) && /README\.md/.test(c) && /SETUP\.md/.test(c)
+    ),
     `caveats: ${JSON.stringify(claudeP?.caveats)}`
   );
   {
@@ -1380,6 +1391,10 @@ console.log("UI HTTP tier (server security + endpoints):");
     writeFileSync(f, content);
   };
   w(".claude/skills/togglee/SKILL.md", FM() + "Toggle me.\n");
+  w(
+    ".claude/agents/agent-togglee.md",
+    "---\nname: agent-togglee\ndescription: A user-scoped agent with a description long enough to move the header total.\n---\n\nDo the thing.\n"
+  );
   w(".claude/skills/dup/SKILL.md", FM() + "Hello.\n");
   w(".claude/skills-disabled/dup/SKILL.md", FM() + "Hello.\n");
   w(".claude/skills-disabled/dormant/SKILL.md",
@@ -1729,6 +1744,101 @@ console.log("UI HTTP tier (server security + endpoints):");
       projToggle.status === 403 && /project/i.test(projToggle.json?.error ?? ""),
       `status ${projToggle.status}: ${projToggle.json?.error}`
     );
+    // --- agents toggle the same way skills do -----------------------------
+    // Held back through v1 on the belief that moving one would mean inventing
+    // a disable convention. `skills-disabled` turned out to be no convention
+    // either — just a sibling directory Claude Code does not read — and
+    // `agents-disabled` is the same sibling of `.claude/agents/*.md`. On a
+    // machine that is two thirds never-launched agents, measuring them while
+    // refusing to move them made the tool a report rather than a fix.
+    {
+      const items = (await api("/api/audit")).json?.payload?.items ?? [];
+      const ag = items.find((i) => i.name === "agent-togglee");
+      check("a user-scoped agent is togglable", ag?.togglable === true, JSON.stringify(ag?.readOnlyReason));
+      const off = await api("/api/toggle", { method: "POST", body: { id: ag?.id ?? "" } });
+      check(
+        "toggling an agent moves the FILE to ~/.claude/agents-disabled",
+        off.status === 200 &&
+          off.json?.action === "disable" &&
+          existsSync(join(home, ".claude/agents-disabled/agent-togglee.md")) &&
+          !existsSync(join(home, ".claude/agents/agent-togglee.md")),
+        JSON.stringify(off.json?.error ?? off.json?.to)
+      );
+      const disabled = off.json?.payload?.items?.find((i) => i.name === "agent-togglee");
+      check(
+        "…and it stays a row: grayed, still togglable, out of the per-session total",
+        disabled?.enabled === false && disabled?.togglable === true,
+        JSON.stringify({ enabled: disabled?.enabled, togglable: disabled?.togglable })
+      );
+      check(
+        "…and the cost it stopped paying left the header",
+        off.json?.payload?.header?.injectedChars < (payload?.header?.injectedChars ?? 0),
+        `${payload?.header?.injectedChars} → ${off.json?.payload?.header?.injectedChars}`
+      );
+      const on = await api("/api/toggle", { method: "POST", body: { id: disabled?.id ?? "" } });
+      check(
+        "re-enabling puts the file back where Claude Code reads it",
+        on.status === 200 &&
+          on.json?.action === "enable" &&
+          existsSync(join(home, ".claude/agents/agent-togglee.md")),
+        JSON.stringify(on.json?.error)
+      );
+      // Nothing else in the agents tree became movable by accident.
+      const proj = (await api("/api/audit")).json?.payload?.items ?? [];
+      const nested = proj.filter((i) => i.kind === "agent" && !i.togglable);
+      check(
+        "only DIRECT children of ~/.claude/agents are togglable",
+        nested.every((i) => !i.path.startsWith(join(home, ".claude/agents/")) || i.path.slice(join(home, ".claude/agents/").length).includes("/")),
+        nested.slice(0, 2).map((i) => i.path).join(" | ")
+      );
+    }
+
+    // --- turning off a set in one request ---------------------------------
+    // The prune shortlist's whole point is that pruning is a batch decision.
+    // 68 rows through /api/toggle would be 68 full rescans; this runs the same
+    // per-item guards and rescans once. A refusal is reported per item and
+    // never swallowed, because a count that silently shrinks is a count that
+    // lied about what it was going to do.
+    {
+      const before = (await api("/api/audit")).json?.payload?.items ?? [];
+      const t = before.find((i) => i.name === "togglee");
+      const plug = before.find((i) => i.plugin);
+      const many = await api("/api/toggle-many", {
+        method: "POST",
+        body: { ids: [t?.id ?? "", plug?.id ?? "", "f".repeat(16)] },
+      });
+      check(
+        "POST /api/toggle-many turns off everything it can and rescans once",
+        many.status === 200 &&
+          many.json?.ok === true &&
+          (many.json?.done ?? []).includes("togglee") &&
+          existsSync(join(home, ".claude/skills-disabled/togglee/SKILL.md")) &&
+          many.json?.payload?.items?.find((i) => i.name === "togglee")?.enabled === false,
+        JSON.stringify(many.json?.done ?? many.json?.error)
+      );
+      check(
+        "…and names every item it refused, with the reason, rather than dropping it",
+        (many.json?.refused ?? []).length === 2 &&
+          (many.json?.refused ?? []).some((r) => /unknown item/.test(r.error)),
+        JSON.stringify(many.json?.refused)
+      );
+      check(
+        "…and the payload it returns is the state AFTER the batch, not before it",
+        many.json?.payload?.header?.injectedChars < (await api("/api/audit")).json?.payload?.header?.injectedChars + 1,
+        "stale payload"
+      );
+      const empty = await api("/api/toggle-many", { method: "POST", body: { ids: [] } });
+      const bad = await api("/api/toggle-many", { method: "POST", body: { ids: "togglee" } });
+      check(
+        "an empty or malformed id list is refused before anything moves",
+        empty.status === 400 && bad.status === 400,
+        `empty ${empty.status}, bad ${bad.status}`
+      );
+      // Put it back for the assertions that follow.
+      const again = (await api("/api/audit")).json?.payload?.items?.find((i) => i.name === "togglee");
+      if (again) await api("/api/toggle", { method: "POST", body: { id: again.id } });
+    }
+
     const ghost = await api("/api/toggle", { method: "POST", body: { id: "f".repeat(16) } });
     check("unknown item ID is 404", ghost.status === 404);
     // The server resolves IDs against its own inventory; a path in the ID
@@ -1863,8 +1973,15 @@ console.log("UI OPENER tier (OS fallback branch):");
 // header numbers and the row count are asserted against a fixture payload.
 console.log("UI FRONTEND tier (fixture render):");
 {
-  const { renderApp, renderDrawer, renderResults, defaultState, visibleItems, fmtInt, isFiltered, usageWindow } =
-    await import(join(root, "dist", "ui", "render.js"));
+  const {
+    renderApp, renderDrawer, renderPage, renderResults, defaultState, visibleItems, fmtInt,
+    isFiltered, usageWindow, navBase, liveCounts, initialState, pruneFiltersForNav,
+  } = await import(join(root, "dist", "ui", "render.js"));
+  /** One sidebar entry's markup, so "no mark" assertions cannot match a neighbour's. */
+  const navEntry = (h, key) => {
+    const i = h.indexOf(`data-nav="${key}"`);
+    return i < 0 ? "" : h.slice(i, h.indexOf("</button>", i));
+  };
   const item = (over) => ({
     id: Math.random().toString(16).slice(2, 18),
     name: "sample",
@@ -1879,6 +1996,10 @@ console.log("UI FRONTEND tier (fixture render):");
     bodyChars: 4000,
     fires: null,
     findings: [],
+    // Predates the window: dead-weight amber requires the install date to
+    // beat windowStart (the spec's age gate), so the fired/disabled rows
+    // below stay excluded by their own conditions, not by missing provenance.
+    provenance: { installedAt: "2026-05-01T00:00:00Z", source: "birthtime" },
     ...over,
   });
   const items = [
@@ -1912,12 +2033,40 @@ console.log("UI FRONTEND tier (fixture render):");
   const html = renderApp(payload, defaultState());
   const rows = (html.match(/<tr class="[^"]*" data-id=/g) ?? []).length;
   check("fixture renders every item as a row", rows === 5, `rows: ${rows}`);
-  // Scoped to the readout markup on purpose: a bare `>N<` search also matches
-  // filter-chip counts and table cells, so it passed while the header itself
-  // was wrong.
-  for (const [label, n] of [["items", 5], ["injected tokens", 400], ["never fired", 3], ["flagged", 1]]) {
-    check(`header readout shows ${label} = ${n}`, html.includes(`class="num">${fmtInt(n)}`), `missing readout ${fmtInt(n)}`);
+  // Scoped to the stat-bar markup on purpose: a bare `>N<` search also matches
+  // sidebar counts and table cells, so it passed while the bar itself was wrong.
+  for (const [label, n] of [["cost per session", 400], ["never fired", 3]]) {
+    check(`stat bar shows ${label} = ${n}`, html.includes(`class="statfig">${fmtInt(n)}`), `missing stat ${fmtInt(n)}`);
   }
+  // "inventory: 5 files" is NOT a headline figure. It is context, and context
+  // lives in the provenance statement — which is now a disclosure, because
+  // 90px of qualifier prose in the first reading position made the least
+  // actionable thing on the page the first thing the eye landed on.
+  const provHtml = renderApp(payload, { ...defaultState(), provOpen: true });
+  check(
+    "the inventory file count is context in the statement, never a headline figure",
+    !html.includes(`class="statfig">5`) &&
+      provHtml.includes(`<p class="provline"><b>5</b> instruction files scanned across <b>2</b> providers.`),
+    "inventory count still a headline"
+  );
+  check(
+    "the statement is closed by default and opens from the sidebar foot",
+    !html.includes('class="provline"') && /class="provlink"[^>]*data-prov/.test(html),
+    "provenance disclosure wrong"
+  );
+  // Flagged is a sidebar section with its own count. A security total in two
+  // places is a security total that can disagree.
+  check(
+    "flagged is a sidebar section with its own count, never a second headline",
+    /<b>1<\/b>/.test(navEntry(html, "flagged")) && !html.includes(`class="statfig">1<`),
+    "flagged count wrong"
+  );
+  check(
+    "the stat bar is toggleable, and toggling it changes only whether it is drawn",
+    !renderApp(payload, { ...defaultState(), statBar: false }).includes('class="statbar"') &&
+      renderApp(payload, { ...defaultState(), statBar: false }).includes('data-statbar'),
+    "stat bar switch missing"
+  );
   check("disabled row is marked off", /class="off[ "]/.test(html));
   check("read-only row explains itself instead of a toggle", html.includes('title="v1"'));
 
@@ -1932,13 +2081,19 @@ console.log("UI FRONTEND tier (fixture render):");
   };
   const overHtml = renderApp(overPayload, defaultState());
   check(
-    "an over-budget listing renders as a header readout in the danger tone",
-    overHtml.includes('class="num">124%') && /class="readout[^"]* danger"/.test(overHtml),
-    "listing readout missing or not toned"
+    "an over-budget listing is a stat-bar figure in the danger tone",
+    overHtml.includes('class="statfig">124%<s aria-hidden="true">▲</s>') &&
+      /class="stat dgr/.test(overHtml),
+    "listing figure missing or not toned"
   );
   check(
-    "the over-budget readout names the consequence, not just the number",
-    /descriptions dropped/.test(overHtml) && /stop auto-triggering/.test(overHtml),
+    "and marks its sidebar entry in the SAME tone the figure carries",
+    navEntry(overHtml, "budget").includes('class="navmark dgr" aria-hidden="true">▲</i>'),
+    "sidebar mark missing or in a new colour"
+  );
+  check(
+    "the consequence is stated in the layout of the view that owns it, not in a tooltip",
+    renderResults(overPayload, { ...defaultState(), nav: "budget" }).includes("it just stops auto-triggering"),
     "no consequence stated"
   );
   const underHtml = renderApp(
@@ -1946,17 +2101,19 @@ console.log("UI FRONTEND tier (fixture render):");
     defaultState()
   );
   check(
-    "an under-budget listing states that every description loads",
-    underHtml.includes('class="num">50%') && /all descriptions load/.test(underHtml) &&
-      !/descriptions dropped/.test(underHtml),
-    "under-budget readout wrong"
+    "an under-budget listing carries no mark, on the figure or on its entry",
+    underHtml.includes('class="statfig">50%</span>') &&
+      !navEntry(underHtml, "budget").includes("navmark") &&
+      !/class="stat dgr/.test(underHtml),
+    "under-budget figure wrong"
   );
   // A budget nothing on the machine is subject to is not a fact about it. A
-  // Codex/Cursor-only setup must not be shown a Claude-specific 0%.
+  // Codex/Cursor-only setup must not be shown a Claude-specific 0% — and now
+  // must not even be offered the door.
   check(
-    "a machine with no claude skills shows no listing readout at all",
-    !html.includes("skill listing"),
-    "listing readout rendered without a listing"
+    "a machine with no claude skills gets neither a listing figure nor a listing entry",
+    !html.includes("of listing budget") && !html.includes('data-nav="budget"'),
+    "listing surface rendered without a listing"
   );
 
   // --- Usage honesty ------------------------------------------------------
@@ -1972,29 +2129,58 @@ console.log("UI FRONTEND tier (fixture render):");
     win.note
   );
   check(
-    "a silent row says 'none in <window>', never the unqualified word 'never'",
-    html.includes("none in 41d") && !/>never</.test(html),
-    (html.match(/>never</g) ?? []).join(",")
+    "a silent row says 'never used' once, and never carries the window itself",
+    html.includes("never used") && !html.includes("none in 41d") && !/never used[^<]*41d/.test(html),
+    "silent row wording wrong"
   );
   check(
-    "the header readout is window-scoped, not an all-time claim",
-    html.includes("no fires in window") && html.includes("41d window"),
-    "header still reads as all-time"
+    "the window and the retention rule are stated ONCE, in the statement",
+    /class="provline"[\s\S]*?\(<b>41d<\/b>\)/.test(provHtml) &&
+      provHtml.includes("Older sessions are deleted, so nothing inside that window means") &&
+      provHtml.includes("<em>not used lately</em>") &&
+      !/·\s*41d<\/th>/.test(html),
+    "provenance statement incomplete, or the window is still a column caption"
   );
-  // Anchored to <td> on purpose: the rail chips and header readouts carry the
-  // same sentinel string in their tooltips, so a bare page-wide count stayed
-  // green even with every CELL tooltip deleted. 4 tracked rows × 2 usage
-  // cells (fires + last fired) must each carry the note; the rule row is
-  // untracked n/a and rightly excluded.
   check(
-    "every usage cell carries the window explanation on hover",
-    (html.match(/<td[^>]*title="[^"]*deleted by Claude Code/g) ?? []).length >= 8,
+    "…and the always-on control still carries the window and the tracking date",
+    /class="provlink"[\s\S]*?<i>window<\/i>41d<\/span>/.test(html),
+    "sidebar foot lost the window"
+  );
+  // The inverse of what this used to assert, and deliberately: the window note
+  // rode 8 cells here and 490 elements on a real machine. It is stated once,
+  // and a cell measured over a DIFFERENT window is the only thing that earns a
+  // qualifier of its own.
+  check(
+    "no cell repeats the window explanation — one statement covers them all",
+    (html.match(/<td[^>]*title="[^"]*deleted by Claude Code/g) ?? []).length === 0,
     `cell occurrences: ${(html.match(/<td[^>]*title="[^"]*deleted by Claude Code/g) ?? []).length}`
   );
   check(
-    "untracked kinds say n/a and explain why, rather than reading as zero",
-    html.includes("n/a") && html.includes("leaves no dispatch record"),
-    "n/a explanation missing"
+    "a row counted over ANOTHER provider's window carries the deviation mark on its figure",
+    (() => {
+      const perProv = renderApp(
+        {
+          ...payload,
+          items: [
+            ...items.filter((i) => i.name !== "rule"),
+            item({
+              name: "rule", source: "cursor", kind: "rule", togglable: false, readOnlyReason: "v1",
+              fires: { invocations: 4, sessions: 4, interruptedAfter: 0, lastFired: "2026-07-02T00:00:00Z" },
+            }),
+          ],
+          providerWindows: { cursor: { start: "2025-09-01T00:00:00Z", end: "2026-08-04T00:00:00Z" } },
+        },
+        defaultState()
+      );
+      return /data-dev="window" title="measured over a different provider&#39;s window — counted in cursor&#39;s own store, covering 337d — not the 41d window on this page\."/.test(perProv);
+    })(),
+    "per-provider window deviation not marked"
+  );
+  check(
+    "an absent measurement says so and carries the unmeasured mark, never reading as zero",
+    html.includes('>not tracked<b class="dev" data-dev="unmeasured"') &&
+      html.includes("leaves no dispatch record in local transcripts"),
+    "unmeasured mark or explanation missing"
   );
   const hotDrawer = renderDrawer(items[0], defaultState(), win);
   check(
@@ -2003,16 +2189,35 @@ console.log("UI FRONTEND tier (fixture render):");
     "drawer usage detail incomplete"
   );
   check(
-    "the drawer states the retention caveat next to the number",
-    hotDrawer.includes("deleted by Claude Code"),
-    "caveat missing from drawer"
+    "the drawer does not repeat a window the page statement already covers",
+    !hotDrawer.includes("deleted by Claude Code"),
+    "window note still repeated in the drawer"
+  );
+  check(
+    "the drawer is organised by question, not by data source",
+    [">what it is<", ">what it costs<", ">is it used<", ">is it flagged<"].every((h) => hotDrawer.includes(h)),
+    "drawer headings still name data sources"
   );
 
-  // --- "Injected" is explained in plain language --------------------------
+  // --- "Injected" is explained in plain language, IN THE LAYOUT ------------
+  // A definition that only exists on hover does not exist for a first-time
+  // reader, so every term the page uses is defined where it first appears.
+  // Each term is defined UNDER THE HEAD THAT INTRODUCES IT, which is what
+  // "at its first appearance, in the layout" asks for. A strip of definitions
+  // at the top of the page is a glossary, and a glossary is a thing you have
+  // to go and read.
   check(
-    "the cost readout avoids the word 'injected' as its headline label",
-    html.includes("always in context") && html.includes("every session before you type"),
-    "cost readout still jargon-only"
+    "the cost figure avoids jargon, and 'cost / session' is defined under its own column head",
+    html.includes('class="statlab">tok/session · 0.2% of 200K</span>') &&
+      /data-sort="injected"[^>]*>[\s\S]*?<span class="thdef">loaded before you type, every session/.test(html) &&
+      !/>[^<]*injected/.test(html),
+    "cost definition missing from the column head, or the jargon is back in the text"
+  );
+  check(
+    "and a FIRE is defined under the column that counts them",
+    /data-sort="activity"[^>]*>[\s\S]*?<span class="thdef">a fire is one recorded dispatch<\/span>/.test(html) &&
+      provHtml.includes("A <em>fire</em> is one recorded dispatch — the model reaching for an item, or you typing its name"),
+    "fire is not defined in the layout"
   );
   const costDrawer = renderDrawer(items[1], defaultState(), win);
   check(
@@ -2032,24 +2237,26 @@ console.log("UI FRONTEND tier (fixture render):");
   );
   check("search is case-insensitive", visibleItems(payload, { ...defaultState(), query: "SKETCH" }).length === 1);
   check(
-    "isFiltered reports every narrowing control",
+    "isFiltered reports every narrowing control — and navigation is not one",
     !isFiltered(defaultState()) &&
       isFiltered({ ...defaultState(), query: "x" }) &&
-      isFiltered({ ...defaultState(), lens: "flagged" }) &&
-      isFiltered({ ...defaultState(), kinds: ["skill"] }),
+      isFiltered({ ...defaultState(), lens: "never-fired" }) &&
+      isFiltered({ ...defaultState(), providers: ["cursor"] }) &&
+      isFiltered({ ...defaultState(), focus: { label: "q", ids: ["a"] } }) &&
+      !isFiltered({ ...defaultState(), nav: "skill" }),
     "isFiltered wrong"
   );
   check(
-    "filter groups are labeled banks, not one undifferentiated run of chips",
-    // The view bank label carries the usage window ("view · 42d") so the
-    // window qualifies the whole bank instead of repeating in every chip.
-    html.includes('class="bank"') && html.includes(">kind<") && /class="engr"[^>]*>view/.test(html),
-    "filter banks missing"
+    "the view controls are ONE compact row: the activity lens, the provider filter and search",
+    /<div class="viewbar">/.test(html) &&
+      ['data-lens="fired"', 'data-lens="never-fired"', 'data-lens="off"', "data-search"].every((s) => html.includes(s)) &&
+      !html.includes('data-chip="kind"') && !html.includes('class="bank"') && !html.includes('class="rail"'),
+    "view controls wrong"
   );
   check(
     "a single-provider machine gets no useless provider filter",
     !renderApp({ ...payload, items: items.filter((i) => i.source === "claude") }, defaultState()).includes(
-      'data-chip="provider"'
+      "data-provider="
     ),
     "single provider still offered as a filter"
   );
@@ -2058,7 +2265,7 @@ console.log("UI FRONTEND tier (fixture render):");
   check(
     "a clear control is present but hidden until something is filtered",
     /class="clear gone"/.test(html) &&
-      /class="clear"/.test(renderApp(payload, { ...defaultState(), lens: "flagged" })),
+      /class="clear"/.test(renderApp(payload, { ...defaultState(), lens: "fired" })),
     "clear control logic wrong"
   );
   check(
@@ -2077,8 +2284,17 @@ console.log("UI FRONTEND tier (fixture render):");
     visibleItems(payload, { ...defaultState(), lens: "never-fired" }).length === 3
   );
   check(
-    "flagged lens narrows to flagged items",
-    visibleItems(payload, { ...defaultState(), lens: "flagged" }).map((i) => i.name).join() === "sketchy"
+    "flagged is a sidebar DESTINATION now, not a lens",
+    !html.includes('data-lens="flagged"') &&
+      navBase(payload, { ...defaultState(), nav: "flagged" }).map((i) => i.name).join() === "sketchy",
+    "flagged still a lens"
+  );
+  check(
+    "the flagged view states the count and the instruction that outranks it",
+    renderResults(payload, { ...defaultState(), nav: "flagged" }).includes(
+      "verify it at the cited file before acting on it"
+    ),
+    "flagged view note missing"
   );
   // The complements: what actually ran, and what is actually live.
   check(
@@ -2086,14 +2302,8 @@ console.log("UI FRONTEND tier (fixture render):");
     visibleItems(payload, { ...defaultState(), lens: "fired" }).map((i) => i.name).join() === "hot"
   );
   check(
-    "active lens narrows to enabled items",
-    visibleItems(payload, { ...defaultState(), lens: "enabled" }).length === 4 &&
-      !visibleItems(payload, { ...defaultState(), lens: "enabled" }).some((i) => i.name === "dormant")
-  );
-  check(
-    "the view bank offers fired and active chips",
-    html.includes('data-value="fired"') && html.includes('data-value="enabled"'),
-    "view chips missing"
+    "the off lens narrows to disabled items",
+    visibleItems(payload, { ...defaultState(), lens: "off" }).map((i) => i.name).join() === "dormant"
   );
   // Kind identity: shape, not color — filled marker for skills, hollow for
   // agents — repeated in cells and filter chips as one vocabulary.
@@ -2109,49 +2319,51 @@ console.log("UI FRONTEND tier (fixture render):");
     "kind glyphs missing"
   );
   check(
-    "kind filter chips repeat the glyph vocabulary",
-    // Chip anatomy: <span>label</span><b>count</b> — label and count sit in
-    // separate compartments so they can never read as one string.
-    /data-chip="kind"[^>]*><span>◆ skill<\/span>/.test(html),
-    "chip glyph missing"
+    "kinds are sidebar entries with faceted counts, not filter chips",
+    /<span>skills<\/span><b>4<\/b>/.test(navEntry(html, "skill")) &&
+      /<span>rules<\/span><b>1<\/b>/.test(navEntry(html, "rule")) &&
+      !html.includes('data-chip="kind"'),
+    "sidebar kind entries missing"
   );
   check(
-    "kind cells explain themselves on hover",
-    html.includes("auto-triggers when your request matches"),
-    "kind note missing"
+    "a sidebar entry appears only when the payload has something to put in it",
+    !html.includes('data-nav="agent"') && !html.includes('data-nav="command"'),
+    "an empty entry was offered"
+  );
+  check(
+    "sidebar entries explain themselves on hover, but carry no icon, pill or fill",
+    html.includes("auto-triggers when your request matches") &&
+      !/class="nav[^"]*"[^>]*>\s*<(?:svg|img)/.test(html),
+    "sidebar entry anatomy wrong"
   );
 
   // --- Skills-first mode ----------------------------------------------------
   // The boot state scopes to skills when skills exist; the mode is a master
   // scope, not a filter — clear and esc never touch it.
   {
-    const { initialState, modeBase } = await import(join(root, "dist", "ui", "render.js"));
     const skillsState = initialState(payload);
-    check("boot state is skills-first when the inventory has skills", skillsState.mode === "skills");
+    check("boot state is skills-first when the inventory has skills", skillsState.nav === "skill");
     check(
-      "a skill-less inventory boots to everything, not an empty table",
-      initialState({ ...payload, items: [item({ name: "r", kind: "rule", source: "cursor" })] }).mode === "all"
+      "a skill-less inventory boots to the whole inventory, not an empty table",
+      initialState({ ...payload, items: [item({ name: "r", kind: "rule", source: "cursor" })] }).nav === "all"
     );
     check(
-      "skills mode narrows the base to skills only",
-      modeBase(payload, skillsState).length === 4 && modeBase(payload, defaultState()).length === 5
+      "the skills entry narrows the base to skills only",
+      navBase(payload, skillsState).length === 4 && navBase(payload, defaultState()).length === 5
     );
-    check("mode is not a filter: isFiltered ignores it", !isFiltered(skillsState));
+    check("navigation is not a filter: isFiltered ignores it", !isFiltered(skillsState));
     const skillsHtml = renderApp(payload, skillsState);
     check(
-      "the mode control renders both scopes with counts",
-      /data-mode="skills"[^>]*>[\s\S]*?<b>4<\/b>/.test(skillsHtml) && /data-mode="all"[^>]*>[\s\S]*?<b>5<\/b>/.test(skillsHtml),
-      "mode control missing or uncounted"
+      "exactly one entry is lit, with the caret in the gutter and the one amber on it",
+      (skillsHtml.match(/class="nav on"/g) ?? []).length === 1 &&
+        /data-nav="skill" aria-current="page"[^>]*><s aria-hidden="true">▸<\/s>/.test(skillsHtml),
+      "sidebar active state wrong"
     );
     check(
-      "skills mode hides the now-uniform kind column and bank",
-      !skillsHtml.includes('data-sort="kind"') && !skillsHtml.includes('data-chip="kind"'),
-      "kind column or bank still present in skills mode"
-    );
-    check(
-      "everything mode keeps the kind column",
-      html.includes('data-sort="kind"'),
-      "kind column missing from everything mode"
+      "the kind column is gone entirely — kind is the sidebar, and the glyph rides the name",
+      !html.includes('data-sort="kind"') && !skillsHtml.includes('data-sort="kind"') &&
+        /<td class="c-name"[^>]*><i class="kg kg-skill"/.test(html),
+      "kind column survived, or the glyph did not move to the name"
     );
     // The cursor rule carries the fixture's only... no: sketchy (a skill) has
     // the flag, so nothing is flagged outside skills mode here. Flag the rule
@@ -2167,14 +2379,14 @@ console.log("UI FRONTEND tier (fixture render):");
       ],
     };
     check(
-      "flags outside the skills view announce themselves in the rail",
-      renderApp(flaggedRule, initialState(flaggedRule)).includes("flagged outside this view"),
-      "hidden flag caveat missing"
+      "a flag outside the current view is never hidden: the sidebar counts every flag",
+      /<b>1<\/b>/.test(navEntry(renderApp(flaggedRule, initialState(flaggedRule)), "flagged")),
+      "flagged count narrowed by the current view"
     );
     check(
-      "no false flag caveat when every flag is inside the view",
-      !skillsHtml.includes("flagged outside this view"),
-      "caveat shown with nothing hidden"
+      "and the entry carries the severity tone the finding already has",
+      navEntry(renderApp(flaggedRule, initialState(flaggedRule)), "flagged").includes('class="navmark dgr"'),
+      "severity tone missing from the flagged entry"
     );
   }
 
@@ -2183,24 +2395,23 @@ console.log("UI FRONTEND tier (fixture render):");
   // predicts what clicking it shows. With lens=fired active, the skill kind
   // chip must say 1 (only "hot" fired), not 4.
   {
-    const firedState = { ...defaultState(), lens: "fired" };
-    const firedHtml = renderApp(payload, firedState);
-    const skillChip = /data-chip="kind" data-value="skill"[^>]*><span>[^<]*<\/span><b>(\d+)<\/b>/.exec(firedHtml);
-    check("chip counts are faceted by the other active filters", skillChip?.[1] === "1", `skill chip count: ${skillChip?.[1]}`);
-    const kindState = { ...defaultState(), kinds: ["rule"] };
-    const kindHtml = renderApp(payload, kindState);
-    const firedChip = /data-chip="lens" data-value="fired"[^>]*><span>[^<]*<\/span><b>(\d+)<\/b>/.exec(kindHtml);
-    check("lens chip counts respect the kind filter", firedChip?.[1] === "0", `fired chip count: ${firedChip?.[1]}`);
+    const firedHtml = renderApp(payload, { ...defaultState(), lens: "fired" });
+    const skillEntry = /<b>(\d+)<\/b>/.exec(navEntry(firedHtml, "skill"));
+    check("sidebar counts are faceted by the active lens", skillEntry?.[1] === "1", `skills entry: ${skillEntry?.[1]}`);
     // The query is a facet dimension too — main.ts patches these counts into
-    // the rail in place while typing, from this same pure function.
-    const { chipCounts } = await import(join(root, "dist", "ui", "render.js"));
-    const queried = chipCounts(payload, { ...defaultState(), query: "hot" });
-    const lensFired = queried.find((c) => c.group === "lens" && c.value === "fired");
-    const kindSkill = queried.find((c) => c.group === "kind" && c.value === "skill");
+    // the sidebar in place while typing, from this same pure function.
+    const queried = liveCounts(payload, { ...defaultState(), query: "hot" });
+    const at = (g, k) => queried.find((c) => c.group === g && c.key === k)?.count;
     check(
-      "chip counts are faceted by the search query",
-      lensFired?.count === 1 && kindSkill?.count === 1,
-      `fired: ${lensFired?.count}, skill: ${kindSkill?.count}`
+      "…and by the search query, on every entry and every provider chip",
+      at("nav", "all") === 1 && at("nav", "skill") === 1 && at("provider", "claude") === 1 && at("provider", "cursor") === 0,
+      JSON.stringify(queried)
+    );
+    // Security is the one count a presentation default may never reduce.
+    check(
+      "the flagged count is NEVER faceted — a lens must not hide a finding",
+      liveCounts(payload, { ...defaultState(), lens: "fired" }).find((c) => c.key === "flagged")?.count === 1,
+      "flagged count faceted away"
     );
   }
 
@@ -2224,9 +2435,10 @@ console.log("UI FRONTEND tier (fixture render):");
     const dwRows = (dwHtml.match(/c-cost dw/g) ?? []).length;
     check("dead weight marks enabled+silent+expensive rows only", dwRows === 2, `dw rows: ${dwRows}`);
     check(
-      "dead weight explains itself WITH the window attached",
-      dwHtml.includes("Dead weight:") && dwHtml.includes("zero fires in the 41d window"),
-      "dw tooltip missing or unqualified"
+      "dead weight is DEFINED where it is reported, and the cell that earns it says so",
+      dwHtml.includes("amber = dead weight, paid with nothing recorded against it") &&
+        dwHtml.includes("Dead weight: this cost is being paid with nothing recorded against it."),
+      "dead-weight definition or mark missing"
     );
     // Zero transcripts scanned -> fires=null on every tracked row, but there
     // is no window to qualify "zero fires" — so no dead-weight claim at all.
@@ -2243,21 +2455,19 @@ console.log("UI FRONTEND tier (fixture render):");
   // kinds=["agent"] then switching to skills mode would otherwise empty the
   // table with no visible control left to turn the filter off.
   {
-    const { pruneFiltersForMode } = await import(join(root, "dist", "ui", "render.js"));
-    const stranded = { ...defaultState(), mode: "skills", kinds: ["agent"], providers: ["cursor"] };
-    pruneFiltersForMode(payload, stranded);
+    const stranded = { ...defaultState(), nav: "skill", providers: ["cursor"] };
+    pruneFiltersForNav(payload, stranded);
     check(
-      "mode switch prunes filters whose bank no longer exists",
-      stranded.kinds.length === 0 && stranded.providers.length === 0 &&
-        visibleItems(payload, stranded).length === 4,
-      `kinds: [${stranded.kinds}], providers: [${stranded.providers}]`
+      "a nav change prunes a provider filter whose chip no longer exists",
+      stranded.providers.length === 0 && visibleItems(payload, stranded).length === 4,
+      `providers: [${stranded.providers}]`
     );
-    const kept = { ...defaultState(), mode: "all", kinds: ["skill", "rule"], providers: [] };
-    pruneFiltersForMode(payload, kept);
+    const kept = { ...defaultState(), nav: "all", providers: ["cursor"] };
+    pruneFiltersForNav(payload, kept);
     check(
-      "mode switch keeps filters whose bank still shows them",
-      kept.kinds.join(",") === "skill,rule",
-      `kinds: [${kept.kinds}]`
+      "…and keeps one the chip is still on screen to turn off",
+      kept.providers.join(",") === "cursor",
+      `providers: [${kept.providers}]`
     );
   }
 
@@ -2306,11 +2516,15 @@ console.log("UI FRONTEND tier (fixture render):");
     );
   }
 
-  // --- Instant tooltips -----------------------------------------------------
+  // --- Tooltips are no longer the default explanation mechanism -------------
+  // 21,357 words across 490 elements were hidden in data-tip and title. The
+  // inventory view now carries none: what it has to say, it says in the layout.
   check(
-    "chrome explanations use data-tip, not native title",
-    /class="readout[^"]*"[^>]*data-tip=/.test(html) && /<th [^>]*data-tip=/.test(html) && /class="chip[^"]*"[^>]*data-tip=/.test(html),
-    "data-tip missing from readouts, headers or chips"
+    "the inventory view carries no styled tooltip at all",
+    (html.match(/data-tip=/g) ?? []).length === 0 &&
+      /class="thdef"/.test(html) &&
+      /class="provlink"/.test(html),
+    `data-tip occurrences: ${(html.match(/data-tip=/g) ?? []).length}`
   );
 
   // --- Activity log ---------------------------------------------------------
@@ -2389,19 +2603,21 @@ console.log("UI FRONTEND tier (fixture render):");
     "meter scaling wrong"
   );
   check(
-    "the header states cost as a share of a 200K context",
-    html.includes("% of a 200K context"),
+    "the cost figure carries the scale that makes it readable — a share of a 200K context",
+    html.includes("% of 200K"),
     "context share missing"
   );
   check(
-    "the fires column header carries the window",
-    html.includes(">fires · 41d<"),
-    "fires header not window-scoped"
+    "no column header carries the window as a suffix, and four usage columns are now one",
+    !/·\s*41d<\/th>/.test(html) &&
+      !html.includes(">fires<") && !html.includes("tok / fire") && !html.includes(">last fired<") &&
+      html.includes('data-sort="activity"'),
+    "a column header is still window-captioned, or the usage columns survived"
   );
   const drawer = renderDrawer(items[2], defaultState());
   check(
     "drawer shows the finding with its evidence line",
-    drawer.includes("download-execute") && drawer.includes("curl | sh") && drawer.includes("security findings")
+drawer.includes("download-execute") && drawer.includes("curl | sh") && drawer.includes(">is it flagged<")
   );
   // Empty inventory teaches instead of rendering a blank table.
   const emptyHtml = renderApp({ ...payload, items: [], header: { ...payload.header, items: 0 } }, defaultState());
@@ -2438,14 +2654,88 @@ console.log("UI FRONTEND tier (fixture render):");
     !/<img src=x|<script>alert|<svg onload|<b>f<\/b>|<u>c<\/u>/.test(hostilePage),
     (hostilePage.match(/<img src=x|<script>alert|<svg onload/g) ?? []).join(", ")
   );
+
+  // --- Ledger degradation, backfill horizon, purged events ------------------
+  // A broken ledger must degrade LOUDLY: the payload's caveat renders in the
+  // rail instead of the page quietly showing window-only figures as complete.
+  const caveatHtml = renderApp(
+    { ...payload, ledgerCaveat: "usage ledger unavailable (EACCES) — lifetime figures omitted" },
+    defaultState()
+  );
+  check(
+    "a broken ledger renders its caveat inside the statement it qualifies",
+    caveatHtml.includes("<i>caveats</i>1</span>") &&
+      renderApp(
+        { ...payload, ledgerCaveat: "usage ledger unavailable (EACCES) — lifetime figures omitted" },
+        { ...defaultState(), provOpen: true }
+      ).includes("<li>usage ledger unavailable (EACCES) — lifetime figures omitted</li>"),
+    "ledger caveat missing"
+  );
+  check(
+    "no ledger caveat renders when the ledger worked",
+    !html.includes("usage ledger unavailable"),
+    "phantom ledger caveat"
+  );
+  // The backfill horizon extends the typed channel past the transcript window;
+  // the label names its method inline so the two windows are never conflated.
+  const backfillHtml = renderApp(
+    { ...payload, history: { ...payload.history, backfilledSince: "2026-02-26T08:00:00Z" } },
+    { ...defaultState(), provOpen: true }
+  );
+  check(
+    "a backfilled horizon is stated in the provenance statement, with its method",
+    backfillHtml.includes("Typed history reaches back to <b>2026-02-26</b>") &&
+      /Typed history reaches back to <b>2026-02-26<\/b><b class="dev" data-dev="backfilled"/.test(backfillHtml) &&
+      backfillHtml.includes("its own note says how: backfilled ·"),
+    "backfill horizon line missing"
+  );
+  check(
+    "no backfill claim, and no backfill legend entry, without backfilled events",
+    !provHtml.includes("Typed history reaches back") && !provHtml.includes("how: backfilled"),
+    "phantom backfill claim"
+  );
+  // The legend names only the deviations this payload actually contains:
+  // teaching a reader to look for a mark that is nowhere on the page is the
+  // same failure as a chip counting zero rows.
+  check(
+    "the deviation legend lists the kinds present, and only those",
+    provHtml.includes("marks a figure this does not describe — its own note says how: unmeasured.") &&
+      !provHtml.includes("an upper bound"),
+    "deviation legend wrong"
+  );
+  // An event whose transcript was already purged at scan time renders disabled
+  // up front — not after a dead open round-trip.
+  const purgedItem = item({
+    id: "purgeditem000000",
+    name: "purgy",
+    fires: {
+      invocations: 1,
+      sessions: 1,
+      interruptedAfter: 0,
+      lifetime: { invocations: 2, sessions: 2, firstFired: "2026-03-01T00:00:00Z", lastFired: "2026-08-01T00:00:00Z" },
+      trackedSince: "2026-03-01T00:00:00Z",
+      events: [
+        { id: "ev-live", ts: "2026-08-01T00:00:00Z", project: "proj", channel: "auto" },
+        { id: "ev-gone", ts: "2026-03-01T00:00:00Z", project: "proj", channel: "typed", purged: true },
+      ],
+    },
+  });
+  const purgedDrawer = renderDrawer(purgedItem, defaultState(), usageWindow(payload));
+  check(
+    "a scan-time-purged event row renders disabled and says why",
+    /data-open-event="ev-gone"[^>]*disabled/.test(purgedDrawer) &&
+      purgedDrawer.includes("transcript deleted (event retained)"),
+    "purged row not disabled up front"
+  );
+  check(
+    "an event whose transcript survives stays openable",
+    /data-open-event="ev-live"(?![^>]*disabled)/.test(purgedDrawer),
+    "live event row wrongly disabled"
+  );
 }
 
 rmSync(tmp, { recursive: true, force: true });
 
-if (failures > 0) {
-  console.error(`\n${failures} assertion(s) failed`);
-  process.exit(1);
-}
 // --- Companion-skill install ------------------------------------------------
 // `install-skill` is the agent-first front door: it must be one command,
 // idempotent, and byte-identical to the skill shipped in the package.
@@ -2471,6 +2761,40 @@ console.log("INSTALL-SKILL tier (companion skill):");
     r2.code === 0 && /already installed and up to date/.test(r2.out),
     `exit ${r2.code}: ${r2.out.slice(0, 120)}`
   );
+}
+
+// --- Unit suites ------------------------------------------------------------
+// Each test/unit-*.mjs is a standalone node script that exits non-zero on
+// failure. They run post-build (importing dist/) and their exit codes fold
+// into the same failure count as everything above.
+console.log("UNIT suites:");
+{
+  const { readdirSync } = await import("node:fs");
+  const { spawnSync } = await import("node:child_process");
+  const units = readdirSync(join(root, "test"))
+    .filter((n) => /^unit-.+\.mjs$/.test(n))
+    .sort();
+  for (const unit of units) {
+    const r = spawnSync("node", [join(root, "test", unit)], { encoding: "utf8" });
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    const checks = (out.match(/^\s*ok: /gm) ?? []).length;
+    if (r.status === 0) {
+      ok(`${unit} (${checks} checks)`);
+    } else {
+      const fails = out
+        .split("\n")
+        .filter((l) => /FAIL/.test(l))
+        .slice(0, 5)
+        .join(" | ");
+      check(unit, false, fails || out.slice(-300).replace(/\n/g, " | "));
+    }
+  }
+  check("unit suites were found and run", units.length > 0, "no test/unit-*.mjs files");
+}
+
+if (failures > 0) {
+  console.error(`\n${failures} assertion(s) failed`);
+  process.exit(1);
 }
 
 console.log("\nall assertions passed");
