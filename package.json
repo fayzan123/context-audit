@@ -1,6 +1,6 @@
 {
   "name": "context-audit",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Audit every AI coding tool's instruction files in one run — Claude Code skills/agents/commands, Codex prompts and AGENTS.md, Cursor rules. What they cost every session, which never fire, and whether any are doing something they shouldn't. Deterministic, offline, zero dependencies.",
   "type": "module",
   "bin": {

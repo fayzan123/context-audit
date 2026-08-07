@@ -30,7 +30,7 @@ Above the content, a **stat bar** carries the four headline numbers: cost per se
 
 The table gives each row **one cost cell and one activity cell**, because those are the two questions. Cost is what the item adds to every session, with a meter scaled to your most expensive item. Activity answers "is this used?" once — `8 fires · last Aug 5`, or `never used · 123d old`. **Dead weight gets the amber**: enabled, carrying a real share of the bill, and never fired in the window. A cheap silent skill and an expensive busy one are both fine; the intersection is what you are paying for nothing. Clicking a row opens a drawer with the full description, the always-in-context and on-invoke costs stated separately, provenance, and the actions.
 
-Two analyses sit beside the inventory. **`prune`** states the dead weight in words — *"83 items cost you 5,515 tok every session and have never fired"* — and lets you select rows and turn them off in one action. **`growth`** plots what you own against what you use, week by week, from this tool's own snapshots; weeks with no scan are ticked on the axis and never interpolated across, because joining them would draw a history the snapshots never recorded.
+Two analyses sit beside the inventory. **`prune`** states the dead weight in words — *"68 items cost you 4,690 tok every session and have never fired"* — and lets you select rows and turn them off in one action. **`growth`** plots what you own against what you use, week by week, from this tool's own snapshots; weeks with no scan are ticked on the axis and never interpolated across, because joining them would draw a history the snapshots never recorded.
 
 Two things the dashboard is careful about, because both are easy to get wrong:
 
