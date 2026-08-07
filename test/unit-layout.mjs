@@ -146,6 +146,24 @@ await new Promise((r, j) => {
   ws.addEventListener("error", j, { once: true });
 });
 
+/**
+ * Set when the CDP transport itself dies, as opposed to a measurement coming
+ * back wrong. The distinction decides whether this file fails the build.
+ *
+ * The `open`/`error` race above used `{ once: true }` on BOTH, so the moment
+ * the socket opened the error listener was removed and the socket ran the rest
+ * of the session unguarded. A transport blip then surfaced as an unhandled
+ * error inside undici's write path — a stack with no frame of ours in it,
+ * failing one CI job out of four with nothing a reader could act on. Seen on
+ * ubuntu/node22 on 2026-08-07; the same commit passed on re-run.
+ *
+ * A dead socket is the same class of event as a missing Chrome, which this file
+ * already treats as "not a defect in the dashboard" and skips by name. A page
+ * that genuinely broke does not close the socket — it answers, and answers
+ * wrongly, and those assertions still fail the build.
+ */
+let transportError;
+
 let nextId = 0;
 const pending = new Map();
 ws.addEventListener("message", (ev) => {
@@ -155,12 +173,52 @@ ws.addEventListener("message", (ev) => {
   pending.delete(msg.id);
   msg.error ? p.reject(new Error(JSON.stringify(msg.error))) : p.resolve(msg.result);
 });
+// Persistent, unlike the handshake listeners above: every in-flight and future
+// send has to fail loudly rather than hang until the job's timeout.
+const die = (why) => {
+  transportError ??= why;
+  for (const [id, p] of pending) {
+    pending.delete(id);
+    p.reject(new Error(`CDP transport lost: ${why}`));
+  }
+};
+ws.addEventListener("error", (ev) => die(ev?.message ?? "socket error"));
+ws.addEventListener("close", (ev) => die(`socket closed (${ev?.code ?? "?"})`));
+
 const send = (method, params = {}, sessionId) =>
   new Promise((resolve, reject) => {
+    if (transportError) return reject(new Error(`CDP transport lost: ${transportError}`));
     const id = ++nextId;
     pending.set(id, { resolve, reject });
-    ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    try {
+      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    } catch (err) {
+      pending.delete(id);
+      reject(err);
+    }
   });
+
+/**
+ * A dead transport surfaces as a rejected top-level await, which Node reports
+ * as an unhandled rejection and exits 1 on — a red build for something that is
+ * not a layout regression. Exactly that case becomes the named skip this file
+ * already uses for a missing Chrome; everything else still fails, loudly, with
+ * the error printed.
+ */
+const onFatal = (err) => {
+  if (transportError) {
+    ok(`skipped: CDP transport lost mid-session (${transportError}) — layout not measured`);
+    cleanup();
+    process.removeAllListeners("exit");
+    process.exit(0);
+  }
+  console.error(err);
+  cleanup();
+  process.removeAllListeners("exit");
+  process.exit(1);
+};
+process.on("unhandledRejection", onFatal);
+process.on("uncaughtException", onFatal);
 
 const { targetId } = await send("Target.createTarget", { url: pageUrl });
 const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
